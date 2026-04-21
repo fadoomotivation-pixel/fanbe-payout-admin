@@ -1,9 +1,41 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-@layer base { html { font-family: 'Inter', system-ui, sans-serif; } body { @apply bg-gray-50 text-gray-900; } }
-@layer utilities {
-  .scrollbar-thin { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
-  .scrollbar-thin::-webkit-scrollbar { width:6px; height:6px; }
-  .scrollbar-thin::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:3px; }
+
+@layer base {
+  * { box-sizing: border-box; }
+  body { font-family: 'Inter', system-ui, sans-serif; background: #f8fafc; color: #0f172a; }
+}
+
+@layer components {
+  .sidebar-link {
+    @apply flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-700 hover:text-white transition-colors;
+  }
+  .sidebar-link.active {
+    @apply bg-teal-600 text-white;
+  }
+  .btn-primary {
+    @apply inline-flex items-center gap-2 px-4 py-2 bg-teal-600 text-white text-sm font-medium rounded-lg hover:bg-teal-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center gap-2 px-4 py-2 bg-white text-slate-700 text-sm font-medium rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors;
+  }
+  .btn-danger {
+    @apply inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 transition-colors;
+  }
+  .input {
+    @apply w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent placeholder:text-slate-400;
+  }
+  .label {
+    @apply block text-sm font-medium text-slate-700 mb-1;
+  }
+  .card {
+    @apply bg-white rounded-xl border border-slate-200 shadow-sm;
+  }
+  .page-title {
+    @apply text-xl font-semibold text-slate-900;
+  }
+  .section-title {
+    @apply text-sm font-semibold text-slate-500 uppercase tracking-wider;
+  }
 }
