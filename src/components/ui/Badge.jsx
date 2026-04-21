@@ -1,4 +1,4 @@
-export default function Badge({ children, color = 'gray' }) {
+export function Badge({ children, color = 'gray' }) {
   const colors = {
     gray: 'bg-slate-100 text-slate-700',
     green: 'bg-green-100 text-green-800',
@@ -15,3 +15,5 @@ export default function Badge({ children, color = 'gray' }) {
     </span>
   )
 }
+
+export default Badge
