@@ -3,16 +3,23 @@ import { useAuth } from './hooks/useAuth'
 import AppShell from './components/layout/AppShell'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
-import Projects from './pages/Projects'
-import Plots from './pages/Plots'
-import Bookings from './pages/Bookings'
+import ProjectsList from './pages/projects/ProjectsList'
+import ProjectDetail from './pages/projects/ProjectDetail'
+import ProjectForm from './pages/projects/ProjectForm'
+import PlotsList from './pages/inventory/PlotsList'
+import PlotDetail from './pages/inventory/PlotDetail'
+import BulkAddPlots from './pages/inventory/BulkAddPlots'
+import BookingsList from './pages/bookings/BookingsList'
 import BookingDetail from './pages/bookings/BookingDetail'
 import BookingForm from './pages/bookings/BookingForm'
-import Brokers from './pages/Brokers'
-import Payouts from './pages/Payouts'
-import Commission from './pages/Commission'
-import Reports from './pages/Reports'
-import Settings from './pages/Settings'
+import CustomersList from './pages/customers/CustomersList'
+import CustomerDetail from './pages/customers/CustomerDetail'
+import BrokersList from './pages/brokers/BrokersList'
+import BrokerDetail from './pages/brokers/BrokerDetail'
+import PayoutQueue from './pages/payouts/PayoutQueue'
+import CommissionRules from './pages/commission/CommissionRules'
+import Reports from './pages/reports/Reports'
+import Settings from './pages/settings/Settings'
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
@@ -28,14 +35,22 @@ export default function App() {
       <Route path="/" element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<Dashboard />} />
-        <Route path="projects" element={<Projects />} />
-        <Route path="inventory" element={<Plots />} />
-        <Route path="bookings" element={<Bookings />} />
+        <Route path="projects" element={<ProjectsList />} />
+        <Route path="projects/new" element={<ProjectForm />} />
+        <Route path="projects/:id" element={<ProjectDetail />} />
+        <Route path="projects/:id/edit" element={<ProjectForm />} />
+        <Route path="inventory" element={<PlotsList />} />
+        <Route path="inventory/bulk-add" element={<BulkAddPlots />} />
+        <Route path="inventory/:id" element={<PlotDetail />} />
+        <Route path="bookings" element={<BookingsList />} />
         <Route path="bookings/new" element={<BookingForm />} />
         <Route path="bookings/:id" element={<BookingDetail />} />
-        <Route path="brokers" element={<Brokers />} />
-        <Route path="payouts" element={<Payouts />} />
-        <Route path="commission" element={<Commission />} />
+        <Route path="customers" element={<CustomersList />} />
+        <Route path="customers/:id" element={<CustomerDetail />} />
+        <Route path="brokers" element={<BrokersList />} />
+        <Route path="brokers/:id" element={<BrokerDetail />} />
+        <Route path="payouts" element={<PayoutQueue />} />
+        <Route path="commission" element={<CommissionRules />} />
         <Route path="reports" element={<Reports />} />
         <Route path="settings" element={<Settings />} />
       </Route>

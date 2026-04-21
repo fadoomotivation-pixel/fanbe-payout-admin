@@ -1,4 +1,4 @@
-export function KpiCard({ title, value, icon: Icon, color = 'teal', subtitle }) {
+export default function KpiCard({ title, value, icon: Icon, color = 'teal', subtitle }) {
   const colors = {
     teal: 'bg-teal-50 text-teal-600',
     blue: 'bg-blue-50 text-blue-600',
@@ -25,5 +25,3 @@ export function KpiCard({ title, value, icon: Icon, color = 'teal', subtitle }) 
     </div>
   )
 }
-
-export default KpiCard
