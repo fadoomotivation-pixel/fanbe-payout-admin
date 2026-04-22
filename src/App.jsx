@@ -17,6 +17,8 @@ import CustomerDetail from './pages/customers/CustomerDetail'
 import BrokersList from './pages/brokers/BrokersList'
 import BrokerDetail from './pages/brokers/BrokerDetail'
 import AddBroker from './pages/brokers/AddBroker'
+import BrokerTeam from './pages/brokers/BrokerTeam'
+import BrokerPerformance from './pages/brokers/BrokerPerformance'
 import PayoutQueue from './pages/payouts/PayoutQueue'
 import CommissionRules from './pages/commission/CommissionRules'
 import Reports from './pages/reports/Reports'
@@ -55,6 +57,8 @@ export default function App() {
         <Route path="brokers" element={<BrokersList />} />
         <Route path="brokers/new" element={<AddBroker />} />
         <Route path="brokers/:id" element={<BrokerDetail />} />
+        <Route path="brokers/:id/team" element={<BrokerTeam />} />
+        <Route path="brokers/:id/performance" element={<BrokerPerformance />} />
         <Route path="payouts" element={<PayoutQueue />} />
         <Route path="commission" element={<CommissionRules />} />
         <Route path="reports" element={<Reports />} />
