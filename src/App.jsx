@@ -16,6 +16,7 @@ import CustomersList from './pages/customers/CustomersList'
 import CustomerDetail from './pages/customers/CustomerDetail'
 import BrokersList from './pages/brokers/BrokersList'
 import BrokerDetail from './pages/brokers/BrokerDetail'
+import AddBroker from './pages/brokers/AddBroker'
 import PayoutQueue from './pages/payouts/PayoutQueue'
 import CommissionRules from './pages/commission/CommissionRules'
 import Reports from './pages/reports/Reports'
@@ -23,7 +24,11 @@ import Settings from './pages/settings/Settings'
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
-  if (loading) return <div className="flex items-center justify-center h-screen"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teal-600"/></div>
+  if (loading) return (
+    <div className="flex items-center justify-center h-screen">
+      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teal-600" />
+    </div>
+  )
   if (!user) return <Navigate to="/login" replace />
   return children
 }
@@ -48,6 +53,7 @@ export default function App() {
         <Route path="customers" element={<CustomersList />} />
         <Route path="customers/:id" element={<CustomerDetail />} />
         <Route path="brokers" element={<BrokersList />} />
+        <Route path="brokers/new" element={<AddBroker />} />
         <Route path="brokers/:id" element={<BrokerDetail />} />
         <Route path="payouts" element={<PayoutQueue />} />
         <Route path="commission" element={<CommissionRules />} />
