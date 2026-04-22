@@ -4,7 +4,7 @@ import { useQuery, useMutation } from '@tanstack/react-query'
 import { supabase } from '../../lib/supabase'
 import { queryClient } from '../../lib/queryClient'
 import LoadingSpinner from '../../components/ui/LoadingSpinner'
-import { ArrowLeft, CheckCircle, Shield, ShieldOff, Eye, EyeOff, Copy, RotateCcw, UserX, UserCheck } from 'lucide-react'
+import { ArrowLeft, CheckCircle, Shield, ShieldOff, Eye, EyeOff, Copy, RotateCcw, UserX, UserCheck, Users, TrendingUp } from 'lucide-react'
 import { formatDate, formatINR } from '../../lib/utils'
 import { PAYOUT_STATUS_COLORS } from '../../constants/enums'
 import toast from 'react-hot-toast'
@@ -155,6 +155,23 @@ export default function BrokerDetail() {
               <CheckCircle size={14} /> Approve
             </button>
           )}
+
+          {/* Team Network shortcut */}
+          <Link
+            to={`/brokers/${id}/team`}
+            className="btn-secondary flex items-center gap-1.5 text-sm"
+          >
+            <Users size={14} /> Team Network
+          </Link>
+
+          {/* Performance shortcut */}
+          <Link
+            to={`/brokers/${id}/performance`}
+            className="btn-secondary flex items-center gap-1.5 text-sm"
+          >
+            <TrendingUp size={14} /> Performance
+          </Link>
+
           <button
             onClick={() => togglePortal.mutate(!broker?.portal_access)}
             className={`btn-secondary flex items-center gap-1.5 text-sm ${
@@ -178,7 +195,15 @@ export default function BrokerDetail() {
         <div className="card p-4"><p className="text-xs text-slate-500">Total Paid</p><p className="text-xl font-bold text-green-700 mt-1">{formatINR(totalPaid)}</p></div>
         <div className="card p-4"><p className="text-xs text-slate-500">Pending Payout</p><p className="text-xl font-bold text-yellow-600 mt-1">{formatINR(totalPending)}</p></div>
         <div className="card p-4"><p className="text-xs text-slate-500">Transactions</p><p className="text-xl font-bold text-slate-900 mt-1">{payouts.length}</p></div>
-        <div className="card p-4"><p className="text-xs text-slate-500">Team Members</p><p className="text-xl font-bold text-teal-700 mt-1">{teamMembers.length}</p></div>
+        <div className="card p-4">
+          <p className="text-xs text-slate-500">Team Members</p>
+          <div className="flex items-end justify-between mt-1">
+            <p className="text-xl font-bold text-teal-700">{teamMembers.length}</p>
+            <Link to={`/brokers/${id}/team`} className="text-xs text-teal-600 hover:text-teal-800 font-medium pb-0.5">
+              View all →
+            </Link>
+          </div>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -242,6 +267,34 @@ export default function BrokerDetail() {
               </div>
             </div>
           )}
+
+          {/* Quick Links */}
+          <div className="grid grid-cols-2 gap-4">
+            <Link
+              to={`/brokers/${id}/team`}
+              className="card p-4 flex items-center gap-3 hover:border-teal-200 hover:bg-teal-50/50 transition-colors group"
+            >
+              <div className="w-9 h-9 rounded-xl bg-teal-100 flex items-center justify-center text-teal-700 group-hover:bg-teal-200 transition-colors">
+                <Users size={16} />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-slate-800">Team Network</p>
+                <p className="text-xs text-slate-400">{teamMembers.length} direct · full downline tree</p>
+              </div>
+            </Link>
+            <Link
+              to={`/brokers/${id}/performance`}
+              className="card p-4 flex items-center gap-3 hover:border-teal-200 hover:bg-teal-50/50 transition-colors group"
+            >
+              <div className="w-9 h-9 rounded-xl bg-teal-100 flex items-center justify-center text-teal-700 group-hover:bg-teal-200 transition-colors">
+                <TrendingUp size={16} />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-slate-800">Performance</p>
+                <p className="text-xs text-slate-400">{payouts.length} transactions · earnings breakdown</p>
+              </div>
+            </Link>
+          </div>
         </div>
       )}
 
@@ -280,50 +333,62 @@ export default function BrokerDetail() {
 
       {/* TEAM TAB */}
       {activeTab === 'team' && (
-        <div className="card overflow-hidden">
-          {teamMembers.length === 0 ? (
-            <div className="px-4 py-12 text-center text-slate-400">
-              <p className="text-3xl mb-2">👥</p>
-              <p>No direct team members yet.</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead><tr className="bg-slate-50 border-b border-slate-200">
-                  {['Name', 'Mobile', 'Rank', 'Portal', 'Status', 'Joined', ''].map(h => (
-                    <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-slate-500">{h}</th>
-                  ))}
-                </tr></thead>
-                <tbody>
-                  {teamMembers.map(m => (
-                    <tr key={m.id} className="border-b border-slate-100 hover:bg-slate-50">
-                      <td className="px-4 py-3 font-medium">{m.name}</td>
-                      <td className="px-4 py-3 text-slate-500">{m.mobile || '—'}</td>
-                      <td className="px-4 py-3">
-                        <span className="text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">
-                          {RANK_LABELS[m.rank] || m.rank || 'Associate'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        {m.portal_access
-                          ? <span className="text-xs text-green-700">✓ Active</span>
-                          : <span className="text-xs text-slate-400">None</span>}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${
-                          m.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'
-                        }`}>{m.status || 'active'}</span>
-                      </td>
-                      <td className="px-4 py-3 text-slate-400 text-xs">{formatDate(m.created_at)}</td>
-                      <td className="px-4 py-3 text-right">
-                        <Link to={`/brokers/${m.id}`} className="text-teal-700 hover:text-teal-900 text-xs font-medium">View</Link>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+        <div className="space-y-3">
+          {/* Full tree CTA */}
+          <div className="flex justify-end">
+            <Link
+              to={`/brokers/${id}/team`}
+              className="btn-secondary flex items-center gap-1.5 text-sm text-teal-700"
+            >
+              <Users size={14} /> View Full Network Tree →
+            </Link>
+          </div>
+
+          <div className="card overflow-hidden">
+            {teamMembers.length === 0 ? (
+              <div className="px-4 py-12 text-center text-slate-400">
+                <p className="text-3xl mb-2">👥</p>
+                <p>No direct team members yet.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead><tr className="bg-slate-50 border-b border-slate-200">
+                    {['Name', 'Mobile', 'Rank', 'Portal', 'Status', 'Joined', ''].map(h => (
+                      <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-slate-500">{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {teamMembers.map(m => (
+                      <tr key={m.id} className="border-b border-slate-100 hover:bg-slate-50">
+                        <td className="px-4 py-3 font-medium">{m.name}</td>
+                        <td className="px-4 py-3 text-slate-500">{m.mobile || '—'}</td>
+                        <td className="px-4 py-3">
+                          <span className="text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">
+                            {RANK_LABELS[m.rank] || m.rank || 'Associate'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          {m.portal_access
+                            ? <span className="text-xs text-green-700">✓ Active</span>
+                            : <span className="text-xs text-slate-400">None</span>}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${
+                            m.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'
+                          }`}>{m.status || 'active'}</span>
+                        </td>
+                        <td className="px-4 py-3 text-slate-400 text-xs">{formatDate(m.created_at)}</td>
+                        <td className="px-4 py-3 text-right">
+                          <Link to={`/brokers/${m.id}`} className="text-teal-700 hover:text-teal-900 text-xs font-medium">View</Link>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
