@@ -23,6 +23,12 @@ import PayoutQueue from './pages/payouts/PayoutQueue'
 import CommissionRules from './pages/commission/CommissionRules'
 import Reports from './pages/reports/Reports'
 import Settings from './pages/settings/Settings'
+import WithdrawalRequests from './pages/withdrawals/WithdrawalRequests'
+import Expenses from './pages/expenses/Expenses'
+import Enquiries from './pages/enquiries/Enquiries'
+import Announcements from './pages/announcements/Announcements'
+import SupportTickets from './pages/support/SupportTickets'
+import BalanceSheet from './pages/finance/BalanceSheet'
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
@@ -61,6 +67,12 @@ export default function App() {
         <Route path="brokers/:id/performance" element={<BrokerPerformance />} />
         <Route path="payouts" element={<PayoutQueue />} />
         <Route path="commission" element={<CommissionRules />} />
+        <Route path="withdrawals" element={<WithdrawalRequests />} />
+        <Route path="expenses" element={<Expenses />} />
+        <Route path="enquiries" element={<Enquiries />} />
+        <Route path="announcements" element={<Announcements />} />
+        <Route path="support" element={<SupportTickets />} />
+        <Route path="balance-sheet" element={<BalanceSheet />} />
         <Route path="reports" element={<Reports />} />
         <Route path="settings" element={<Settings />} />
       </Route>
