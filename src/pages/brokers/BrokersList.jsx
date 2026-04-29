@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Search, UserCheck, UserPlus, RefreshCw, MoreVertical, Shield, ShieldOff, Key, LogIn, Copy, Hash, Wallet } from 'lucide-react'
+import { Search, UserPlus, RefreshCw, MoreVertical, Shield, ShieldOff, Key, LogIn, Copy, Wallet } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import toast from 'react-hot-toast'
 
@@ -24,9 +24,6 @@ export default function BrokersList() {
   const [filterPortal, setFilterPortal] = useState('all')
   const [actionMenu, setActionMenu] = useState(null)
   const [credModal, setCredModal] = useState(null)
-  const [epinModal, setEpinModal] = useState(false)
-  const [epins, setEpins] = useState([])
-  const [epinLoading, setEpinLoading] = useState(false)
 
   useEffect(() => { fetchBrokers() }, [])
 
@@ -74,26 +71,6 @@ export default function BrokersList() {
     setActionMenu(null)
   }
 
-  async function fetchEPINs() {
-    setEpinLoading(true)
-    const { data } = await supabase.from('epins').select('*').order('created_at', { ascending: false }).limit(50)
-    setEpins(data || [])
-    setEpinLoading(false)
-  }
-
-  async function generateEPINs(count = 10) {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-    const pins = Array.from({ length: count }, () => ({
-      code: 'EP-' + Array.from({ length: 8 }, () => chars[Math.floor(Math.random() * chars.length)]).join(''),
-      status: 'unused',
-      created_at: new Date().toISOString(),
-    }))
-    const { error } = await supabase.from('epins').insert(pins)
-    if (error) { toast.error('Failed to generate E-PINs'); return }
-    toast.success(`${count} E-PINs generated`)
-    fetchEPINs()
-  }
-
   const filtered = useMemo(() => {
     let list = brokers
     if (filterStatus !== 'all') list = list.filter(b => (b.status || 'active') === filterStatus)
@@ -117,15 +94,9 @@ export default function BrokersList() {
           <h1 className="text-2xl font-bold text-slate-900">Brokers</h1>
           <p className="text-sm text-slate-500 mt-1">Manage broker accounts, portal access and commission status.</p>
         </div>
-        <div className="flex gap-2">
-          <button onClick={() => { setEpinModal(true); fetchEPINs() }}
-            className="btn-secondary flex items-center gap-2 text-sm">
-            <Hash size={15} /> E-PINs
-          </button>
-          <Link to="/brokers/new" className="btn-primary flex items-center gap-2">
-            <UserPlus size={16} /> Add Broker
-          </Link>
-        </div>
+        <Link to="/brokers/new" className="btn-primary flex items-center gap-2">
+          <UserPlus size={16} /> Add Broker
+        </Link>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -244,7 +215,7 @@ export default function BrokersList() {
                               {broker.portal_access ? 'Disable Portal' : 'Enable Portal'}
                             </button>
                             <button onClick={() => toggleStatus(broker)} className="w-full text-left px-4 py-2 hover:bg-slate-50">
-                              {broker.status === 'active' ? '🔴 Deactivate' : '🟢 Activate'}
+                              {broker.status === 'active' ? 'Deactivate' : 'Activate'}
                             </button>
                             <button onClick={() => resetPassword(broker)}
                               className="w-full text-left px-4 py-2 hover:bg-slate-50 flex items-center gap-2">
@@ -259,7 +230,7 @@ export default function BrokersList() {
                               <LogIn size={13} /> Login as Broker
                             </button>
                             <div className="border-t border-slate-100 mt-1 pt-1">
-                              <Link to={`/brokers/${broker.id}`} className="block px-4 py-2 hover:bg-slate-50">👤 Full Profile</Link>
+                              <Link to={`/brokers/${broker.id}`} className="block px-4 py-2 hover:bg-slate-50">Full Profile</Link>
                             </div>
                           </div>
                         )}
@@ -278,7 +249,6 @@ export default function BrokersList() {
         )}
       </div>
 
-      {/* Credentials Modal */}
       {credModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setCredModal(null)}>
           <div className="bg-white rounded-2xl shadow-xl p-6 w-80" onClick={e => e.stopPropagation()}>
@@ -299,56 +269,6 @@ export default function BrokersList() {
               </div>
             </div>
             <button onClick={() => setCredModal(null)} className="btn-secondary w-full mt-4 text-sm">Close</button>
-          </div>
-        </div>
-      )}
-
-      {/* E-PIN Modal */}
-      {epinModal && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setEpinModal(false)}>
-          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-lg mx-4 max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold text-slate-900">E-PIN Management</h3>
-              <div className="flex gap-2">
-                {[5, 10, 25].map(n => (
-                  <button key={n} onClick={() => generateEPINs(n)}
-                    className="px-3 py-1.5 text-xs bg-teal-600 text-white rounded-lg hover:bg-teal-700 font-medium">+{n} PINs</button>
-                ))}
-              </div>
-            </div>
-            <div className="overflow-y-auto flex-1">
-              {epinLoading ? (
-                <div className="flex justify-center py-8"><div className="w-5 h-5 border-2 border-teal-500 border-t-transparent rounded-full animate-spin" /></div>
-              ) : epins.length === 0 ? (
-                <p className="text-center text-slate-400 text-sm py-8">No E-PINs yet. Generate some above.</p>
-              ) : (
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="bg-slate-50">
-                      <th className="text-left px-3 py-2 font-medium text-slate-500">Code</th>
-                      <th className="text-left px-3 py-2 font-medium text-slate-500">Status</th>
-                      <th className="text-left px-3 py-2 font-medium text-slate-500">Used By</th>
-                      <th className="text-left px-3 py-2 font-medium text-slate-500">Created</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-50">
-                    {epins.map(pin => (
-                      <tr key={pin.id} className="hover:bg-slate-50">
-                        <td className="px-3 py-2 font-mono font-medium text-slate-900">{pin.code}</td>
-                        <td className="px-3 py-2">
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${pin.status === 'used' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
-                            {pin.status}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2 text-slate-500">{pin.used_by || '—'}</td>
-                        <td className="px-3 py-2 text-slate-400">{new Date(pin.created_at).toLocaleDateString('en-IN')}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-            <button onClick={() => setEpinModal(false)} className="btn-secondary mt-4 text-sm">Close</button>
           </div>
         </div>
       )}
