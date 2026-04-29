@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
-import { Table } from '@/components/ui/Table'
+import { Table } from '@/components/ui/Table.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 
 export default function Commission() {

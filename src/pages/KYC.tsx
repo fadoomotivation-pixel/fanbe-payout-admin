@@ -1,8 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
-import { Table } from '@/components/ui/Table'
-import { Button } from '@/components/ui/Button'
-import { Badge } from '@/components/ui/Badge'
+import { Table } from '@/components/ui/Table.tsx'
+import { Button } from '@/components/ui/Button.tsx'
+import { Badge } from '@/components/ui/Badge.tsx'
 import { KYC_COLORS, formatDate } from '@/lib/utils'
 import toast from 'react-hot-toast'
 
