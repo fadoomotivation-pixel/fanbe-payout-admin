@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { StatCard } from '@/components/ui/StatCard'
+import { StatCard } from '@/components/ui/StatCard.tsx'
 import { Users, Building2, CreditCard, Banknote, TrendingUp, Clock, UserCheck, UserX, Wallet, AlertTriangle } from 'lucide-react'
 
 type DashboardStats = {

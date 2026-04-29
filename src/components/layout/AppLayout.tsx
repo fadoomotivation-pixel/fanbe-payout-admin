@@ -1,5 +1,5 @@
 import { Outlet } from 'react-router-dom'
-import { Sidebar } from './Sidebar'
+import { Sidebar } from './Sidebar.tsx'
 import { Bell } from 'lucide-react'
 export function AppLayout(){
   return(

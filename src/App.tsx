@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
-import { AppLayout } from '@/components/layout/AppLayout'
+import { AppLayout } from '@/components/layout/AppLayout.tsx'
 import Login from '@/pages/Login'
 import Dashboard from '@/pages/Dashboard'
 import Brokers from '@/pages/Brokers'
