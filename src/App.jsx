@@ -14,6 +14,8 @@ import BookingDetail from './pages/bookings/BookingDetail'
 import BookingForm from './pages/bookings/BookingForm'
 import CustomersList from './pages/customers/CustomersList'
 import CustomerDetail from './pages/customers/CustomerDetail'
+import MembersList from './pages/members/MembersList'
+import MemberDetail from './pages/members/MemberDetail'
 import BrokersList from './pages/brokers/BrokersList'
 import BrokerDetail from './pages/brokers/BrokerDetail'
 import AddBroker from './pages/brokers/AddBroker'
@@ -58,6 +60,10 @@ export default function App() {
         <Route path="bookings" element={<BookingsList />} />
         <Route path="bookings/new" element={<BookingForm />} />
         <Route path="bookings/:id" element={<BookingDetail />} />
+        {/* Lead Pipeline: Inquiry -> Member -> Customer */}
+        <Route path="enquiries" element={<Enquiries />} />
+        <Route path="members" element={<MembersList />} />
+        <Route path="members/:id" element={<MemberDetail />} />
         <Route path="customers" element={<CustomersList />} />
         <Route path="customers/:id" element={<CustomerDetail />} />
         <Route path="brokers" element={<BrokersList />} />
@@ -69,7 +75,6 @@ export default function App() {
         <Route path="commission" element={<CommissionRules />} />
         <Route path="withdrawals" element={<WithdrawalRequests />} />
         <Route path="expenses" element={<Expenses />} />
-        <Route path="enquiries" element={<Enquiries />} />
         <Route path="announcements" element={<Announcements />} />
         <Route path="support" element={<SupportTickets />} />
         <Route path="balance-sheet" element={<BalanceSheet />} />
