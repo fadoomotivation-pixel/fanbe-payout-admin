@@ -22,6 +22,7 @@ import AddBroker from './pages/brokers/AddBroker'
 import BrokerTeam from './pages/brokers/BrokerTeam'
 import BrokerPerformance from './pages/brokers/BrokerPerformance'
 import PayoutQueue from './pages/payouts/PayoutQueue'
+import PaymentQueue from './pages/payments/PaymentQueue'
 import CommissionRules from './pages/commission/CommissionRules'
 import Reports from './pages/reports/Reports'
 import Settings from './pages/settings/Settings'
@@ -72,6 +73,7 @@ export default function App() {
         <Route path="brokers/:id/team" element={<BrokerTeam />} />
         <Route path="brokers/:id/performance" element={<BrokerPerformance />} />
         <Route path="payouts" element={<PayoutQueue />} />
+        <Route path="payment-queue" element={<PaymentQueue />} />
         <Route path="commission" element={<CommissionRules />} />
         <Route path="withdrawals" element={<WithdrawalRequests />} />
         <Route path="expenses" element={<Expenses />} />

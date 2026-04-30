@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, Building2, Map, FileText, Users, UserCheck,
   Banknote, Settings2, BarChart3, Settings, ArrowDownCircle,
-  Receipt, PhoneCall, Megaphone, HeadphonesIcon, Scale
+  Receipt, PhoneCall, Megaphone, HeadphonesIcon, Scale, ClipboardCheck
 } from 'lucide-react'
 
 const sections = [
@@ -31,6 +31,7 @@ const sections = [
   {
     label: 'Finance',
     items: [
+      { to: '/payment-queue', icon: ClipboardCheck, label: 'Payment Queue' },
       { to: '/payouts', icon: Banknote, label: 'Payout Queue' },
       { to: '/commission', icon: Settings2, label: 'Commission Rules' },
       { to: '/withdrawals', icon: ArrowDownCircle, label: 'Withdrawals' },
