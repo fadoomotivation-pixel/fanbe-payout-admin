@@ -27,6 +27,8 @@ import News from '@/pages/News'
 import Roles from '@/pages/Roles'
 import BankAccounts from '@/pages/BankAccounts'
 import CommissionRanks from '@/pages/CommissionRanks'
+import AchieversClub from '@/pages/AchieversClub'
+import TeamRewards from '@/pages/TeamRewards'
 
 function Guard({children}:{children:any}){
   const[session,setSession]=useState<any>(undefined)
@@ -57,6 +59,8 @@ export default function App(){
         <Route path="/withdrawals" element={<Withdrawals/>}/>
         <Route path="/commission" element={<Commission/>}/>
         <Route path="/commission-ranks" element={<CommissionRanks/>}/>
+        <Route path="/achievers-club" element={<AchieversClub/>}/>
+        <Route path="/team-rewards" element={<TeamRewards/>}/>
         <Route path="/expenses" element={<Expenses/>}/>
         <Route path="/balance-sheet" element={<BalanceSheet/>}/>
         <Route path="/tickets" element={<Tickets/>}/>

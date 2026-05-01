@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Users, Building2, Map, BookOpen, CreditCard, Banknote, Settings, LogOut, ChevronLeft, ChevronRight, BarChart2, FileText, UserCheck, Layers, MessageSquare, Megaphone, ShieldCheck, Receipt, Wallet, Calculator, Inbox, UserPlus, History, TrendingUp, Landmark } from 'lucide-react'
+import { LayoutDashboard, Users, Building2, Map, BookOpen, CreditCard, Banknote, Settings, LogOut, ChevronLeft, ChevronRight, BarChart2, FileText, UserCheck, Layers, MessageSquare, Megaphone, ShieldCheck, Receipt, Wallet, Calculator, Inbox, UserPlus, History, TrendingUp, Landmark, Star, Gift, Trophy } from 'lucide-react'
 import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
@@ -27,7 +27,9 @@ const NAV = [
     {to:'/payouts',icon:Banknote,label:'Payouts'},
     {to:'/withdrawals',icon:Wallet,label:'Withdrawals'},
     {to:'/commission',icon:Layers,label:'Commission Rules'},
-    {to:'/commission-ranks',icon:Layers,label:'Rank Slabs'},
+    {to:'/commission-ranks',icon:Trophy,label:'Rank Slabs'},
+    {to:'/achievers-club',icon:Star,label:'Achievers Club'},
+    {to:'/team-rewards',icon:Gift,label:'Team Rewards'},
   ]},
   { group:'Operations', items:[
     {to:'/expenses',icon:Receipt,label:'Expenses'},
