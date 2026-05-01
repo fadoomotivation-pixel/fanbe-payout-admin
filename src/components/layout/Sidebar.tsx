@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Users, Building2, Map, BookOpen, CreditCard, Banknote, Settings, LogOut, ChevronLeft, ChevronRight, BarChart2, FileText, UserCheck, Layers, MessageSquare, Megaphone, ShieldCheck, Receipt, Wallet, Calculator, Inbox, IdCard, History, TrendingUp, Landmark } from 'lucide-react'
+import { LayoutDashboard, Users, Building2, Map, BookOpen, CreditCard, Banknote, Settings, LogOut, ChevronLeft, ChevronRight, BarChart2, FileText, UserCheck, Layers, MessageSquare, Megaphone, ShieldCheck, Receipt, Wallet, Calculator, Inbox, UserPlus, History, TrendingUp, Landmark } from 'lucide-react'
 import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
@@ -11,7 +11,7 @@ const NAV = [
   ]},
   { group:'Pipeline', items:[
     {to:'/inquiries',icon:Inbox,label:'Inquiries'},
-    {to:'/members',icon:IdCard,label:'Registry Members'},
+    {to:'/members',icon:UserPlus,label:'Registry Members'},
     {to:'/customer-history',icon:History,label:'Customer History'},
   ]},
   { group:'Real Estate', items:[
