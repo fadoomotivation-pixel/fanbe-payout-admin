@@ -1,2 +1,2 @@
-// Alias — use AppShell for all layout needs
-export { default } from './AppShell.jsx'
+import AppShell from './AppShell.jsx'
+export default AppShell
