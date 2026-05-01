@@ -3,6 +3,8 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { AppLayout } from '@/components/layout/AppLayout.tsx'
 import Login from '@/pages/Login'
+import BrokerLogin from '@/pages/BrokerLogin'
+import BrokerDashboard from '@/pages/BrokerDashboard'
 import Dashboard from '@/pages/Dashboard'
 import Brokers from '@/pages/Brokers'
 import Payouts from '@/pages/Payouts'
@@ -42,6 +44,8 @@ export default function App(){
   return(
     <Routes>
       <Route path="/login" element={<Login/>}/>
+      <Route path="/broker/login" element={<BrokerLogin/>}/>
+      <Route path="/broker/dashboard" element={<BrokerDashboard/>}/>
       <Route element={<Guard><AppLayout/></Guard>}>
         <Route path="/" element={<Dashboard/>}/>
         <Route path="/analytics" element={<Analytics/>}/>

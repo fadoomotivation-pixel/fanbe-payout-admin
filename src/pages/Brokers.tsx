@@ -10,14 +10,19 @@ import { KYC_COLORS } from '@/lib/utils'
 import { Plus, Search } from 'lucide-react'
 import toast from 'react-hot-toast'
 
-const EMPTY = { name:'', email:'', phone:'', referral_code:'', rank:'partner', status:'active', tds_applicable:false, pan_no:'', gst_no:'' }
+const EMPTY = {
+  name:'', email:'', phone:'', referral_code:'', rank:'partner', status:'active',
+  tds_applicable:false, pan_no:'', gst_no:'',
+  sponsor_id:'', date_of_joining:'',
+  bank_name:'', account_no:'', ifsc:'', account_holder:'', aadhaar_no:'',
+}
 
 export default function Brokers() {
   const qc = useQueryClient()
   const { data: brokers = [], isLoading } = useQuery({
     queryKey: ['brokers'],
     queryFn: async () => {
-      const { data, error } = await supabase.from('brokers').select('*').order('created_at', { ascending: false })
+      const { data, error } = await supabase.from('brokers').select('*, sponsor:sponsor_id(id,name,broker_id,rank)').order('created_at', { ascending: false })
       if (error) throw error; return data
     },
   })
@@ -28,17 +33,46 @@ export default function Brokers() {
   const [editing, setEditing] = useState<any>(null)
   const [form, setForm] = useState<any>(EMPTY)
   const [q, setQ] = useState('')
+  const [sponsorSearch, setSponsorSearch] = useState('')
 
-  const open = (b?: any) => { setEditing(b || null); setForm(b ? { name:b.name, email:b.email, phone:b.phone, referral_code:b.referral_code, rank:b.rank, status:b.status, tds_applicable:b.tds_applicable, pan_no:b.pan_no||'', gst_no:b.gst_no||'' } : EMPTY); setModal(true) }
-  const save = async () => { editing ? await update.mutateAsync({ id: editing.id, data: form }) : await create.mutateAsync(form); setModal(false) }
+  const open = (b?: any) => {
+    setEditing(b || null)
+    setSponsorSearch('')
+    setForm(b ? {
+      name:b.name, email:b.email||'', phone:b.phone||'', referral_code:b.referral_code||'',
+      rank:b.rank||'partner', status:b.status||'active', tds_applicable:!!b.tds_applicable,
+      pan_no:b.pan_no||'', gst_no:b.gst_no||'',
+      sponsor_id:b.sponsor_id||'', date_of_joining:b.date_of_joining||'',
+      bank_name:b.bank_name||'', account_no:b.account_no||'', ifsc:b.ifsc||'',
+      account_holder:b.account_holder||'', aadhaar_no:b.aadhaar_no||'',
+    } : EMPTY)
+    setModal(true)
+  }
+  const save = async () => {
+    const payload = {
+      ...form,
+      sponsor_id: form.sponsor_id || null,
+      date_of_joining: form.date_of_joining || null,
+    }
+    if (editing) await update.mutateAsync({ id: editing.id, data: payload })
+    else await create.mutateAsync(payload)
+    setModal(false)
+  }
   const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }))
-  const filtered = (brokers as any[]).filter((b: any) => `${b.name}${b.phone}${b.broker_id}`.toLowerCase().includes(q.toLowerCase()))
+
+  const allBrokers = brokers as any[]
+  const filtered = allBrokers.filter((b: any) => `${b.name||''}${b.phone||''}${b.broker_id||''}`.toLowerCase().includes(q.toLowerCase()))
+  const sponsorOptions = allBrokers
+    .filter((b: any) => b.id !== editing?.id)
+    .filter((b: any) => !sponsorSearch || `${b.name||''}${b.broker_id||''}${b.phone||''}`.toLowerCase().includes(sponsorSearch.toLowerCase()))
+    .slice(0, 10)
 
   const cols = [
     { header: 'Broker ID', render: (r: any) => <span className="font-mono text-xs bg-gray-100 px-2 py-0.5 rounded">{r.broker_id}</span> },
     { header: 'Name', render: (r: any) => <span className="font-medium">{r.name}</span> },
-    { header: 'Phone', key: 'phone' }, { header: 'Email', key: 'email' },
+    { header: 'Phone', key: 'phone' },
     { header: 'Rank', render: (r: any) => <span className="capitalize">{r.rank}</span> },
+    { header: 'Sponsor', render: (r: any) => r.sponsor?.name ? <span className="text-xs text-gray-600">{r.sponsor.name} <span className="text-gray-400">[{r.sponsor.broker_id}]</span></span> : <span className="text-xs text-gray-400">—</span> },
     { header: 'KYC', render: (r: any) => <Badge label={r.kyc_status || 'pending'} className={KYC_COLORS[r.kyc_status] || 'bg-gray-100 text-gray-600'} /> },
     { header: 'Status', render: (r: any) => <Badge label={r.status} className={r.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'} /> },
     { header: '', render: (r: any) => <Button size="sm" variant="ghost" onClick={() => open(r)}>Edit</Button> },
@@ -47,7 +81,7 @@ export default function Brokers() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <div><h1 className="text-xl font-bold text-gray-900">Brokers</h1><p className="text-sm text-gray-500">{(brokers as any[]).length} brokers registered</p></div>
+        <div><h1 className="text-xl font-bold text-gray-900">Brokers</h1><p className="text-sm text-gray-500">{allBrokers.length} brokers registered</p></div>
         <Button onClick={() => open()}><Plus size={14} />Add Broker</Button>
       </div>
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
@@ -68,9 +102,42 @@ export default function Brokers() {
           <Select label="Status" value={form.status} onChange={(e: any) => set('status', e.target.value)}>
             <option value="active">Active</option><option value="inactive">Inactive</option><option value="suspended">Suspended</option>
           </Select>
+
+          <div className="col-span-2 mt-2 pt-3 border-t border-gray-100">
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Sponsor / Upline (drives differential payouts)</label>
+            <p className="text-xs text-gray-400 mt-0.5">Search by name, broker ID or phone. Leave empty for top-of-tree brokers.</p>
+          </div>
+          <div className="col-span-2">
+            <input value={sponsorSearch} onChange={e => setSponsorSearch(e.target.value)} placeholder="Search sponsor by name / ID / phone…" className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white mb-2" />
+            <Select label="" value={form.sponsor_id} onChange={(e: any) => set('sponsor_id', e.target.value)}>
+              <option value="">— No sponsor (top of tree) —</option>
+              {sponsorOptions.map((b: any) => (
+                <option key={b.id} value={b.id}>{b.name} [{b.broker_id}] · {b.rank} · {b.phone}</option>
+              ))}
+            </Select>
+            {form.sponsor_id && (() => {
+              const s = allBrokers.find((b: any) => b.id === form.sponsor_id)
+              return s ? (
+                <div className="mt-2 p-2 bg-indigo-50 rounded text-xs text-indigo-700">
+                  ↑ Upline: <b>{s.name}</b> [{s.broker_id}] — Rank: <b className="capitalize">{s.rank}</b>
+                </div>
+              ) : null
+            })()}
+          </div>
+          <Input label="Date of Joining" type="date" value={form.date_of_joining} onChange={(e: any) => set('date_of_joining', e.target.value)} />
+          <Input label="Aadhaar No" value={form.aadhaar_no} onChange={(e: any) => set('aadhaar_no', e.target.value)} placeholder="XXXX-XXXX-XXXX" />
           <Input label="PAN No" value={form.pan_no} onChange={(e: any) => set('pan_no', e.target.value)} />
           <Input label="GST No" value={form.gst_no} onChange={(e: any) => set('gst_no', e.target.value)} />
-          <div className="col-span-2 flex items-center gap-2">
+
+          <div className="col-span-2 mt-2 pt-3 border-t border-gray-100">
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Bank account (for withdrawals)</label>
+          </div>
+          <Input label="Account Holder" value={form.account_holder} onChange={(e: any) => set('account_holder', e.target.value)} />
+          <Input label="Bank Name" value={form.bank_name} onChange={(e: any) => set('bank_name', e.target.value)} />
+          <Input label="Account No" value={form.account_no} onChange={(e: any) => set('account_no', e.target.value)} />
+          <Input label="IFSC" value={form.ifsc} onChange={(e: any) => set('ifsc', e.target.value.toUpperCase())} />
+
+          <div className="col-span-2 flex items-center gap-2 mt-2">
             <input type="checkbox" id="tds" checked={form.tds_applicable} onChange={e => set('tds_applicable', e.target.checked)} className="rounded" />
             <label htmlFor="tds" className="text-sm text-gray-700">TDS Applicable</label>
           </div>
