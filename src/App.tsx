@@ -15,6 +15,18 @@ import Commission from '@/pages/Commission'
 import Analytics from '@/pages/Analytics'
 import Reports from '@/pages/Reports'
 import Settings from '@/pages/Settings'
+import Inquiries from '@/pages/Inquiries'
+import Members from '@/pages/Members'
+import CustomerHistory from '@/pages/CustomerHistory'
+import EMI from '@/pages/EMI'
+import Expenses from '@/pages/Expenses'
+import BalanceSheet from '@/pages/BalanceSheet'
+import Withdrawals from '@/pages/Withdrawals'
+import Tickets from '@/pages/Tickets'
+import News from '@/pages/News'
+import Roles from '@/pages/Roles'
+import BankAccounts from '@/pages/BankAccounts'
+import CommissionRanks from '@/pages/CommissionRanks'
 
 function Guard({children}:{children:any}){
   const[session,setSession]=useState<any>(undefined)
@@ -31,14 +43,26 @@ export default function App(){
       <Route element={<Guard><AppLayout/></Guard>}>
         <Route path="/" element={<Dashboard/>}/>
         <Route path="/analytics" element={<Analytics/>}/>
+        <Route path="/inquiries" element={<Inquiries/>}/>
         <Route path="/projects" element={<Projects/>}/>
         <Route path="/plots" element={<Plots/>}/>
+        <Route path="/members" element={<Members/>}/>
+        <Route path="/customer-history" element={<CustomerHistory/>}/>
         <Route path="/bookings" element={<Bookings/>}/>
         <Route path="/payments" element={<Payments/>}/>
+        <Route path="/emi" element={<EMI/>}/>
         <Route path="/brokers" element={<Brokers/>}/>
         <Route path="/kyc" element={<KYC/>}/>
         <Route path="/payouts" element={<Payouts/>}/>
+        <Route path="/withdrawals" element={<Withdrawals/>}/>
         <Route path="/commission" element={<Commission/>}/>
+        <Route path="/commission-ranks" element={<CommissionRanks/>}/>
+        <Route path="/expenses" element={<Expenses/>}/>
+        <Route path="/balance-sheet" element={<BalanceSheet/>}/>
+        <Route path="/tickets" element={<Tickets/>}/>
+        <Route path="/news" element={<News/>}/>
+        <Route path="/roles" element={<Roles/>}/>
+        <Route path="/bank-accounts" element={<BankAccounts/>}/>
         <Route path="/reports" element={<Reports/>}/>
         <Route path="/settings" element={<Settings/>}/>
       </Route>
