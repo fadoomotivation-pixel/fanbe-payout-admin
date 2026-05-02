@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import { printApplicationForm } from '@/lib/printTemplates'
 import EmiPanel from '@/components/EmiPanel'
-import { Plus, ArrowRight, FileText, Printer, Calculator } from 'lucide-react'
+import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const STAGES = ['enquiry','site_visit','negotiation','token_received','booking_done','cancelled'] as const
@@ -27,6 +27,14 @@ const STAGE_META: Record<Stage, { label: string; color: string }> = {
 const PIPELINE_STAGES: Stage[] = ['enquiry','site_visit','negotiation','token_received','booking_done']
 
 type Plan = 'token_only' | 'booking_only' | 'full_payment' | 'emi_plan'
+type CustMode = 'existing' | 'new'
+
+const NEW_CUST_EMPTY = {
+  name:'', phone:'', email:'', father_or_husband_name:'', dob:'',
+  address:'', pan:'',
+  nominee_name:'', nominee_relation:'', nominee_dob:'', nominee_father_name:'',
+  nominee_address:'', nominee_pan:'',
+}
 
 const EMPTY: any = {
   plot_id:'', customer_id:'', broker_id:'', project_id:'', stage:'enquiry',
@@ -35,6 +43,8 @@ const EMPTY: any = {
   upline_broker_code:'', manager_signature_by:'', affidavit_accepted:true,
   payment_plan: 'token_only' as Plan,
   emi_n: '12', emi_freq: 'monthly', emi_start: new Date().toISOString().slice(0,10),
+  cust_mode: 'existing' as CustMode,
+  new_customer: { ...NEW_CUST_EMPTY },
 }
 
 export default function Bookings() {
@@ -45,6 +55,7 @@ export default function Bookings() {
   const [stageFilter, setStageFilter] = useState<Stage | 'all'>('all')
   const [emiBooking, setEmiBooking] = useState<any>(null)
   const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }))
+  const setNC = (k: string, v: any) => setForm((p: any) => ({ ...p, new_customer: { ...p.new_customer, [k]: v } }))
 
   const { data: bookings = [], isLoading } = useQuery({
     queryKey: ['bookings'],
@@ -73,7 +84,7 @@ export default function Bookings() {
   const { data: customers = [] } = useQuery({
     queryKey: ['customers'],
     queryFn: async () => {
-      const { data, error } = await supabase.from('bp_customers').select('*')
+      const { data, error } = await supabase.from('bp_customers').select('*').order('created_at', { ascending: false })
       if (error) throw error
       return data
     },
@@ -97,7 +108,6 @@ export default function Bookings() {
     },
   })
 
-  // Generate EMI schedule + instalments after booking insert
   async function generateEmiForBooking(bookingId: string, principal: number, num: number, freq: string, startDate: string) {
     if (principal <= 0 || num <= 0) return
     const amt = Math.round(principal / num)
@@ -122,7 +132,20 @@ export default function Bookings() {
 
   const create = useMutation({
     mutationFn: async (p: any) => {
-      const { payment_plan, emi_n, emi_freq, emi_start, ...bookingData } = p
+      const { payment_plan, emi_n, emi_freq, emi_start, cust_mode, new_customer, ...bookingData } = p
+
+      // If new customer mode: create bp_customers row first; trigger auto-assigns customer_code
+      if (cust_mode === 'new') {
+        if (!new_customer?.name || !new_customer?.phone) throw new Error('New customer name & phone required')
+        const { data: nc, error: ncErr } = await supabase.from('bp_customers').insert({
+          ...new_customer,
+          dob: new_customer.dob || null,
+          nominee_dob: new_customer.nominee_dob || null,
+        }).select('id').single()
+        if (ncErr || !nc) throw ncErr || new Error('Failed to create customer')
+        bookingData.customer_id = nc.id
+      }
+
       const { data, error } = await supabase.from('bp_bookings').insert(bookingData).select().single()
       if (error) throw error
       if (payment_plan === 'emi_plan') {
@@ -133,14 +156,16 @@ export default function Bookings() {
     },
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['bookings'] })
-      toast.success(vars.payment_plan === 'emi_plan' ? 'Booking + EMI schedule created' : 'Booking created')
+      qc.invalidateQueries({ queryKey: ['customers'] })
+      const baseMsg = vars.cust_mode === 'new' ? 'Customer + booking created' : 'Booking created'
+      toast.success(vars.payment_plan === 'emi_plan' ? `${baseMsg} + EMI schedule` : baseMsg)
     },
     onError: (e: any) => toast.error(e.message),
   })
 
   const update = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: any }) => {
-      const { payment_plan, emi_n, emi_freq, emi_start, ...rest } = data
+      const { payment_plan, emi_n, emi_freq, emi_start, cust_mode, new_customer, ...rest } = data
       const { data: d, error } = await supabase
         .from('bp_bookings')
         .update({ ...rest, updated_at: new Date().toISOString() })
@@ -174,12 +199,12 @@ export default function Bookings() {
       upline_broker_code: b.upline_broker_code || '', manager_signature_by: b.manager_signature_by || '',
       affidavit_accepted: b.affidavit_accepted !== false,
       payment_plan: 'token_only',
+      cust_mode: 'existing',
     } : EMPTY)
     setModal(true)
   }
 
   const save = async () => {
-    // Auto-set scheme_name from selected project so the print template still has it
     const project = (projects as any[]).find((p: any) => p.id === form.project_id)
     const d: any = {
       ...form,
@@ -219,7 +244,6 @@ export default function Bookings() {
   const totalValue  = all.filter((b: any) => b.stage === 'booking_done').reduce((s: number, b: any) => s + Number(b.total_amount || 0), 0)
   const filtered = stageFilter === 'all' ? all : all.filter((b: any) => b.stage === stageFilter)
 
-  // Derived for the modal: outstanding principal preview
   const principalPreview = Math.max(0, (Number(form.total_amount) || 0) - (Number(form.booking_amount) || 0))
   const emiAmtPreview = principalPreview > 0 && Number(form.emi_n) > 0 ? Math.round(principalPreview / Number(form.emi_n)) : 0
 
@@ -230,7 +254,7 @@ export default function Bookings() {
       render: (r: any) => (
         <div>
           <div className="font-medium text-gray-900">{r.bp_customers?.name}</div>
-          <div className="text-xs text-gray-400">{r.bp_customers?.phone}{r.bp_customers?.father_or_husband_name ? ` · S/o ${r.bp_customers.father_or_husband_name}` : ''}</div>
+          <div className="text-xs text-gray-400">{r.bp_customers?.customer_code ? r.bp_customers.customer_code + ' · ' : ''}{r.bp_customers?.phone}{r.bp_customers?.father_or_husband_name ? ` · S/o ${r.bp_customers.father_or_husband_name}` : ''}</div>
         </div>
       ),
     },
@@ -307,24 +331,60 @@ export default function Bookings() {
           </Select>
         </div>
 
-        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Customer</div>
-        <Select label="Existing Customer" value={form.customer_id} onChange={(e: any) => set('customer_id', e.target.value)}>
-          <option value="">Select Customer</option>
-          {(customers as any[]).map((c: any) => <option key={c.id} value={c.id}>{c.name} ({c.phone}){c.father_or_husband_name ? ` · S/o ${c.father_or_husband_name}` : ''}</option>)}
-        </Select>
-        {form.customer_id && (() => {
-          const c = (customers as any[]).find((x: any) => x.id === form.customer_id)
-          return c ? (
-            <div className="mt-2 p-3 bg-blue-50 rounded-lg text-xs text-blue-900 grid grid-cols-2 gap-2">
-              <span>S/o W/o: <b>{c.father_or_husband_name || '—'}</b></span>
-              <span>DOB: <b>{c.dob || '—'}</b></span>
-              <span>Address: <b>{c.address || '—'}</b></span>
-              <span>PAN: <b>{c.pan || '—'}</b></span>
-              <span className="col-span-2 pt-1 border-t border-blue-200">Nominee: <b>{c.nominee_name || '—'}</b> ({c.nominee_relation || '—'}) · PAN <b>{c.nominee_pan || '—'}</b></span>
-              {!c.nominee_name && <span className="col-span-2 text-amber-700">⚠ Nominee details missing — update on Members page before printing form.</span>}
+        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100 flex items-center justify-between">
+          <span>Customer</span>
+          {!editing && (
+            <div className="flex gap-1 normal-case">
+              <button type="button" onClick={() => set('cust_mode', 'existing')} className={`text-xs px-2.5 py-1 rounded-lg flex items-center gap-1 ${form.cust_mode === 'existing' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}><UserCheck size={12}/>Existing</button>
+              <button type="button" onClick={() => set('cust_mode', 'new')}      className={`text-xs px-2.5 py-1 rounded-lg flex items-center gap-1 ${form.cust_mode === 'new' ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}><UserPlus  size={12}/>New customer</button>
             </div>
-          ) : null
-        })()}
+          )}
+        </div>
+
+        {form.cust_mode === 'existing' || editing ? (
+          <>
+            <Select label="Existing Customer" value={form.customer_id} onChange={(e: any) => set('customer_id', e.target.value)}>
+              <option value="">Select Customer</option>
+              {(customers as any[]).map((c: any) => <option key={c.id} value={c.id}>{c.customer_code ? `[${c.customer_code}] ` : ''}{c.name} ({c.phone}){c.father_or_husband_name ? ` · S/o ${c.father_or_husband_name}` : ''}</option>)}
+            </Select>
+            {form.customer_id && (() => {
+              const c = (customers as any[]).find((x: any) => x.id === form.customer_id)
+              return c ? (
+                <div className="mt-2 p-3 bg-blue-50 rounded-lg text-xs text-blue-900 grid grid-cols-2 gap-2">
+                  <span>Code: <b>{c.customer_code || '—'}</b></span>
+                  <span>S/o W/o: <b>{c.father_or_husband_name || '—'}</b></span>
+                  <span>DOB: <b>{c.dob || '—'}</b></span>
+                  <span>PAN: <b>{c.pan || '—'}</b></span>
+                  <span className="col-span-2">Address: <b>{c.address || '—'}</b></span>
+                  <span className="col-span-2 pt-1 border-t border-blue-200">Nominee: <b>{c.nominee_name || '—'}</b> ({c.nominee_relation || '—'}) · PAN <b>{c.nominee_pan || '—'}</b></span>
+                  {!c.nominee_name && <span className="col-span-2 text-amber-700">⚠ Nominee details missing — update on Customers page after booking.</span>}
+                </div>
+              ) : null
+            })()}
+          </>
+        ) : (
+          <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg space-y-3">
+            <div className="text-[11px] text-emerald-800">A new customer record will be created and auto-assigned a CR-XXXX code on save.</div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Full Name *"             value={form.new_customer.name}                   onChange={(e:any) => setNC('name', e.target.value)} required />
+              <Input label="Mobile *"                value={form.new_customer.phone}                  onChange={(e:any) => setNC('phone', e.target.value)} required />
+              <Input label="Father / Husband"        value={form.new_customer.father_or_husband_name} onChange={(e:any) => setNC('father_or_husband_name', e.target.value)} />
+              <Input label="Date of Birth"           type="date" value={form.new_customer.dob}        onChange={(e:any) => setNC('dob', e.target.value)} />
+              <Input label="Email"                   value={form.new_customer.email}                  onChange={(e:any) => setNC('email', e.target.value)} />
+              <Input label="PAN"                     value={form.new_customer.pan}                    onChange={(e:any) => setNC('pan', e.target.value.toUpperCase())} />
+              <div className="col-span-2"><Input label="Permanent Address" value={form.new_customer.address} onChange={(e:any) => setNC('address', e.target.value)} /></div>
+            </div>
+            <div className="text-[11px] font-semibold text-emerald-800 uppercase tracking-wide pt-2 border-t border-emerald-200">उतराधिकारी / Nominee</div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Nominee Name"            value={form.new_customer.nominee_name}        onChange={(e:any) => setNC('nominee_name', e.target.value)} />
+              <Input label="Relation"                value={form.new_customer.nominee_relation}    onChange={(e:any) => setNC('nominee_relation', e.target.value)} placeholder="Wife / Son / Mother…" />
+              <Input label="Nominee DOB"             type="date" value={form.new_customer.nominee_dob} onChange={(e:any) => setNC('nominee_dob', e.target.value)} />
+              <Input label="Nominee Father / Husband" value={form.new_customer.nominee_father_name} onChange={(e:any) => setNC('nominee_father_name', e.target.value)} />
+              <Input label="Nominee PAN"             value={form.new_customer.nominee_pan}         onChange={(e:any) => setNC('nominee_pan', e.target.value.toUpperCase())} />
+              <div className="col-span-2"><Input label="Nominee Address" value={form.new_customer.nominee_address} onChange={(e:any) => setNC('nominee_address', e.target.value)} /></div>
+            </div>
+          </div>
+        )}
 
         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Booking</div>
         <div className="grid grid-cols-2 gap-3">
@@ -388,7 +448,7 @@ export default function Bookings() {
 
         <div className="flex justify-end gap-2 mt-6">
           <Button variant="secondary" onClick={() => setModal(false)}>Cancel</Button>
-          <Button onClick={save} loading={create.isPending || update.isPending}>{editing ? 'Save changes' : (form.payment_plan === 'emi_plan' ? 'Save Booking + EMI' : 'Save Booking')}</Button>
+          <Button onClick={save} loading={create.isPending || update.isPending}>{editing ? 'Save changes' : (form.cust_mode === 'new' ? 'Create Customer + Booking' : (form.payment_plan === 'emi_plan' ? 'Save Booking + EMI' : 'Save Booking'))}</Button>
         </div>
       </Modal>
 
