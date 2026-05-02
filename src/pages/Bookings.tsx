@@ -8,7 +8,8 @@ import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import { printApplicationForm } from '@/lib/printTemplates'
-import { Plus, ArrowRight, FileText, Printer } from 'lucide-react'
+import EmiPanel from '@/components/EmiPanel'
+import { Plus, ArrowRight, FileText, Printer, Calculator } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const STAGES = ['enquiry','site_visit','negotiation','token_received','booking_done','cancelled'] as const
@@ -25,11 +26,15 @@ const STAGE_META: Record<Stage, { label: string; color: string }> = {
 
 const PIPELINE_STAGES: Stage[] = ['enquiry','site_visit','negotiation','token_received','booking_done']
 
-const EMPTY = {
-  plot_id:'', customer_id:'', broker_id:'', project_id:'', stage:'enquiry' as Stage,
+type Plan = 'token_only' | 'booking_only' | 'full_payment' | 'emi_plan'
+
+const EMPTY: any = {
+  plot_id:'', customer_id:'', broker_id:'', project_id:'', stage:'enquiry',
   total_amount:'', booking_amount:'', discount_amount:'0', notes:'',
-  scheme_name:'', application_date:'', booking_time:'', customer_bank_name:'',
+  application_date: new Date().toISOString().slice(0,10), booking_time:'', customer_bank_name:'',
   upline_broker_code:'', manager_signature_by:'', affidavit_accepted:true,
+  payment_plan: 'token_only' as Plan,
+  emi_n: '12', emi_freq: 'monthly', emi_start: new Date().toISOString().slice(0,10),
 }
 
 export default function Bookings() {
@@ -38,6 +43,7 @@ export default function Bookings() {
   const [editing, setEditing] = useState<any>(null)
   const [form, setForm]       = useState<any>(EMPTY)
   const [stageFilter, setStageFilter] = useState<Stage | 'all'>('all')
+  const [emiBooking, setEmiBooking] = useState<any>(null)
   const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }))
 
   const { data: bookings = [], isLoading } = useQuery({
@@ -57,7 +63,7 @@ export default function Bookings() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('plots')
-        .select('id,plot_number,projects(name,project_code),property_type,dimension,area,total_cost')
+        .select('id,plot_number,projects(name,project_code,id),property_type,dimension,area,total_cost')
         .eq('status','vacant')
       if (error) throw error
       return data
@@ -91,21 +97,53 @@ export default function Bookings() {
     },
   })
 
+  // Generate EMI schedule + instalments after booking insert
+  async function generateEmiForBooking(bookingId: string, principal: number, num: number, freq: string, startDate: string) {
+    if (principal <= 0 || num <= 0) return
+    const amt = Math.round(principal / num)
+    const { data: sched, error } = await supabase.from('emi_schedules').insert({
+      booking_id: bookingId, frequency: freq, start_date: startDate,
+      num_installments: num, principal, total_payable: principal,
+      interest_rate_pct: 0, interest_method: 'flat',
+    }).select('id').single()
+    if (error || !sched) throw error || new Error('Schedule insert failed')
+    const offset = freq === 'monthly' ? 1 : freq === 'quarterly' ? 3 : freq === 'half_yearly' ? 6 : 12
+    const start = new Date(startDate)
+    const rows = Array.from({ length: num }, (_, i) => {
+      const d = new Date(start)
+      d.setMonth(d.getMonth() + offset * (i + 1))
+      return {
+        schedule_id: sched.id, seq: i + 1, due_date: d.toISOString().slice(0,10),
+        amount: amt, principal_component: amt, interest_component: 0, status: 'pending',
+      }
+    })
+    await supabase.from('emi_installments').insert(rows)
+  }
+
   const create = useMutation({
     mutationFn: async (p: any) => {
-      const { data, error } = await supabase.from('bp_bookings').insert(p).select().single()
+      const { payment_plan, emi_n, emi_freq, emi_start, ...bookingData } = p
+      const { data, error } = await supabase.from('bp_bookings').insert(bookingData).select().single()
       if (error) throw error
+      if (payment_plan === 'emi_plan') {
+        const principal = Math.max(0, Number(bookingData.total_amount || 0) - Number(bookingData.booking_amount || 0))
+        await generateEmiForBooking(data.id, principal, Number(emi_n) || 12, emi_freq || 'monthly', emi_start || new Date().toISOString().slice(0,10))
+      }
       return data
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['bookings'] }); toast.success('Booking created') },
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['bookings'] })
+      toast.success(vars.payment_plan === 'emi_plan' ? 'Booking + EMI schedule created' : 'Booking created')
+    },
     onError: (e: any) => toast.error(e.message),
   })
 
   const update = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: any }) => {
+      const { payment_plan, emi_n, emi_freq, emi_start, ...rest } = data
       const { data: d, error } = await supabase
         .from('bp_bookings')
-        .update({ ...data, updated_at: new Date().toISOString() })
+        .update({ ...rest, updated_at: new Date().toISOString() })
         .eq('id', id).select().single()
       if (error) throw error
       return d
@@ -126,21 +164,26 @@ export default function Bookings() {
   const open = (b?: any) => {
     setEditing(b || null)
     setForm(b ? {
+      ...EMPTY,
       plot_id: b.plot_id || '', customer_id: b.customer_id || '',
       broker_id: b.broker_id || '', project_id: b.project_id || '',
       stage: b.stage, total_amount: b.total_amount || '', booking_amount: b.booking_amount || '',
       discount_amount: b.discount_amount || '0', notes: b.notes || '',
-      scheme_name: b.scheme_name || '', application_date: b.application_date || '',
+      application_date: b.application_date || new Date().toISOString().slice(0,10),
       booking_time: b.booking_time || '', customer_bank_name: b.customer_bank_name || '',
       upline_broker_code: b.upline_broker_code || '', manager_signature_by: b.manager_signature_by || '',
       affidavit_accepted: b.affidavit_accepted !== false,
+      payment_plan: 'token_only',
     } : EMPTY)
     setModal(true)
   }
 
   const save = async () => {
+    // Auto-set scheme_name from selected project so the print template still has it
+    const project = (projects as any[]).find((p: any) => p.id === form.project_id)
     const d: any = {
       ...form,
+      scheme_name: project?.name || null,
       total_amount: Number(form.total_amount) || 0,
       booking_amount: form.booking_amount ? Number(form.booking_amount) : null,
       discount_amount: Number(form.discount_amount) || 0,
@@ -156,6 +199,7 @@ export default function Bookings() {
     set('plot_id', plotId)
     const p = (plots as any[]).find((pl: any) => pl.id === plotId)
     if (p?.total_cost) set('total_amount', String(p.total_cost))
+    if (p?.projects?.id) set('project_id', p.projects.id)
   }
 
   const handleBrokerChange = (brokerId: string) => {
@@ -175,6 +219,10 @@ export default function Bookings() {
   const totalValue  = all.filter((b: any) => b.stage === 'booking_done').reduce((s: number, b: any) => s + Number(b.total_amount || 0), 0)
   const filtered = stageFilter === 'all' ? all : all.filter((b: any) => b.stage === stageFilter)
 
+  // Derived for the modal: outstanding principal preview
+  const principalPreview = Math.max(0, (Number(form.total_amount) || 0) - (Number(form.booking_amount) || 0))
+  const emiAmtPreview = principalPreview > 0 && Number(form.emi_n) > 0 ? Math.round(principalPreview / Number(form.emi_n)) : 0
+
   const cols = [
     { header: 'Booking No', render: (r: any) => <span className="font-mono text-xs font-semibold text-blue-700">{r.booking_no}</span> },
     {
@@ -191,7 +239,7 @@ export default function Bookings() {
       render: (r: any) => (
         <div>
           <div className="font-medium text-sm">{r.bp_plots?.plot_no || '—'}</div>
-          <div className="text-xs text-gray-400">{r.scheme_name || r.bp_projects?.name}</div>
+          <div className="text-xs text-gray-400">{r.bp_projects?.name || r.scheme_name || ''}</div>
         </div>
       ),
     },
@@ -210,13 +258,12 @@ export default function Bookings() {
       render: (r: any) => {
         const ns = nextStage(r.stage as Stage)
         return (
-          <div className="flex gap-1">
+          <div className="flex gap-1 flex-wrap">
             <Button size="sm" variant="ghost" onClick={() => open(r)}><FileText size={12} />Edit</Button>
+            <Button size="sm" variant="ghost" onClick={() => setEmiBooking(r)}><Calculator size={12} />EMI</Button>
             <Button size="sm" variant="ghost" onClick={() => printApplicationForm(r)}><Printer size={12} />Form</Button>
             {ns && r.stage !== 'cancelled' && (
-              <Button size="sm" onClick={() => advanceStage.mutate({ id: r.id, stage: ns })}>
-                <ArrowRight size={12} />{STAGE_META[ns].label}
-              </Button>
+              <Button size="sm" onClick={() => advanceStage.mutate({ id: r.id, stage: ns })}><ArrowRight size={12} />{STAGE_META[ns].label}</Button>
             )}
           </div>
         )
@@ -248,16 +295,15 @@ export default function Bookings() {
       </div>
 
       <Modal open={modal} onClose={() => setModal(false)} title={editing ? 'Edit Booking' : 'New Booking — आवेदन-पत्र'}>
-        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Scheme & Plot</div>
+        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">आवासीय योजना (Scheme) & Plot</div>
         <div className="grid grid-cols-2 gap-3">
-          <Input label="आवासीय योजना का नाम (Scheme)" value={form.scheme_name} onChange={(e: any) => set('scheme_name', e.target.value)} className="col-span-2" placeholder="e.g. Brijvatika Awasiya Yojana" />
-          <Select label="Project" value={form.project_id} onChange={(e: any) => set('project_id', e.target.value)}>
-            <option value="">Select Project</option>
+          <Select label="आवासीय योजना का नाम (Project / Scheme)" value={form.project_id} onChange={(e: any) => set('project_id', e.target.value)} className="col-span-2">
+            <option value="">Select scheme / project</option>
             {(projects as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.name} [{p.project_code}]</option>)}
           </Select>
-          <Select label="Plot (Vacant)" value={form.plot_id} onChange={(e: any) => handlePlotChange(e.target.value)}>
+          <Select label="Plot (Vacant) — प्लॉट नं." value={form.plot_id} onChange={(e: any) => handlePlotChange(e.target.value)} className="col-span-2">
             <option value="">Select Plot</option>
-            {(plots as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.plot_number} — {p.dimension} ({p.property_type})</option>)}
+            {(plots as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.plot_number} — {p.dimension} · {p.property_type} · {p.projects?.name}</option>)}
           </Select>
         </div>
 
@@ -284,11 +330,43 @@ export default function Bookings() {
         <div className="grid grid-cols-2 gap-3">
           <Input label="Application Date" type="date" value={form.application_date} onChange={(e: any) => set('application_date', e.target.value)} />
           <Input label="Booking Time" type="time" value={form.booking_time} onChange={(e: any) => set('booking_time', e.target.value)} />
-          <Input label="बुकिंग राशि (Booking Amount ₹)" type="number" value={form.booking_amount} onChange={(e: any) => set('booking_amount', e.target.value)} />
           <Input label="प्लॉट की कुल कीमत (Total ₹)" type="number" value={form.total_amount} onChange={(e: any) => set('total_amount', e.target.value)} />
+          <Input label="बुकिंग राशि (Booking Amount ₹)" type="number" value={form.booking_amount} onChange={(e: any) => set('booking_amount', e.target.value)} />
           <Input label="Discount (₹)" type="number" value={form.discount_amount} onChange={(e: any) => set('discount_amount', e.target.value)} />
           <Input label="Customer Bank Name" value={form.customer_bank_name} onChange={(e: any) => set('customer_bank_name', e.target.value)} placeholder="e.g. HDFC Bank" />
         </div>
+
+        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Payment Plan</div>
+        <div className="grid grid-cols-4 gap-2">
+          {([
+            ['token_only',  'Token only',     'No structured plan; record token receipt manually'],
+            ['booking_only','Booking amount', 'Book today, balance handled manually later'],
+            ['emi_plan',    'EMI plan',       'Auto-generate instalment schedule for the balance'],
+            ['full_payment','Full payment',   'Buyer pays total today — mark all as paid'],
+          ] as [Plan, string, string][]).map(([key, label, hint]) => (
+            <label key={key} className={`cursor-pointer rounded-lg border p-2.5 text-xs ${form.payment_plan === key ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-400'}`}>
+              <input type="radio" name="plan" value={key} className="hidden" checked={form.payment_plan === key} onChange={() => set('payment_plan', key)} />
+              <div className="font-semibold">{label}</div>
+              <div className="text-[11px] text-gray-500 mt-0.5 leading-tight">{hint}</div>
+            </label>
+          ))}
+        </div>
+        {form.payment_plan === 'emi_plan' && (
+          <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+            <div className="text-xs text-amber-900 mb-2">EMI principal: <b>{formatINR(principalPreview)}</b> (Total − Booking) · Per instalment: <b>{formatINR(emiAmtPreview)}</b></div>
+            <div className="grid grid-cols-3 gap-3">
+              <Input label="# Instalments" type="number" value={form.emi_n} onChange={(e:any)=>set('emi_n', e.target.value)} />
+              <Select label="Frequency" value={form.emi_freq} onChange={(e:any)=>set('emi_freq', e.target.value)}>
+                <option value="monthly">Monthly</option>
+                <option value="quarterly">Quarterly</option>
+                <option value="half_yearly">Half-Yearly</option>
+                <option value="annual">Annual</option>
+              </Select>
+              <Input label="Start Date" type="date" value={form.emi_start} onChange={(e:any)=>set('emi_start', e.target.value)} />
+            </div>
+            {editing && <p className="text-[11px] text-amber-700 mt-2">Editing existing booking won’t regenerate the schedule — use the EMI button on the row to manage it.</p>}
+          </div>
+        )}
 
         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Sponsor & Approvals</div>
         <div className="grid grid-cols-2 gap-3">
@@ -310,9 +388,11 @@ export default function Bookings() {
 
         <div className="flex justify-end gap-2 mt-6">
           <Button variant="secondary" onClick={() => setModal(false)}>Cancel</Button>
-          <Button onClick={save} loading={create.isPending || update.isPending}>Save Booking</Button>
+          <Button onClick={save} loading={create.isPending || update.isPending}>{editing ? 'Save changes' : (form.payment_plan === 'emi_plan' ? 'Save Booking + EMI' : 'Save Booking')}</Button>
         </div>
       </Modal>
+
+      <EmiPanel booking={emiBooking} open={!!emiBooking} onClose={() => setEmiBooking(null)} />
     </div>
   )
 }
