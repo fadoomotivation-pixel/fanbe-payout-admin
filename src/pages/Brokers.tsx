@@ -18,6 +18,16 @@ const EMPTY = {
   bank_name:'', account_no:'', ifsc:'', account_holder:'', aadhaar_no:'',
 }
 
+// Convert empty strings to null for fields with unique / format constraints,
+// so admin can leave them blank without hitting "duplicate key" errors.
+function nullifyBlanks(obj: any) {
+  const out: any = { ...obj }
+  for (const k of ['referral_code', 'email', 'pan_no', 'gst_no', 'aadhaar_no', 'account_no', 'ifsc']) {
+    if (out[k] === '') out[k] = null
+  }
+  return out
+}
+
 export default function Brokers() {
   const qc = useQueryClient()
 
@@ -44,21 +54,15 @@ export default function Brokers() {
     },
   })
 
-  const create = useMutation({ mutationFn: async (p: any) => { const { data, error } = await supabase.from('brokers').insert(p).select().single(); if (error) throw error; return data }, onSuccess: () => { qc.invalidateQueries({ queryKey: ['brokers'] }); toast.success('Broker added') }, onError: (e: any) => toast.error(e.message) })
+  const create = useMutation({ mutationFn: async (p: any) => { const { data, error } = await supabase.from('brokers').insert(p).select().single(); if (error) throw error; return data }, onError: (e: any) => toast.error(e.message) })
   const update = useMutation({ mutationFn: async ({ id, data }: { id: string; data: any }) => { const { data: d, error } = await supabase.from('brokers').update({ ...data, updated_at: new Date().toISOString() }).eq('id', id).select().single(); if (error) throw error; return d }, onSuccess: () => { qc.invalidateQueries({ queryKey: ['brokers'] }); toast.success('Broker updated') }, onError: (e: any) => toast.error(e.message) })
 
-  // Edge function: admin sets the password
   const createLogin = useMutation({
     mutationFn: async (params: { broker_id: string; password: string }) => {
       const { data, error } = await supabase.functions.invoke('create-broker-login', { body: params })
       if (error) throw error
       if (data?.error) throw new Error(data.error)
       return data
-    },
-    onSuccess: (data) => {
-      qc.invalidateQueries({ queryKey: ['brokers'] })
-      setLoginResult(data)
-      setLoginPassword('')
     },
     onError: (e: any) => toast.error(e.message || 'Failed to create login'),
   })
@@ -90,14 +94,39 @@ export default function Brokers() {
   }
 
   const save = async () => {
-    const payload = {
+    const payload = nullifyBlanks({
       ...form,
       sponsor_id: form.sponsor_id || null,
       date_of_joining: form.date_of_joining || null,
+    })
+
+    if (editing) {
+      await update.mutateAsync({ id: editing.id, data: payload })
+      setModal(false)
+      return
     }
-    if (editing) await update.mutateAsync({ id: editing.id, data: payload })
-    else await create.mutateAsync(payload)
-    setModal(false)
+
+    // New broker
+    try {
+      const created = await create.mutateAsync(payload)
+      qc.invalidateQueries({ queryKey: ['brokers'] })
+
+      // If admin set a password during creation, immediately create the login
+      if (loginPassword && loginPassword.length >= 6 && payload.email) {
+        try {
+          const lr = await createLogin.mutateAsync({ broker_id: created.id, password: loginPassword })
+          setLoginResult(lr)
+          toast.success('Broker added · login created')
+        } catch (e: any) {
+          toast.error('Broker created, but login setup failed: ' + e.message)
+        }
+      } else {
+        toast.success('Broker added')
+      }
+      setModal(false)
+    } catch (e: any) {
+      // create error toast already handled
+    }
   }
   const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }))
 
@@ -115,11 +144,17 @@ export default function Brokers() {
     try { await navigator.clipboard.writeText(text); setCopiedKey(key); setTimeout(() => setCopiedKey(null), 1200) } catch { toast.error('Copy failed') }
   }
 
-  const submitLogin = () => {
+  // For Edit: trigger login creation directly (not via main Save)
+  const submitLoginOnEdit = async () => {
     if (!editing?.id) return
-    if (!editing.email) { toast.error('Add an email for this broker first'); return }
+    if (!editing.email) { toast.error('Add an email for this broker first, save, then create login'); return }
     if (!loginPassword || loginPassword.length < 6) { toast.error('Password must be at least 6 characters'); return }
-    createLogin.mutate({ broker_id: editing.id, password: loginPassword })
+    try {
+      const lr = await createLogin.mutateAsync({ broker_id: editing.id, password: loginPassword })
+      qc.invalidateQueries({ queryKey: ['brokers'] })
+      setLoginResult(lr)
+      setLoginPassword('')
+    } catch {}
   }
 
   const cols = [
@@ -149,6 +184,50 @@ export default function Brokers() {
     },
   ]
 
+  // Login section — visible on both Add (new) and Edit modes
+  const loginSection = () => {
+    // Already linked
+    if (editing?.auth_user_id) {
+      return (
+        <div className="mt-2 p-3 bg-emerald-50 rounded-lg text-sm text-emerald-900 flex items-center gap-2">
+          ✓ Login already created. Broker signs in at <code className="bg-white px-1 py-0.5 rounded font-mono text-xs">/broker/login</code> with email <b>{editing.email}</b>.
+          <button onClick={() => copy(`${window.location.origin}/broker/login`, 'login-url')} className="ml-auto inline-flex items-center gap-1 text-emerald-700 hover:underline text-xs">
+            {copiedKey === 'login-url' ? <Check size={11}/> : <Copy size={11}/>}
+            {copiedKey === 'login-url' ? 'Copied' : 'Copy login URL'}
+          </button>
+        </div>
+      )
+    }
+    // For new broker (or existing without login): inline password input
+    const hint = editing
+      ? `Set a password the broker will use to sign in.`
+      : `Optional: enter a password now and the login will be created the moment you click Save. Skip to add the login later.`
+    return (
+      <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-2">
+        <div className="text-xs text-blue-900">{hint} They'll sign in at <b>/broker/login</b> with email <b>{form.email || '(fill email above)'}</b>.</div>
+        <div className="flex gap-2">
+          <div className="flex-1 relative">
+            <input
+              type={showPassword ? 'text' : 'password'}
+              value={loginPassword}
+              onChange={e => setLoginPassword(e.target.value)}
+              placeholder="Password (min 6 characters)"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 pr-16 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+            />
+            <button type="button" onClick={() => setShowPassword(s => !s)} className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-700">
+              {showPassword ? 'Hide' : 'Show'}
+            </button>
+          </div>
+          {editing && (
+            <Button size="sm" onClick={submitLoginOnEdit} loading={createLogin.isPending} disabled={!editing.email || loginPassword.length < 6}>
+              <UserPlus size={13}/>Create Login
+            </Button>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -167,7 +246,7 @@ export default function Brokers() {
           <Input label="Full Name" value={form.name} onChange={(e: any) => set('name', e.target.value)} required />
           <Input label="Phone" value={form.phone} onChange={(e: any) => set('phone', e.target.value)} required />
           <Input label="Email" value={form.email} onChange={(e: any) => set('email', e.target.value)} placeholder="broker@example.com" />
-          <Input label="Referral Code" value={form.referral_code} onChange={(e: any) => set('referral_code', e.target.value)} />
+          <Input label="Referral Code (optional)" value={form.referral_code} onChange={(e: any) => set('referral_code', e.target.value)} placeholder="leave blank if not used"/>
 
           <Select label="Rank (from Commission Ranks)" value={form.rank} onChange={(e: any) => set('rank', e.target.value)}>
             {rankList.length === 0 && <option value="">— no ranks defined yet —</option>}
@@ -214,41 +293,10 @@ export default function Brokers() {
           <Input label="Account No" value={form.account_no} onChange={(e: any) => set('account_no', e.target.value)} />
           <Input label="IFSC" value={form.ifsc} onChange={(e: any) => set('ifsc', e.target.value.toUpperCase())} />
 
-          {editing && (
-            <div className="col-span-2 mt-2 pt-3 border-t border-gray-100">
-              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1"><KeyRound size={12}/> Broker portal login</label>
-              {editing.auth_user_id ? (
-                <div className="mt-2 p-3 bg-emerald-50 rounded-lg text-sm text-emerald-900 flex items-center gap-2">
-                  ✓ Login already created. Broker can sign in at <code className="bg-white px-1 py-0.5 rounded font-mono text-xs">/broker/login</code> with email <b>{editing.email}</b>.
-                  <button onClick={() => copy(`${window.location.origin}/broker/login`, 'login-url')} className="ml-auto inline-flex items-center gap-1 text-emerald-700 hover:underline text-xs">
-                    {copiedKey === 'login-url' ? <Check size={11}/> : <Copy size={11}/>}
-                    {copiedKey === 'login-url' ? 'Copied' : 'Copy login URL'}
-                  </button>
-                </div>
-              ) : (
-                <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-2">
-                  <div className="text-xs text-blue-900">Set a password the broker will use to sign in at <b>/broker/login</b> with their email <b>{editing.email || '(add email above first)'}</b>.</div>
-                  <div className="flex gap-2">
-                    <div className="flex-1 relative">
-                      <input
-                        type={showPassword ? 'text' : 'password'}
-                        value={loginPassword}
-                        onChange={e => setLoginPassword(e.target.value)}
-                        placeholder="Set password (min 6 characters)"
-                        className="w-full rounded-lg border border-gray-200 px-3 py-2 pr-16 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                      />
-                      <button type="button" onClick={() => setShowPassword(s => !s)} className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-700">
-                        {showPassword ? 'Hide' : 'Show'}
-                      </button>
-                    </div>
-                    <Button size="sm" onClick={submitLogin} loading={createLogin.isPending} disabled={!editing.email || loginPassword.length < 6}>
-                      <UserPlus size={13}/>Create Login
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+          <div className="col-span-2 mt-2 pt-3 border-t border-gray-100">
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1"><KeyRound size={12}/> Broker portal login</label>
+            {loginSection()}
+          </div>
 
           <div className="col-span-2 flex items-center gap-2 mt-2">
             <input type="checkbox" id="tds" checked={form.tds_applicable} onChange={e => set('tds_applicable', e.target.checked)} className="rounded" />
@@ -257,16 +305,15 @@ export default function Brokers() {
         </div>
         <div className="flex justify-end gap-2 mt-6">
           <Button variant="secondary" onClick={() => setModal(false)}>Cancel</Button>
-          <Button onClick={save} loading={create.isPending || update.isPending}>Save</Button>
+          <Button onClick={save} loading={create.isPending || update.isPending || createLogin.isPending}>{editing ? 'Save' : (loginPassword.length >= 6 && form.email ? 'Save Broker + Create Login' : 'Save Broker')}</Button>
         </div>
       </Modal>
 
-      {/* Credentials reveal modal */}
       <Modal open={!!loginResult} onClose={() => setLoginResult(null)} title="Broker login created">
         {loginResult && (
           <div className="space-y-3">
             <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900">
-              Share these credentials with the broker. They can sign in at <b>/broker/login</b>.
+              Share these credentials with the broker. They sign in at <b>/broker/login</b>.
             </div>
             <div className="space-y-2">
               <Field label="Email"        value={loginResult.email}    copyKey="email"    copiedKey={copiedKey} onCopy={copy}/>
