@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { Table } from '@/components/ui/Table.tsx'
 import { Button } from '@/components/ui/Button.tsx'
@@ -7,7 +8,7 @@ import { Input, Select } from '@/components/ui/Input.tsx'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { KYC_COLORS } from '@/lib/utils'
-import { Plus, Search, KeyRound, Copy, Check } from 'lucide-react'
+import { Plus, Search, KeyRound, Copy, Check, Eye } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const EMPTY = {
@@ -32,7 +33,6 @@ export default function Brokers() {
     },
   })
 
-  // Live commission_ranks (15 levels, drives the Rank dropdown)
   const { data: ranks = [] } = useQuery({
     queryKey: ['commission_ranks_active'],
     queryFn: async () => {
@@ -111,7 +111,17 @@ export default function Brokers() {
         ? <span className="text-xs text-green-700 inline-flex items-center gap-1"><KeyRound size={11}/>linked</span>
         : <span className="text-xs text-gray-400">not linked</span> },
     { header: 'Status', render: (r: any) => <Badge label={r.status} className={r.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'} /> },
-    { header: '', render: (r: any) => <Button size="sm" variant="ghost" onClick={() => open(r)}>Edit</Button> },
+    {
+      header: '',
+      render: (r: any) => (
+        <div className="flex gap-1">
+          <Button size="sm" variant="ghost" onClick={() => open(r)}>Edit</Button>
+          <Link to={`/broker/dashboard?broker_id=${r.id}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700" title="Open broker portal as this broker (read-only shadow mode)">
+            <Eye size={12}/>View as
+          </Link>
+        </div>
+      ),
+    },
   ]
 
   return (
