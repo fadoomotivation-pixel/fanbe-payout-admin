@@ -8,7 +8,7 @@ import { Input, Select } from '@/components/ui/Input.tsx'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { KYC_COLORS } from '@/lib/utils'
-import { Plus, Search, KeyRound, Copy, Check, Eye } from 'lucide-react'
+import { Plus, Search, KeyRound, Copy, Check, Eye, UserPlus } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const EMPTY = {
@@ -16,7 +16,6 @@ const EMPTY = {
   tds_applicable:false, pan_no:'', gst_no:'',
   sponsor_id:'', date_of_joining:'',
   bank_name:'', account_no:'', ifsc:'', account_holder:'', aadhaar_no:'',
-  auth_user_id:'',
 }
 
 export default function Brokers() {
@@ -48,12 +47,28 @@ export default function Brokers() {
   const create = useMutation({ mutationFn: async (p: any) => { const { data, error } = await supabase.from('brokers').insert(p).select().single(); if (error) throw error; return data }, onSuccess: () => { qc.invalidateQueries({ queryKey: ['brokers'] }); toast.success('Broker added') }, onError: (e: any) => toast.error(e.message) })
   const update = useMutation({ mutationFn: async ({ id, data }: { id: string; data: any }) => { const { data: d, error } = await supabase.from('brokers').update({ ...data, updated_at: new Date().toISOString() }).eq('id', id).select().single(); if (error) throw error; return d }, onSuccess: () => { qc.invalidateQueries({ queryKey: ['brokers'] }); toast.success('Broker updated') }, onError: (e: any) => toast.error(e.message) })
 
+  // Edge function: one-click login creation
+  const createLogin = useMutation({
+    mutationFn: async (broker_id: string) => {
+      const { data, error } = await supabase.functions.invoke('create-broker-login', { body: { broker_id } })
+      if (error) throw error
+      if (data?.error) throw new Error(data.error)
+      return data
+    },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['brokers'] })
+      setLoginResult(data)
+    },
+    onError: (e: any) => toast.error(e.message || 'Failed to create login'),
+  })
+
   const [modal, setModal] = useState(false)
   const [editing, setEditing] = useState<any>(null)
   const [form, setForm] = useState<any>(EMPTY)
   const [q, setQ] = useState('')
   const [sponsorSearch, setSponsorSearch] = useState('')
-  const [copiedId, setCopiedId] = useState<string|null>(null)
+  const [copiedKey, setCopiedKey] = useState<string|null>(null)
+  const [loginResult, setLoginResult] = useState<any>(null)
 
   const open = (b?: any) => {
     setEditing(b || null)
@@ -65,7 +80,6 @@ export default function Brokers() {
       sponsor_id:b.sponsor_id||'', date_of_joining:b.date_of_joining||'',
       bank_name:b.bank_name||'', account_no:b.account_no||'', ifsc:b.ifsc||'',
       account_holder:b.account_holder||'', aadhaar_no:b.aadhaar_no||'',
-      auth_user_id:b.auth_user_id||'',
     } : EMPTY)
     setModal(true)
   }
@@ -75,7 +89,6 @@ export default function Brokers() {
       ...form,
       sponsor_id: form.sponsor_id || null,
       date_of_joining: form.date_of_joining || null,
-      auth_user_id: form.auth_user_id || null,
     }
     if (editing) await update.mutateAsync({ id: editing.id, data: payload })
     else await create.mutateAsync(payload)
@@ -93,8 +106,8 @@ export default function Brokers() {
   const rankList = ranks as any[]
   const rankPctFor = (rankName: string) => rankList.find((r: any) => r.rank_name === rankName)?.commission_pct
 
-  const copy = async (text: string, id: string) => {
-    try { await navigator.clipboard.writeText(text); setCopiedId(id); setTimeout(() => setCopiedId(null), 1200) } catch { toast.error('Copy failed') }
+  const copy = async (text: string, key: string) => {
+    try { await navigator.clipboard.writeText(text); setCopiedKey(key); setTimeout(() => setCopiedKey(null), 1200) } catch { toast.error('Copy failed') }
   }
 
   const cols = [
@@ -141,7 +154,7 @@ export default function Brokers() {
         <div className="grid grid-cols-2 gap-4">
           <Input label="Full Name" value={form.name} onChange={(e: any) => set('name', e.target.value)} required />
           <Input label="Phone" value={form.phone} onChange={(e: any) => set('phone', e.target.value)} required />
-          <Input label="Email" value={form.email} onChange={(e: any) => set('email', e.target.value)} />
+          <Input label="Email" value={form.email} onChange={(e: any) => set('email', e.target.value)} placeholder="broker@example.com" />
           <Input label="Referral Code" value={form.referral_code} onChange={(e: any) => set('referral_code', e.target.value)} />
 
           <Select label="Rank (from Commission Ranks)" value={form.rank} onChange={(e: any) => set('rank', e.target.value)}>
@@ -189,22 +202,29 @@ export default function Brokers() {
           <Input label="Account No" value={form.account_no} onChange={(e: any) => set('account_no', e.target.value)} />
           <Input label="IFSC" value={form.ifsc} onChange={(e: any) => set('ifsc', e.target.value.toUpperCase())} />
 
-          <div className="col-span-2 mt-2 pt-3 border-t border-gray-100">
-            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1"><KeyRound size={12}/> Broker portal login (link Supabase auth user)</label>
-            <p className="text-xs text-gray-400 mt-0.5">Create a user in Supabase Dashboard → Authentication → Add user (with broker's email + temp password). Copy the new auth user's UUID and paste it below.</p>
-          </div>
-          <div className="col-span-2">
-            <Input label="auth_user_id (UUID from Supabase Auth)" value={form.auth_user_id} onChange={(e: any) => set('auth_user_id', e.target.value)} placeholder="e.g. 11111111-2222-3333-4444-555555555555" />
-            {form.auth_user_id && (
-              <div className="mt-2 p-2 bg-emerald-50 rounded text-xs text-emerald-800 flex items-center gap-2">
-                ✓ Login linked. Broker can now sign in at <code className="bg-white px-1 py-0.5 rounded font-mono">/broker/login</code> with the email above.
-                <button onClick={() => copy(`${window.location.origin}/broker/login`, 'login-url')} className="ml-auto inline-flex items-center gap-1 text-emerald-700 hover:underline">
-                  {copiedId === 'login-url' ? <Check size={11}/> : <Copy size={11}/>}
-                  {copiedId === 'login-url' ? 'Copied' : 'Copy login URL'}
-                </button>
-              </div>
-            )}
-          </div>
+          {editing && (
+            <div className="col-span-2 mt-2 pt-3 border-t border-gray-100">
+              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1"><KeyRound size={12}/> Broker portal login</label>
+              {editing.auth_user_id ? (
+                <div className="mt-2 p-3 bg-emerald-50 rounded-lg text-sm text-emerald-900 flex items-center gap-2">
+                  ✓ Login already created. Broker can sign in at <code className="bg-white px-1 py-0.5 rounded font-mono text-xs">/broker/login</code> with email <b>{editing.email}</b>.
+                  <button onClick={() => copy(`${window.location.origin}/broker/login`, 'login-url')} className="ml-auto inline-flex items-center gap-1 text-emerald-700 hover:underline text-xs">
+                    {copiedKey === 'login-url' ? <Check size={11}/> : <Copy size={11}/>}
+                    {copiedKey === 'login-url' ? 'Copied' : 'Copy login URL'}
+                  </button>
+                </div>
+              ) : (
+                <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between gap-3">
+                  <div className="text-sm text-blue-900">
+                    No login yet for this broker. Make sure email is filled in above, then click <b>Create Login</b>. The system will generate a temp password for you to share.
+                  </div>
+                  <Button size="sm" onClick={() => createLogin.mutate(editing.id)} loading={createLogin.isPending} disabled={!editing.email}>
+                    <UserPlus size={13}/>Create Login
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="col-span-2 flex items-center gap-2 mt-2">
             <input type="checkbox" id="tds" checked={form.tds_applicable} onChange={e => set('tds_applicable', e.target.checked)} className="rounded" />
@@ -216,6 +236,42 @@ export default function Brokers() {
           <Button onClick={save} loading={create.isPending || update.isPending}>Save</Button>
         </div>
       </Modal>
+
+      {/* Credentials reveal modal */}
+      <Modal open={!!loginResult} onClose={() => setLoginResult(null)} title="Broker login created">
+        {loginResult && (
+          <div className="space-y-3">
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900">
+              Share these credentials with the broker now — the password won't be shown again. The broker can change it after first login.
+            </div>
+            <div className="space-y-2">
+              <Field label="Email"        value={loginResult.email}    copyKey="email"    copiedKey={copiedKey} onCopy={copy}/>
+              {loginResult.password ? (
+                <Field label="Password"   value={loginResult.password} copyKey="password" copiedKey={copiedKey} onCopy={copy}/>
+              ) : (
+                <div className="text-xs text-gray-500">User already existed in auth — linked to broker. Password unchanged.</div>
+              )}
+              <Field label="Login URL"    value={`${window.location.origin}/broker/login`} copyKey="url" copiedKey={copiedKey} onCopy={copy}/>
+            </div>
+            <div className="flex justify-end pt-2">
+              <Button onClick={() => setLoginResult(null)}>Done</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+    </div>
+  )
+}
+
+function Field({ label, value, copyKey, copiedKey, onCopy }: any) {
+  return (
+    <div className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
+      <div className="text-xs text-gray-500 w-20 shrink-0">{label}</div>
+      <div className="flex-1 font-mono text-sm break-all">{value}</div>
+      <button onClick={() => onCopy(value, copyKey)} className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-white border border-gray-200 hover:bg-gray-100">
+        {copiedKey === copyKey ? <Check size={11}/> : <Copy size={11}/>}
+        {copiedKey === copyKey ? 'Copied' : 'Copy'}
+      </button>
     </div>
   )
 }
