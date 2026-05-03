@@ -47,10 +47,10 @@ export default function Brokers() {
   const create = useMutation({ mutationFn: async (p: any) => { const { data, error } = await supabase.from('brokers').insert(p).select().single(); if (error) throw error; return data }, onSuccess: () => { qc.invalidateQueries({ queryKey: ['brokers'] }); toast.success('Broker added') }, onError: (e: any) => toast.error(e.message) })
   const update = useMutation({ mutationFn: async ({ id, data }: { id: string; data: any }) => { const { data: d, error } = await supabase.from('brokers').update({ ...data, updated_at: new Date().toISOString() }).eq('id', id).select().single(); if (error) throw error; return d }, onSuccess: () => { qc.invalidateQueries({ queryKey: ['brokers'] }); toast.success('Broker updated') }, onError: (e: any) => toast.error(e.message) })
 
-  // Edge function: one-click login creation
+  // Edge function: admin sets the password
   const createLogin = useMutation({
-    mutationFn: async (broker_id: string) => {
-      const { data, error } = await supabase.functions.invoke('create-broker-login', { body: { broker_id } })
+    mutationFn: async (params: { broker_id: string; password: string }) => {
+      const { data, error } = await supabase.functions.invoke('create-broker-login', { body: params })
       if (error) throw error
       if (data?.error) throw new Error(data.error)
       return data
@@ -58,6 +58,7 @@ export default function Brokers() {
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['brokers'] })
       setLoginResult(data)
+      setLoginPassword('')
     },
     onError: (e: any) => toast.error(e.message || 'Failed to create login'),
   })
@@ -69,10 +70,14 @@ export default function Brokers() {
   const [sponsorSearch, setSponsorSearch] = useState('')
   const [copiedKey, setCopiedKey] = useState<string|null>(null)
   const [loginResult, setLoginResult] = useState<any>(null)
+  const [loginPassword, setLoginPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
 
   const open = (b?: any) => {
     setEditing(b || null)
     setSponsorSearch('')
+    setLoginPassword('')
+    setShowPassword(false)
     setForm(b ? {
       name:b.name, email:b.email||'', phone:b.phone||'', referral_code:b.referral_code||'',
       rank:b.rank||'Executive', status:b.status||'active', tds_applicable:!!b.tds_applicable,
@@ -108,6 +113,13 @@ export default function Brokers() {
 
   const copy = async (text: string, key: string) => {
     try { await navigator.clipboard.writeText(text); setCopiedKey(key); setTimeout(() => setCopiedKey(null), 1200) } catch { toast.error('Copy failed') }
+  }
+
+  const submitLogin = () => {
+    if (!editing?.id) return
+    if (!editing.email) { toast.error('Add an email for this broker first'); return }
+    if (!loginPassword || loginPassword.length < 6) { toast.error('Password must be at least 6 characters'); return }
+    createLogin.mutate({ broker_id: editing.id, password: loginPassword })
   }
 
   const cols = [
@@ -214,13 +226,25 @@ export default function Brokers() {
                   </button>
                 </div>
               ) : (
-                <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between gap-3">
-                  <div className="text-sm text-blue-900">
-                    No login yet for this broker. Make sure email is filled in above, then click <b>Create Login</b>. The system will generate a temp password for you to share.
+                <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-2">
+                  <div className="text-xs text-blue-900">Set a password the broker will use to sign in at <b>/broker/login</b> with their email <b>{editing.email || '(add email above first)'}</b>.</div>
+                  <div className="flex gap-2">
+                    <div className="flex-1 relative">
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        value={loginPassword}
+                        onChange={e => setLoginPassword(e.target.value)}
+                        placeholder="Set password (min 6 characters)"
+                        className="w-full rounded-lg border border-gray-200 px-3 py-2 pr-16 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                      />
+                      <button type="button" onClick={() => setShowPassword(s => !s)} className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-700">
+                        {showPassword ? 'Hide' : 'Show'}
+                      </button>
+                    </div>
+                    <Button size="sm" onClick={submitLogin} loading={createLogin.isPending} disabled={!editing.email || loginPassword.length < 6}>
+                      <UserPlus size={13}/>Create Login
+                    </Button>
                   </div>
-                  <Button size="sm" onClick={() => createLogin.mutate(editing.id)} loading={createLogin.isPending} disabled={!editing.email}>
-                    <UserPlus size={13}/>Create Login
-                  </Button>
                 </div>
               )}
             </div>
@@ -242,7 +266,7 @@ export default function Brokers() {
         {loginResult && (
           <div className="space-y-3">
             <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900">
-              Share these credentials with the broker now — the password won't be shown again. The broker can change it after first login.
+              Share these credentials with the broker. They can sign in at <b>/broker/login</b>.
             </div>
             <div className="space-y-2">
               <Field label="Email"        value={loginResult.email}    copyKey="email"    copiedKey={copiedKey} onCopy={copy}/>
