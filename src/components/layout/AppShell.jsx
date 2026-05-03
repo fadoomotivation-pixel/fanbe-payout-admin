@@ -3,23 +3,23 @@ import {
   LayoutDashboard, Users, Building2, Map, BookOpen, CreditCard, Banknote,
   Settings, LogOut, ChevronLeft, ChevronRight, BarChart2, FileText,
   UserCheck, Layers, MessageSquare, Megaphone, ShieldCheck, Receipt,
-  Wallet, Calculator, Inbox, UserPlus, History, TrendingUp, Landmark,
-  Bell, User, Menu, X, ChevronRight as Chevron
+  Wallet, Calculator, TrendingUp, Landmark,
+  Bell, Menu, X, ChevronRight as Chevron
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
 
+// Simplified workflow: Customer → Booking. Inquiries / Customer History removed
+// from navigation (routes kept for backward compatibility / direct URL access).
 const NAV = [
   { group: 'Main', items: [
     { to: '/',               icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/analytics',      icon: BarChart2,        label: 'Analytics' },
     { to: '/balance-sheet',  icon: TrendingUp,       label: 'Balance Sheet' },
   ]},
-  { group: 'Pipeline', items: [
-    { to: '/inquiries',         icon: Inbox,    label: 'Inquiries' },
-    { to: '/members',           icon: UserPlus, label: 'Registry Members' },
-    { to: '/customer-history',  icon: History,  label: 'Customer History' },
+  { group: 'Customer', items: [
+    { to: '/members',        icon: Users,    label: 'Customers' },
   ]},
   { group: 'Real Estate', items: [
     { to: '/projects',  icon: Building2,  label: 'Projects' },
@@ -49,13 +49,12 @@ const NAV = [
   ]},
 ]
 
-// Mobile bottom 5 tabs (most used)
 const MOBILE_TABS = [
   { to: '/',          icon: LayoutDashboard, label: 'Home' },
+  { to: '/members',   icon: Users,           label: 'Customers' },
   { to: '/bookings',  icon: BookOpen,        label: 'Bookings' },
-  { to: '/payouts',   icon: Banknote,        label: 'Payouts' },
+  { to: '/payments',  icon: CreditCard,      label: 'Payments' },
   { to: '/brokers',   icon: Users,           label: 'Brokers' },
-  { to: '/settings',  icon: Settings,        label: 'Settings' },
 ]
 
 function getPageTitle(pathname) {
@@ -79,7 +78,6 @@ export default function AppShell() {
       .then(({ count }) => setNotifCount(count || 0))
   }, [])
 
-  // Close mobile sidebar on route change
   useEffect(() => { setMobileOpen(false) }, [location.pathname])
 
   const logout = async () => {
@@ -93,14 +91,9 @@ export default function AppShell() {
 
   return (
     <div className="app-shell">
-
-      {/* Mobile overlay */}
       <div className={`mobile-sidebar-overlay ${mobileOpen ? 'open' : ''}`} onClick={() => setMobileOpen(false)} />
 
-      {/* ── SIDEBAR ── */}
       <aside className={`sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}>
-
-        {/* Logo */}
         <div className="sidebar-logo">
           <div className="sidebar-logo-icon">FB</div>
           {!collapsed && (
@@ -111,7 +104,6 @@ export default function AppShell() {
           )}
         </div>
 
-        {/* Scrollable nav */}
         <nav className="sidebar-nav">
           {NAV.map(group => (
             <div key={group.group}>
@@ -132,7 +124,6 @@ export default function AppShell() {
           ))}
         </nav>
 
-        {/* Footer */}
         <div className="sidebar-footer">
           <button
             onClick={logout}
@@ -145,18 +136,13 @@ export default function AppShell() {
           </button>
         </div>
 
-        {/* Collapse toggle (desktop only) */}
         <button className="sidebar-toggle" onClick={() => setCollapsed(!collapsed)} aria-label="Toggle sidebar">
           {collapsed ? <ChevronRight size={11} /> : <ChevronLeft size={11} />}
         </button>
       </aside>
 
-      {/* ── MAIN COLUMN ── */}
       <div className="main-col">
-
-        {/* Topbar */}
         <header className="topbar">
-          {/* Mobile hamburger */}
           <button
             className="topbar-icon-btn"
             style={{ display: 'none' }}
@@ -167,14 +153,12 @@ export default function AppShell() {
             {mobileOpen ? <X size={18} /> : <Menu size={18} />}
           </button>
 
-          {/* Breadcrumb */}
           <div className="topbar-breadcrumb">
             <span>Fanbe</span>
             <Chevron size={12} style={{ opacity: 0.4 }} />
             <span className="crumb-current">{pageTitle}</span>
           </div>
 
-          {/* Actions */}
           <div className="topbar-actions">
             <button className="topbar-icon-btn" aria-label="Notifications">
               <Bell size={17} />
@@ -195,13 +179,11 @@ export default function AppShell() {
           </div>
         </header>
 
-        {/* Page content — the ONLY scrollable region */}
         <main className="page-content">
           <Outlet />
         </main>
       </div>
 
-      {/* ── MOBILE BOTTOM NAV ── */}
       <nav className="mobile-bottom-nav">
         <div className="mobile-bottom-nav-inner">
           {MOBILE_TABS.map(({ to, icon: Icon, label }) => (
@@ -215,7 +197,6 @@ export default function AppShell() {
               <span>{label}</span>
             </NavLink>
           ))}
-          {/* More → opens sidebar */}
           <button
             className="mobile-nav-item"
             onClick={() => setMobileOpen(true)}
@@ -227,7 +208,6 @@ export default function AppShell() {
         </div>
       </nav>
 
-      {/* Inject mobile hamburger visibility via style */}
       <style>{`
         @media (max-width: 768px) {
           #mobile-menu-btn { display: flex !important; }
