@@ -26,11 +26,10 @@ function nullifyBlanks(obj: any) {
   return out
 }
 
-// If admin doesn't enter an email, derive one from the phone number so Supabase
-// Auth has something to use as the login identifier. Broker just logs in with
-// their phone as both email-prefix and password.
+function digitsOnly(s: string) { return (s || '').replace(/\D/g, '') }
+
 function syntheticEmailFromPhone(phone: string) {
-  const digits = (phone || '').replace(/\D/g, '')
+  const digits = digitsOnly(phone)
   if (!digits) return ''
   return `b${digits}@fanbegroup.com`
 }
@@ -81,14 +80,15 @@ export default function Brokers() {
   const [sponsorSearch, setSponsorSearch] = useState('')
   const [copiedKey, setCopiedKey] = useState<string|null>(null)
   const [loginResult, setLoginResult] = useState<any>(null)
-  const [loginPassword, setLoginPassword] = useState('')
-  const [showPassword, setShowPassword] = useState(false)
+  // Edit-mode only: admin types a password to reset login. On Add we always use phone digits.
+  const [editPassword, setEditPassword] = useState('')
+  const [showEditPassword, setShowEditPassword] = useState(false)
 
   const open = (b?: any) => {
     setEditing(b || null)
     setSponsorSearch('')
-    setLoginPassword('')
-    setShowPassword(false)
+    setEditPassword('')
+    setShowEditPassword(false)
     setForm(b ? {
       name:b.name, email:b.email||'', phone:b.phone||'', referral_code:b.referral_code||'',
       rank:b.rank||'Executive', status:b.status||'active', tds_applicable:!!b.tds_applicable,
@@ -100,17 +100,9 @@ export default function Brokers() {
     setModal(true)
   }
 
-  // Auto-fill login password from phone whenever phone changes (if password empty)
-  const handlePhoneChange = (v: string) => {
-    set('phone', v)
-    if (!editing && (!loginPassword || loginPassword.length === 0)) {
-      const digits = v.replace(/\D/g, '')
-      if (digits.length >= 6) setLoginPassword(digits)
-    }
-  }
+  const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }))
 
   const save = async () => {
-    // Synthesize email if blank so Supabase Auth has an identifier
     let email = form.email?.trim() || ''
     if (!email && form.phone) email = syntheticEmailFromPhone(form.phone)
 
@@ -131,8 +123,8 @@ export default function Brokers() {
       const created = await create.mutateAsync(payload)
       qc.invalidateQueries({ queryKey: ['brokers'] })
 
-      // Auto-create login if a password was set and we have an email (real or synthetic)
-      const pwd = loginPassword || form.phone.replace(/\D/g, '')
+      // Always use the phone digits as the broker's first password.
+      const pwd = digitsOnly(form.phone)
       if (pwd.length >= 6 && payload.email) {
         try {
           const lr = await createLogin.mutateAsync({ broker_id: created.id, password: pwd })
@@ -145,9 +137,8 @@ export default function Brokers() {
         toast.success('Broker added')
       }
       setModal(false)
-    } catch (e: any) { /* toast handled */ }
+    } catch { /* toast handled */ }
   }
-  const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }))
 
   const allBrokers = brokers as any[]
   const filtered = allBrokers.filter((b: any) => `${b.name||''}${b.phone||''}${b.broker_id||''}${b.email||''}`.toLowerCase().includes(q.toLowerCase()))
@@ -166,13 +157,13 @@ export default function Brokers() {
   const submitLoginOnEdit = async () => {
     if (!editing?.id) return
     const broker = allBrokers.find((b: any) => b.id === editing.id)
-    if (!broker?.email) { toast.error('Broker has no email yet — save the form first to auto-generate one from phone'); return }
-    if (!loginPassword || loginPassword.length < 6) { toast.error('Password must be at least 6 characters'); return }
+    if (!broker?.email) { toast.error('Broker has no email yet — save the form first'); return }
+    if (!editPassword || editPassword.length < 6) { toast.error('Password must be at least 6 characters'); return }
     try {
-      const lr = await createLogin.mutateAsync({ broker_id: editing.id, password: loginPassword })
+      const lr = await createLogin.mutateAsync({ broker_id: editing.id, password: editPassword })
       qc.invalidateQueries({ queryKey: ['brokers'] })
       setLoginResult(lr)
-      setLoginPassword('')
+      setEditPassword('')
     } catch {}
   }
 
@@ -203,10 +194,13 @@ export default function Brokers() {
     },
   ]
 
-  // Computed login email shown in the password section (real or synthetic)
   const effectiveEmail = form.email?.trim() || syntheticEmailFromPhone(form.phone)
+  const phoneDigits = digitsOnly(form.phone)
 
+  // Login section now reads-only on Add (always uses phone-as-password).
+  // On Edit, admin can reset password explicitly.
   const loginSection = () => {
+    // Already linked
     if (editing?.auth_user_id) {
       return (
         <div className="mt-2 p-3 bg-emerald-50 rounded-lg text-sm text-emerald-900 flex items-center gap-2">
@@ -218,31 +212,42 @@ export default function Brokers() {
         </div>
       )
     }
-    return (
-      <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-2">
-        <div className="text-xs text-blue-900">
-          {editing ? 'Set a password the broker will use to sign in.' : 'Default password is the broker\'s phone number — you can change it below.'}
-          {' '}They'll sign in at <b>/broker/login</b> with email <b>{effectiveEmail || '(fill phone above)'}</b>.
-        </div>
-        <div className="flex gap-2">
-          <div className="flex-1 relative">
-            <input
-              type={showPassword ? 'text' : 'password'}
-              value={loginPassword}
-              onChange={e => setLoginPassword(e.target.value)}
-              placeholder={form.phone ? `Default: ${form.phone.replace(/\D/g,'')}` : 'Password (min 6 characters)'}
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 pr-16 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-            />
-            <button type="button" onClick={() => setShowPassword(s => !s)} className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-700">
-              {showPassword ? 'Hide' : 'Show'}
-            </button>
-          </div>
-          {editing && (
-            <Button size="sm" onClick={submitLoginOnEdit} loading={createLogin.isPending} disabled={!editing.email || loginPassword.length < 6}>
+    // Editing existing broker without login: allow admin to set a password explicitly
+    if (editing) {
+      return (
+        <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-2">
+          <div className="text-xs text-blue-900">Set a password the broker will use to sign in. Email: <b>{editing.email || effectiveEmail}</b></div>
+          <div className="flex gap-2">
+            <div className="flex-1 relative">
+              <input
+                type={showEditPassword ? 'text' : 'password'}
+                value={editPassword}
+                onChange={e => setEditPassword(e.target.value)}
+                placeholder="Password (min 6 characters)"
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 pr-16 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+              />
+              <button type="button" onClick={() => setShowEditPassword(s => !s)} className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-700">
+                {showEditPassword ? 'Hide' : 'Show'}
+              </button>
+            </div>
+            <Button size="sm" onClick={submitLoginOnEdit} loading={createLogin.isPending} disabled={!editing.email || editPassword.length < 6}>
               <UserPlus size={13}/>Create Login
             </Button>
-          )}
+          </div>
         </div>
+      )
+    }
+    // Add mode: password = phone (always). Show as read-only preview.
+    return (
+      <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-1.5">
+        <div className="text-xs text-blue-900">
+          The broker will sign in at <b>/broker/login</b> with:
+        </div>
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <div className="bg-white rounded px-2 py-1.5"><span className="text-gray-500">Email</span><div className="font-mono">{effectiveEmail || '(fill phone above)'}</div></div>
+          <div className="bg-white rounded px-2 py-1.5"><span className="text-gray-500">Password</span><div className="font-mono">{phoneDigits || '(fill phone above)'}</div></div>
+        </div>
+        <div className="text-[10px] text-blue-700">Password = the broker's phone digits. Broker can change it after first login.</div>
       </div>
     )
   }
@@ -263,7 +268,7 @@ export default function Brokers() {
       <Modal open={modal} onClose={() => setModal(false)} title={editing ? `Edit Broker — ${editing.broker_id || ''}` : 'Add Broker'}>
         <div className="grid grid-cols-2 gap-4">
           <Input label="Full Name" value={form.name} onChange={(e: any) => set('name', e.target.value)} required />
-          <Input label="Phone" value={form.phone} onChange={(e: any) => handlePhoneChange(e.target.value)} required placeholder="10-digit mobile (used for login by default)" />
+          <Input label="Phone" value={form.phone} onChange={(e: any) => set('phone', e.target.value)} required placeholder="10-digit mobile (used for login by default)" />
           <Input label="Email (optional)" value={form.email} onChange={(e: any) => set('email', e.target.value)} placeholder={form.phone ? `Auto: ${syntheticEmailFromPhone(form.phone)}` : 'leave blank to auto-generate from phone'} />
           <Input label="Referral Code (optional)" value={form.referral_code} onChange={(e: any) => set('referral_code', e.target.value)} placeholder="leave blank if not used"/>
 
