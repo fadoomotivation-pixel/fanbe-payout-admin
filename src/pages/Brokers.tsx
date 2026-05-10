@@ -18,14 +18,21 @@ const EMPTY = {
   bank_name:'', account_no:'', ifsc:'', account_holder:'', aadhaar_no:'',
 }
 
-// Convert empty strings to null for fields with unique / format constraints,
-// so admin can leave them blank without hitting "duplicate key" errors.
 function nullifyBlanks(obj: any) {
   const out: any = { ...obj }
-  for (const k of ['referral_code', 'email', 'pan_no', 'gst_no', 'aadhaar_no', 'account_no', 'ifsc']) {
+  for (const k of ['referral_code', 'pan_no', 'gst_no', 'aadhaar_no', 'account_no', 'ifsc']) {
     if (out[k] === '') out[k] = null
   }
   return out
+}
+
+// If admin doesn't enter an email, derive one from the phone number so Supabase
+// Auth has something to use as the login identifier. Broker just logs in with
+// their phone as both email-prefix and password.
+function syntheticEmailFromPhone(phone: string) {
+  const digits = (phone || '').replace(/\D/g, '')
+  if (!digits) return ''
+  return `b${digits}@fanbegroup.com`
 }
 
 export default function Brokers() {
@@ -93,9 +100,23 @@ export default function Brokers() {
     setModal(true)
   }
 
+  // Auto-fill login password from phone whenever phone changes (if password empty)
+  const handlePhoneChange = (v: string) => {
+    set('phone', v)
+    if (!editing && (!loginPassword || loginPassword.length === 0)) {
+      const digits = v.replace(/\D/g, '')
+      if (digits.length >= 6) setLoginPassword(digits)
+    }
+  }
+
   const save = async () => {
+    // Synthesize email if blank so Supabase Auth has an identifier
+    let email = form.email?.trim() || ''
+    if (!email && form.phone) email = syntheticEmailFromPhone(form.phone)
+
     const payload = nullifyBlanks({
       ...form,
+      email: email || null,
       sponsor_id: form.sponsor_id || null,
       date_of_joining: form.date_of_joining || null,
     })
@@ -106,15 +127,15 @@ export default function Brokers() {
       return
     }
 
-    // New broker
     try {
       const created = await create.mutateAsync(payload)
       qc.invalidateQueries({ queryKey: ['brokers'] })
 
-      // If admin set a password during creation, immediately create the login
-      if (loginPassword && loginPassword.length >= 6 && payload.email) {
+      // Auto-create login if a password was set and we have an email (real or synthetic)
+      const pwd = loginPassword || form.phone.replace(/\D/g, '')
+      if (pwd.length >= 6 && payload.email) {
         try {
-          const lr = await createLogin.mutateAsync({ broker_id: created.id, password: loginPassword })
+          const lr = await createLogin.mutateAsync({ broker_id: created.id, password: pwd })
           setLoginResult(lr)
           toast.success('Broker added · login created')
         } catch (e: any) {
@@ -124,9 +145,7 @@ export default function Brokers() {
         toast.success('Broker added')
       }
       setModal(false)
-    } catch (e: any) {
-      // create error toast already handled
-    }
+    } catch (e: any) { /* toast handled */ }
   }
   const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }))
 
@@ -144,10 +163,10 @@ export default function Brokers() {
     try { await navigator.clipboard.writeText(text); setCopiedKey(key); setTimeout(() => setCopiedKey(null), 1200) } catch { toast.error('Copy failed') }
   }
 
-  // For Edit: trigger login creation directly (not via main Save)
   const submitLoginOnEdit = async () => {
     if (!editing?.id) return
-    if (!editing.email) { toast.error('Add an email for this broker first, save, then create login'); return }
+    const broker = allBrokers.find((b: any) => b.id === editing.id)
+    if (!broker?.email) { toast.error('Broker has no email yet — save the form first to auto-generate one from phone'); return }
     if (!loginPassword || loginPassword.length < 6) { toast.error('Password must be at least 6 characters'); return }
     try {
       const lr = await createLogin.mutateAsync({ broker_id: editing.id, password: loginPassword })
@@ -184,9 +203,10 @@ export default function Brokers() {
     },
   ]
 
-  // Login section — visible on both Add (new) and Edit modes
+  // Computed login email shown in the password section (real or synthetic)
+  const effectiveEmail = form.email?.trim() || syntheticEmailFromPhone(form.phone)
+
   const loginSection = () => {
-    // Already linked
     if (editing?.auth_user_id) {
       return (
         <div className="mt-2 p-3 bg-emerald-50 rounded-lg text-sm text-emerald-900 flex items-center gap-2">
@@ -198,20 +218,19 @@ export default function Brokers() {
         </div>
       )
     }
-    // For new broker (or existing without login): inline password input
-    const hint = editing
-      ? `Set a password the broker will use to sign in.`
-      : `Optional: enter a password now and the login will be created the moment you click Save. Skip to add the login later.`
     return (
       <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-2">
-        <div className="text-xs text-blue-900">{hint} They'll sign in at <b>/broker/login</b> with email <b>{form.email || '(fill email above)'}</b>.</div>
+        <div className="text-xs text-blue-900">
+          {editing ? 'Set a password the broker will use to sign in.' : 'Default password is the broker\'s phone number — you can change it below.'}
+          {' '}They'll sign in at <b>/broker/login</b> with email <b>{effectiveEmail || '(fill phone above)'}</b>.
+        </div>
         <div className="flex gap-2">
           <div className="flex-1 relative">
             <input
               type={showPassword ? 'text' : 'password'}
               value={loginPassword}
               onChange={e => setLoginPassword(e.target.value)}
-              placeholder="Password (min 6 characters)"
+              placeholder={form.phone ? `Default: ${form.phone.replace(/\D/g,'')}` : 'Password (min 6 characters)'}
               className="w-full rounded-lg border border-gray-200 px-3 py-2 pr-16 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
             />
             <button type="button" onClick={() => setShowPassword(s => !s)} className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-700">
@@ -244,8 +263,8 @@ export default function Brokers() {
       <Modal open={modal} onClose={() => setModal(false)} title={editing ? `Edit Broker — ${editing.broker_id || ''}` : 'Add Broker'}>
         <div className="grid grid-cols-2 gap-4">
           <Input label="Full Name" value={form.name} onChange={(e: any) => set('name', e.target.value)} required />
-          <Input label="Phone" value={form.phone} onChange={(e: any) => set('phone', e.target.value)} required />
-          <Input label="Email" value={form.email} onChange={(e: any) => set('email', e.target.value)} placeholder="broker@example.com" />
+          <Input label="Phone" value={form.phone} onChange={(e: any) => handlePhoneChange(e.target.value)} required placeholder="10-digit mobile (used for login by default)" />
+          <Input label="Email (optional)" value={form.email} onChange={(e: any) => set('email', e.target.value)} placeholder={form.phone ? `Auto: ${syntheticEmailFromPhone(form.phone)}` : 'leave blank to auto-generate from phone'} />
           <Input label="Referral Code (optional)" value={form.referral_code} onChange={(e: any) => set('referral_code', e.target.value)} placeholder="leave blank if not used"/>
 
           <Select label="Rank (from Commission Ranks)" value={form.rank} onChange={(e: any) => set('rank', e.target.value)}>
@@ -305,7 +324,7 @@ export default function Brokers() {
         </div>
         <div className="flex justify-end gap-2 mt-6">
           <Button variant="secondary" onClick={() => setModal(false)}>Cancel</Button>
-          <Button onClick={save} loading={create.isPending || update.isPending || createLogin.isPending}>{editing ? 'Save' : (loginPassword.length >= 6 && form.email ? 'Save Broker + Create Login' : 'Save Broker')}</Button>
+          <Button onClick={save} loading={create.isPending || update.isPending || createLogin.isPending}>{editing ? 'Save' : (form.phone ? 'Save Broker + Create Login' : 'Save Broker')}</Button>
         </div>
       </Modal>
 
