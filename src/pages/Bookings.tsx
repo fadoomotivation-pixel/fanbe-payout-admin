@@ -401,11 +401,14 @@ export default function Bookings() {
   const totalValue  = all.filter((b: any) => b.stage === 'booking_done').reduce((s: number, b: any) => s + Number(b.total_amount || b.plot_total_price || 0), 0)
   const filtered = stageFilter === 'all' ? all : all.filter((b: any) => b.stage === stageFilter)
 
-  // EMI principal preview
+  // Payment / balance preview — token + booking + full are deducted
+  // from the total net value to show the admin the remaining balance.
   const tokenAmt = form.token_enabled ? num(form.token_amount) : 0
   const bookingAmt = form.booking_enabled ? num(form.booking_amount) : 0
   const fullAmt = form.full_enabled ? (num(form.full_amount) || totalNet) : 0
-  const principalPreview = Math.max(0, totalNet - tokenAmt - bookingAmt - fullAmt)
+  const paidToday = tokenAmt + bookingAmt + fullAmt
+  const balanceDue = Math.max(0, totalNet - paidToday)
+  const principalPreview = balanceDue
   const emiAmtPreview = principalPreview > 0 && num(form.emi_n) > 0 ? Math.round(principalPreview / num(form.emi_n)) : 0
 
   const cols = [
@@ -524,6 +527,30 @@ export default function Bookings() {
             <div className="text-right font-semibold text-red-700">{disc > 0 ? '−' : ''}{formatINR(disc)}</div>
             <div className="text-gray-900 font-semibold border-t border-gray-300 pt-1.5">कुल नेट / Total net value</div>
             <div className="text-right text-green-700 font-bold text-base border-t border-gray-300 pt-1.5">{formatINR(totalNet)}</div>
+            {!editing && paidToday > 0 && (
+              <>
+                {tokenAmt > 0 && (
+                  <>
+                    <div className="text-gray-600">− Token paid today</div>
+                    <div className="text-right font-semibold text-red-700">−{formatINR(tokenAmt)}</div>
+                  </>
+                )}
+                {bookingAmt > 0 && (
+                  <>
+                    <div className="text-gray-600">− Booking amount paid today</div>
+                    <div className="text-right font-semibold text-red-700">−{formatINR(bookingAmt)}</div>
+                  </>
+                )}
+                {fullAmt > 0 && (
+                  <>
+                    <div className="text-gray-600">− Full payment today</div>
+                    <div className="text-right font-semibold text-red-700">−{formatINR(fullAmt)}</div>
+                  </>
+                )}
+                <div className="text-gray-900 font-semibold border-t border-gray-300 pt-1.5">शेष / Balance due</div>
+                <div className={`text-right font-bold text-base border-t border-gray-300 pt-1.5 ${balanceDue > 0 ? 'text-orange-700' : 'text-green-700'}`}>{formatINR(balanceDue)}</div>
+              </>
+            )}
           </div>
           {selectedBroker && brokerRankPct > 0 && (
             <div className="mt-3 pt-3 border-t border-gray-200 flex items-start gap-2 text-xs text-blue-900 bg-blue-50 -mx-3 -mb-3 px-3 py-2 rounded-b-lg">
