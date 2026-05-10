@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { Table } from '@/components/ui/Table.tsx'
 import { Button } from '@/components/ui/Button.tsx'
@@ -7,7 +8,7 @@ import { Input, Select } from '@/components/ui/Input.tsx'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR } from '@/lib/utils'
-import { LayoutGrid, Plus, Layers } from 'lucide-react'
+import { LayoutGrid, Info } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -63,26 +64,6 @@ export default function Plots() {
     onError: (e: any) => toast.error(e.message),
   })
 
-  const createPlot = useMutation({
-    mutationFn: async (p: any) => {
-      const { data, error } = await supabase.from('plots').insert(p).select().single()
-      if (error) throw error
-      return data
-    },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['plots'] }); toast.success('Plot added') },
-    onError: (e: any) => toast.error(e.message),
-  })
-
-  const bulkCreate = useMutation({
-    mutationFn: async (rows: any[]) => {
-      const { data, error } = await supabase.from('plots').insert(rows).select()
-      if (error) throw error
-      return data
-    },
-    onSuccess: (rows) => { qc.invalidateQueries({ queryKey: ['plots'] }); toast.success(`${rows?.length || 0} plots added`) },
-    onError: (e: any) => toast.error(e.message),
-  })
-
   const [modal, setModal] = useState(false)
   const [editing, setEditing] = useState<any>(null)
   const [form, setForm] = useState<any>({})
@@ -104,56 +85,16 @@ export default function Plots() {
     setModal(true)
   }
 
-  const openAdd = () => {
-    setEditing(null)
-    setForm({
-      project_id: projectFilter || (projects as any[])[0]?.id || '',
-      plot_number: '', property_type: 'Residential', sector: '',
-      dimension: '', area: '', total_cost: '', sqft_rate: '', status: 'vacant',
-    })
-    setModal(true)
-  }
-
   const save = async () => {
+    if (!editing) return
     const payload = {
       ...form,
       area: form.area !== '' ? parseFloat(form.area) : null,
       total_cost: form.total_cost !== '' ? parseFloat(form.total_cost) : null,
       sqft_rate: form.sqft_rate !== '' ? parseFloat(form.sqft_rate) : null,
     }
-    if (editing) await updatePlot.mutateAsync({ id: editing.id, data: payload })
-    else await createPlot.mutateAsync(payload)
+    await updatePlot.mutateAsync({ id: editing.id, data: payload })
     setModal(false)
-  }
-
-  // ── Bulk Add ──
-  const [bulkModal, setBulkModal] = useState(false)
-  const [bulk, setBulk] = useState<any>({
-    project_id: '', prefix: 'A', start_no: 1, count: 10, property_type: 'Residential',
-    sector: '', dimension: '30x60', area: 1800, sqft_rate: 1500, status: 'vacant',
-  })
-  const setB = (k: string, v: any) => setBulk((p: any) => ({ ...p, [k]: v }))
-
-  const runBulk = async () => {
-    if (!bulk.project_id) return toast.error('Select a project')
-    const start = parseInt(bulk.start_no, 10) || 1
-    const count = Math.min(parseInt(bulk.count, 10) || 0, 500)
-    if (count <= 0) return toast.error('Count must be >0')
-    const area = parseFloat(bulk.area) || 0
-    const rate = parseFloat(bulk.sqft_rate) || 0
-    const rows = Array.from({ length: count }, (_, i) => ({
-      project_id: bulk.project_id,
-      plot_number: `${bulk.prefix}${start + i}`,
-      property_type: bulk.property_type,
-      sector: bulk.sector || null,
-      dimension: bulk.dimension || null,
-      area: area || null,
-      sqft_rate: rate || null,
-      total_cost: area && rate ? area * rate : null,
-      status: bulk.status,
-    }))
-    await bulkCreate.mutateAsync(rows)
-    setBulkModal(false)
   }
 
   const cols = [
@@ -191,9 +132,13 @@ export default function Plots() {
             <p className="text-sm text-gray-500">{allPlots.length} plots</p>
           </div>
         </div>
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={() => setBulkModal(true)}><Layers size={14} />Bulk Add</Button>
-          <Button onClick={openAdd}><Plus size={14} />Add Plot</Button>
+      </div>
+
+      <div className="mb-5 flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+        <Info size={16} className="mt-0.5 shrink-0" />
+        <div>
+          New plots are created from the <Link to="/projects" className="font-semibold underline">Projects</Link> page using the bulk plot generator.
+          This page is for editing or updating existing plots only.
         </div>
       </div>
 
@@ -227,7 +172,7 @@ export default function Plots() {
         <Table columns={cols} data={plots} loading={isLoading} />
       </div>
 
-      <Modal open={modal} onClose={() => setModal(false)} title={editing ? `Edit Plot #${editing?.plot_number}` : 'Add Plot'}>
+      <Modal open={modal} onClose={() => setModal(false)} title={`Edit Plot #${editing?.plot_number ?? ''}`}>
         <div className="grid grid-cols-2 gap-4">
           <Select label="Project" value={form.project_id} onChange={(e: any) => set('project_id', e.target.value)} className="col-span-2">
             <option value="">Select Project</option>
@@ -248,39 +193,7 @@ export default function Plots() {
         </div>
         <div className="flex justify-end gap-2 mt-6">
           <Button variant="secondary" onClick={() => setModal(false)}>Cancel</Button>
-          <Button onClick={save} loading={updatePlot.isPending || createPlot.isPending}>{editing ? 'Save Changes' : 'Create Plot'}</Button>
-        </div>
-      </Modal>
-
-      <Modal open={bulkModal} onClose={() => setBulkModal(false)} title="Bulk Add Plots">
-        <p className="text-xs text-gray-500 mb-4">Generates a contiguous run of plots in one project. e.g. prefix "A", start 1, count 10 → A1, A2 … A10.</p>
-        <div className="grid grid-cols-2 gap-4">
-          <Select label="Project" value={bulk.project_id} onChange={(e: any) => setB('project_id', e.target.value)} className="col-span-2">
-            <option value="">Select Project</option>
-            {(projects as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.project_name} [{p.project_code}]</option>)}
-          </Select>
-          <Input label="Plot No Prefix" value={bulk.prefix} onChange={(e: any) => setB('prefix', e.target.value)} placeholder="A" />
-          <Input label="Start Number" type="number" value={bulk.start_no} onChange={(e: any) => setB('start_no', e.target.value)} />
-          <Input label="Count (max 500)" type="number" value={bulk.count} onChange={(e: any) => setB('count', e.target.value)} />
-          <Input label="Property Type" value={bulk.property_type} onChange={(e: any) => setB('property_type', e.target.value)} />
-          <Input label="Sector" value={bulk.sector} onChange={(e: any) => setB('sector', e.target.value)} />
-          <Input label="Dimension" value={bulk.dimension} onChange={(e: any) => setB('dimension', e.target.value)} />
-          <Input label="Default Area (sqft)" type="number" value={bulk.area} onChange={(e: any) => setB('area', e.target.value)} />
-          <Input label="Sqft Rate (₹)" type="number" value={bulk.sqft_rate} onChange={(e: any) => setB('sqft_rate', e.target.value)} />
-          <Select label="Initial Status" value={bulk.status} onChange={(e: any) => setB('status', e.target.value)}>
-            <option value="vacant">Vacant</option>
-            <option value="booked">Booked</option>
-          </Select>
-        </div>
-        {bulk.area && bulk.sqft_rate && (
-          <div className="mt-3 p-3 bg-blue-50 rounded-lg text-xs text-blue-700">
-            Each plot total: <b>{formatINR((parseFloat(bulk.area) || 0) * (parseFloat(bulk.sqft_rate) || 0))}</b>
-            {' · '}Total inventory value: <b>{formatINR((parseFloat(bulk.area) || 0) * (parseFloat(bulk.sqft_rate) || 0) * (parseInt(bulk.count, 10) || 0))}</b>
-          </div>
-        )}
-        <div className="flex justify-end gap-2 mt-6">
-          <Button variant="secondary" onClick={() => setBulkModal(false)}>Cancel</Button>
-          <Button onClick={runBulk} loading={bulkCreate.isPending}>Generate {bulk.count || 0} plots</Button>
+          <Button onClick={save} loading={updatePlot.isPending}>Save Changes</Button>
         </div>
       </Modal>
     </div>
