@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { Table } from '@/components/ui/Table.tsx'
@@ -9,10 +9,9 @@ import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import { printApplicationForm } from '@/lib/printTemplates'
 import EmiPanel from '@/components/EmiPanel'
-import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck } from 'lucide-react'
+import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info } from 'lucide-react'
 import toast from 'react-hot-toast'
 
-// Bookings page only deals with confirmed deals — early prospects live elsewhere.
 const STAGES = ['token_received','booking_done','cancelled'] as const
 type Stage = typeof STAGES[number]
 
@@ -37,13 +36,17 @@ const today = () => new Date().toISOString().slice(0,10)
 
 const EMPTY: any = {
   plot_id:'', customer_id:'', broker_id:'', project_id:'', stage:'token_received',
-  total_amount:'', discount_amount:'0', notes:'',
+
+  // Pricing breakdown (the booking math)
+  size_sqyd:'', rate_per_sqyd:'',
+  dev_charges:'0', plc_charges:'0', discount_amount:'0',
+
+  notes:'',
   application_date: today(), booking_time:'', customer_bank_name:'',
   upline_broker_code:'', manager_signature_by:'', affidavit_accepted:true,
   cust_mode: 'new' as CustMode,
   new_customer: { ...NEW_CUST_EMPTY },
 
-  // Combo payment plan — admin can enable any combination
   token_enabled: false,
   token_amount: '', token_date: today(), token_mode: 'cash', token_utr: '', token_drawn_on: '', token_branch: '',
 
@@ -73,7 +76,6 @@ export default function Bookings() {
       const { data, error } = await supabase
         .from('bp_bookings')
         .select('*,bp_plots(*),bp_customers(*),brokers(name,broker_id),bp_projects(*)')
-        // Bookings page only shows confirmed deals (no enquiry / site_visit / negotiation)
         .in('stage', ['token_received','booking_done','cancelled'])
         .order('created_at', { ascending: false })
       if (error) throw error
@@ -86,7 +88,7 @@ export default function Bookings() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('bp_plots')
-        .select('id, plot_no, size_sqyd, total_price, status, project_id, bp_projects(id, name)')
+        .select('id, plot_no, size_sqyd, price_per_sqyd, plc_charges, total_price, status, project_id, bp_projects(id, name)')
         .eq('status','available')
         .order('plot_no')
       if (error) throw error
@@ -106,7 +108,16 @@ export default function Bookings() {
   const { data: brokers = [] } = useQuery({
     queryKey: ['brokers'],
     queryFn: async () => {
-      const { data, error } = await supabase.from('brokers').select('id,name,broker_id')
+      const { data, error } = await supabase.from('brokers').select('id,name,broker_id,rank')
+      if (error) throw error
+      return data
+    },
+  })
+
+  const { data: ranks = [] } = useQuery({
+    queryKey: ['commission_ranks_active'],
+    queryFn: async () => {
+      const { data, error } = await supabase.from('commission_ranks').select('rank_name, commission_pct').eq('active', true)
       if (error) throw error
       return data
     },
@@ -121,56 +132,58 @@ export default function Bookings() {
     },
   })
 
-  async function generateEmiSchedule(bookingId: string, customerId: string|null, principal: number, num: number, freq: string, startDate: string) {
-    if (principal <= 0 || num <= 0) return
-    const amt = Math.round(principal / num)
+  // ── Pricing math ───────────────────────────────────────────────
+  const num = (v: any) => Number(v) || 0
+  const size  = num(form.size_sqyd)
+  const rate  = num(form.rate_per_sqyd)
+  const basePrice = Math.round(size * rate)
+  const dev   = num(form.dev_charges)
+  const plc   = num(form.plc_charges)
+  const disc  = num(form.discount_amount)
+  const totalNet = Math.max(0, basePrice + dev + plc - disc)
+
+  // ── Broker commission preview (BASE PRICE ONLY, excludes dev + plc) ──
+  const selectedBroker = (brokers as any[]).find((b: any) => b.id === form.broker_id)
+  const brokerRankPct = selectedBroker
+    ? Number((ranks as any[]).find((r: any) => r.rank_name === selectedBroker.rank)?.commission_pct || 0)
+    : 0
+  const commissionAmt = Math.round(basePrice * brokerRankPct / 100)
+
+  async function generateEmiSchedule(bookingId: string, customerId: string|null, principal: number, n: number, freq: string, startDate: string) {
+    if (principal <= 0 || n <= 0) return
+    const amt = Math.round(principal / n)
     const { data: sched, error } = await supabase.from('emi_schedules').insert({
       booking_id: bookingId, customer_id: customerId,
       frequency: freq, start_date: startDate,
-      num_installments: num, principal, total_payable: principal,
+      num_installments: n, principal, total_payable: principal,
       interest_rate_pct: 0, interest_method: 'flat',
     }).select('id').single()
     if (error || !sched) throw error || new Error('Schedule insert failed')
     const offset = freq === 'monthly' ? 1 : freq === 'quarterly' ? 3 : freq === 'half_yearly' ? 6 : 12
     const start = new Date(startDate)
-    const rows = Array.from({ length: num }, (_, i) => {
+    const rows = Array.from({ length: n }, (_, i) => {
       const d = new Date(start)
       d.setMonth(d.getMonth() + offset * (i + 1))
-      return {
-        schedule_id: sched.id, seq: i + 1, due_date: d.toISOString().slice(0,10),
-        amount: amt, principal_component: amt, interest_component: 0, status: 'pending',
-      }
+      return { schedule_id: sched.id, seq: i + 1, due_date: d.toISOString().slice(0,10), amount: amt, principal_component: amt, interest_component: 0, status: 'pending' }
     })
     await supabase.from('emi_installments').insert(rows)
   }
 
-  async function recordPaymentRow(p: {
-    booking_id: string; customer_id: string|null;
-    payment_type: string; amount: number; payment_date: string;
-    payment_mode: string; utr_ref: string; drawn_on_bank?: string; branch?: string;
-    sponsor_name?: string;
-  }) {
+  async function recordPaymentRow(p: any) {
     if (p.amount <= 0) return
     const { data: rn } = await supabase.rpc('next_receipt_no')
     const { error } = await supabase.from('bp_payments').insert({
-      booking_id: p.booking_id,
-      customer_id: p.customer_id,
-      payment_type: p.payment_type,
-      amount: p.amount,
-      payment_mode: p.payment_mode,
-      utr_ref: p.utr_ref || null,
-      payment_date: p.payment_date,
-      verification_status: 'verified',
-      verified_at: new Date().toISOString(),
+      booking_id: p.booking_id, customer_id: p.customer_id,
+      payment_type: p.payment_type, amount: p.amount, payment_mode: p.payment_mode,
+      utr_ref: p.utr_ref || null, payment_date: p.payment_date,
+      verification_status: 'verified', verified_at: new Date().toISOString(),
       receipt_no: rn || null,
       drawn_on_bank: p.drawn_on_bank || (p.payment_mode === 'cash' ? 'Cash' : null),
-      branch: p.branch || null,
-      sponsor_name: p.sponsor_name || null,
+      branch: p.branch || null, sponsor_name: p.sponsor_name || null,
     })
     if (error) throw error
   }
 
-  // Auto-derived stage from payment plan checkboxes
   function autoStage(f: any): Stage {
     if (f.full_enabled) return 'booking_done'
     if (f.booking_enabled || f.emi_enabled) return 'booking_done'
@@ -194,27 +207,46 @@ export default function Bookings() {
         customer_id = nc.id
       }
 
-      // Build booking row — keep only the columns bp_bookings owns
       const stage = autoStage(rest)
       const project = (projects as any[]).find((pj: any) => pj.id === rest.project_id)
-      const broker = (brokers as any[]).find((b: any) => b.id === rest.broker_id)
-      const total = Number(rest.total_amount) || 0
-      const bookingAmt = rest.booking_enabled ? (Number(rest.booking_amount) || 0) : 0
-      const tokenAmt = rest.token_enabled ? (Number(rest.token_amount) || 0) : 0
-      const fullAmt = rest.full_enabled ? (Number(rest.full_amount) || total) : 0
+      const broker  = (brokers as any[]).find((b: any) => b.id === rest.broker_id)
+      const brokerPct = broker ? Number((ranks as any[]).find((r: any) => r.rank_name === broker.rank)?.commission_pct || 0) : 0
+
+      const sz   = num(rest.size_sqyd)
+      const rt   = num(rest.rate_per_sqyd)
+      const base = Math.round(sz * rt)
+      const d    = num(rest.dev_charges)
+      const pl   = num(rest.plc_charges)
+      const dsc  = num(rest.discount_amount)
+      const total = Math.max(0, base + d + pl - dsc)
+
+      const tokenAmt   = rest.token_enabled   ? num(rest.token_amount) : 0
+      const bookingAmt = rest.booking_enabled ? num(rest.booking_amount) : 0
+      const fullAmt    = rest.full_enabled    ? (num(rest.full_amount) || total) : 0
 
       const bookingPayload: any = {
         plot_id: rest.plot_id || null, customer_id, broker_id: rest.broker_id || null, project_id: rest.project_id || null,
         stage,
+        size_sqyd: sz || null,
+        rate_per_sqyd: rt || null,
+        base_price: base || null,
+        dev_charges: d,
+        plc_charges: pl,
+        discount_amount: dsc,
         plot_total_price: total,
         total_amount: total,
+
         token_amount: tokenAmt || null,
         token_date: rest.token_enabled ? rest.token_date : null,
         booking_amount: bookingAmt || null,
         booking_date: rest.booking_enabled ? rest.booking_date : null,
         full_payment_amount: fullAmt || null,
         full_payment_date: rest.full_enabled ? rest.full_date : null,
-        discount_amount: Number(rest.discount_amount) || 0,
+
+        // Commission applies only to BASE price (not dev/plc)
+        commission_rate: brokerPct || null,
+        commission_amount: brokerPct > 0 ? Math.round(base * brokerPct / 100) : null,
+
         notes: rest.notes || null,
         scheme_name: project?.name || null,
         application_date: rest.application_date || null,
@@ -231,37 +263,20 @@ export default function Bookings() {
 
       const sponsorName = broker?.name || null
 
-      // Record receipts for each enabled instant-pay item
       if (rest.token_enabled && tokenAmt > 0) {
-        await recordPaymentRow({
-          booking_id: bk.id, customer_id,
-          payment_type: 'token', amount: tokenAmt, payment_date: rest.token_date,
-          payment_mode: rest.token_mode, utr_ref: rest.token_utr,
-          drawn_on_bank: rest.token_drawn_on, branch: rest.token_branch, sponsor_name: sponsorName,
-        })
+        await recordPaymentRow({ booking_id: bk.id, customer_id, payment_type: 'token', amount: tokenAmt, payment_date: rest.token_date, payment_mode: rest.token_mode, utr_ref: rest.token_utr, drawn_on_bank: rest.token_drawn_on, branch: rest.token_branch, sponsor_name: sponsorName })
       }
       if (rest.booking_enabled && bookingAmt > 0) {
-        await recordPaymentRow({
-          booking_id: bk.id, customer_id,
-          payment_type: 'booking', amount: bookingAmt, payment_date: rest.booking_date,
-          payment_mode: rest.booking_mode, utr_ref: rest.booking_utr,
-          drawn_on_bank: rest.booking_drawn_on, branch: rest.booking_branch, sponsor_name: sponsorName,
-        })
+        await recordPaymentRow({ booking_id: bk.id, customer_id, payment_type: 'booking', amount: bookingAmt, payment_date: rest.booking_date, payment_mode: rest.booking_mode, utr_ref: rest.booking_utr, drawn_on_bank: rest.booking_drawn_on, branch: rest.booking_branch, sponsor_name: sponsorName })
       }
       if (rest.full_enabled && fullAmt > 0) {
-        await recordPaymentRow({
-          booking_id: bk.id, customer_id,
-          payment_type: 'full_payment', amount: fullAmt, payment_date: rest.full_date,
-          payment_mode: rest.full_mode, utr_ref: rest.full_utr,
-          sponsor_name: sponsorName,
-        })
+        await recordPaymentRow({ booking_id: bk.id, customer_id, payment_type: 'full_payment', amount: fullAmt, payment_date: rest.full_date, payment_mode: rest.full_mode, utr_ref: rest.full_utr, sponsor_name: sponsorName })
       }
 
-      // Generate EMI schedule for the remaining balance
       if (rest.emi_enabled) {
         const principal = Math.max(0, total - tokenAmt - bookingAmt - fullAmt)
         if (principal > 0) {
-          await generateEmiSchedule(bk.id, customer_id, principal, Number(rest.emi_n) || 12, rest.emi_freq || 'monthly', rest.emi_start || today())
+          await generateEmiSchedule(bk.id, customer_id, principal, num(rest.emi_n) || 12, rest.emi_freq || 'monthly', rest.emi_start || today())
         }
       }
 
@@ -272,7 +287,7 @@ export default function Bookings() {
       qc.invalidateQueries({ queryKey: ['customers'] })
       qc.invalidateQueries({ queryKey: ['payments'] })
       qc.invalidateQueries({ queryKey: ['emi_schedules'] })
-      toast.success('Booking saved with payments / EMI')
+      toast.success('Booking saved')
     },
     onError: (e: any) => toast.error(e.message),
   })
@@ -280,15 +295,25 @@ export default function Bookings() {
   const update = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: any }) => {
       const project = (projects as any[]).find((pj: any) => pj.id === data.project_id)
-      const total = Number(data.total_amount) || 0
+      const broker  = (brokers as any[]).find((b: any) => b.id === data.broker_id)
+      const brokerPct = broker ? Number((ranks as any[]).find((r: any) => r.rank_name === broker.rank)?.commission_pct || 0) : 0
+      const sz   = num(data.size_sqyd)
+      const rt   = num(data.rate_per_sqyd)
+      const base = Math.round(sz * rt)
+      const d    = num(data.dev_charges)
+      const pl   = num(data.plc_charges)
+      const dsc  = num(data.discount_amount)
+      const total = Math.max(0, base + d + pl - dsc)
       const payload = {
         plot_id: data.plot_id || null, customer_id: data.customer_id || null,
         broker_id: data.broker_id || null, project_id: data.project_id || null,
         stage: data.stage,
-        plot_total_price: total,
-        total_amount: total,
-        booking_amount: data.booking_amount ? Number(data.booking_amount) : null,
-        discount_amount: Number(data.discount_amount) || 0,
+        size_sqyd: sz || null, rate_per_sqyd: rt || null,
+        base_price: base || null,
+        dev_charges: d, plc_charges: pl, discount_amount: dsc,
+        plot_total_price: total, total_amount: total,
+        commission_rate: brokerPct || null,
+        commission_amount: brokerPct > 0 ? Math.round(base * brokerPct / 100) : null,
         notes: data.notes || null,
         scheme_name: project?.name || null,
         application_date: data.application_date || null,
@@ -299,9 +324,9 @@ export default function Bookings() {
         affidavit_accepted: !!data.affidavit_accepted,
         updated_at: new Date().toISOString(),
       }
-      const { data: d, error } = await supabase.from('bp_bookings').update(payload).eq('id', id).select().single()
+      const { data: d2, error } = await supabase.from('bp_bookings').update(payload).eq('id', id).select().single()
       if (error) throw error
-      return d
+      return d2
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['bookings'] }); toast.success('Booking updated') },
     onError: (e: any) => toast.error(e.message),
@@ -323,15 +348,17 @@ export default function Bookings() {
       plot_id: b.plot_id || '', customer_id: b.customer_id || '',
       broker_id: b.broker_id || '', project_id: b.project_id || '',
       stage: (STAGES.includes(b.stage) ? b.stage : 'token_received'),
-      total_amount: b.total_amount || b.plot_total_price || '',
-      booking_amount: b.booking_amount || '',
-      discount_amount: b.discount_amount || '0', notes: b.notes || '',
+      size_sqyd: b.size_sqyd || b.bp_plots?.size_sqyd || '',
+      rate_per_sqyd: b.rate_per_sqyd || b.bp_plots?.price_per_sqyd || '',
+      dev_charges: b.dev_charges ?? '0',
+      plc_charges: b.plc_charges ?? '0',
+      discount_amount: b.discount_amount ?? '0',
+      notes: b.notes || '',
       application_date: b.application_date || today(),
       booking_time: b.booking_time || '', customer_bank_name: b.customer_bank_name || '',
       upline_broker_code: b.upline_broker_code || '', manager_signature_by: b.manager_signature_by || '',
       affidavit_accepted: b.affidavit_accepted !== false,
       cust_mode: 'existing',
-      // payment-plan checkboxes don't apply on edit (use EMI / Payments page instead)
       token_enabled: false, booking_enabled: false, emi_enabled: false, full_enabled: false,
     } : EMPTY)
     setModal(true)
@@ -349,8 +376,12 @@ export default function Bookings() {
   const handlePlotChange = (plotId: string) => {
     set('plot_id', plotId)
     const p = (plots as any[]).find((pl: any) => pl.id === plotId)
-    if (p?.total_price) set('total_amount', String(p.total_price))
-    if (p?.bp_projects?.id) set('project_id', p.bp_projects.id)
+    if (p) {
+      if (p.size_sqyd)       set('size_sqyd', String(p.size_sqyd))
+      if (p.price_per_sqyd)  set('rate_per_sqyd', String(p.price_per_sqyd))
+      if (p.plc_charges != null) set('plc_charges', String(p.plc_charges))
+      if (p.bp_projects?.id) set('project_id', p.bp_projects.id)
+    }
   }
 
   const handleBrokerChange = (brokerId: string) => {
@@ -370,13 +401,12 @@ export default function Bookings() {
   const totalValue  = all.filter((b: any) => b.stage === 'booking_done').reduce((s: number, b: any) => s + Number(b.total_amount || b.plot_total_price || 0), 0)
   const filtered = stageFilter === 'all' ? all : all.filter((b: any) => b.stage === stageFilter)
 
-  // EMI principal preview = Total − Token − Booking − Full
-  const tokenAmt = form.token_enabled ? Number(form.token_amount) || 0 : 0
-  const bookingAmt = form.booking_enabled ? Number(form.booking_amount) || 0 : 0
-  const fullAmt = form.full_enabled ? (Number(form.full_amount) || Number(form.total_amount) || 0) : 0
-  const total = Number(form.total_amount) || 0
-  const principalPreview = Math.max(0, total - tokenAmt - bookingAmt - fullAmt)
-  const emiAmtPreview = principalPreview > 0 && Number(form.emi_n) > 0 ? Math.round(principalPreview / Number(form.emi_n)) : 0
+  // EMI principal preview
+  const tokenAmt = form.token_enabled ? num(form.token_amount) : 0
+  const bookingAmt = form.booking_enabled ? num(form.booking_amount) : 0
+  const fullAmt = form.full_enabled ? (num(form.full_amount) || totalNet) : 0
+  const principalPreview = Math.max(0, totalNet - tokenAmt - bookingAmt - fullAmt)
+  const emiAmtPreview = principalPreview > 0 && num(form.emi_n) > 0 ? Math.round(principalPreview / num(form.emi_n)) : 0
 
   const cols = [
     { header: 'Booking No', render: (r: any) => <span className="font-mono text-xs font-semibold text-blue-700">{r.booking_no}</span> },
@@ -394,12 +424,20 @@ export default function Bookings() {
       render: (r: any) => (
         <div>
           <div className="font-medium text-sm">{r.bp_plots?.plot_no || '—'}</div>
-          <div className="text-xs text-gray-400">{r.bp_projects?.name || r.scheme_name || ''}</div>
+          <div className="text-xs text-gray-400">{(r.size_sqyd || r.bp_plots?.size_sqyd || '—')} sqyd · {r.bp_projects?.name || r.scheme_name || ''}</div>
         </div>
       ),
     },
     { header: 'Broker',  render: (r: any) => <span className="text-sm">{r.brokers?.name || '—'}</span> },
-    { header: 'Amount',  render: (r: any) => <span className="font-semibold text-green-700">{formatINR(r.total_amount || r.plot_total_price)}</span> },
+    {
+      header: 'Net / Base',
+      render: (r: any) => (
+        <div>
+          <div className="font-semibold text-green-700">{formatINR(r.total_amount || r.plot_total_price)}</div>
+          <div className="text-[10px] text-gray-400">Base {formatINR(r.base_price || (r.size_sqyd && r.rate_per_sqyd ? r.size_sqyd * r.rate_per_sqyd : 0))}</div>
+        </div>
+      ),
+    },
     {
       header: 'Stage',
       render: (r: any) => {
@@ -454,47 +492,65 @@ export default function Bookings() {
         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">आवासीय योजना (Scheme) & Plot</div>
         <div className="grid grid-cols-2 gap-3">
           <Select label="आवासीय योजना का नाम (Project / Scheme)" value={form.project_id} onChange={(e: any) => set('project_id', e.target.value)} className="col-span-2">
-            <option value="">{(projects as any[]).length === 0 ? 'No projects yet — create one in Projects nav first' : 'Select scheme / project'}</option>
+            <option value="">{(projects as any[]).length === 0 ? 'No projects yet' : 'Select scheme / project'}</option>
             {(projects as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.name}{p.location ? ` · ${p.location}` : ''}</option>)}
           </Select>
           <Select label="Plot (Available) — प्लॉट नं." value={form.plot_id} onChange={(e: any) => handlePlotChange(e.target.value)} className="col-span-2">
             <option value="">{(plots as any[]).length === 0 ? 'No available plots' : 'Select Plot'}</option>
-            {(plots as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.plot_no} — {p.size_sqyd} sqyd · {formatINR(p.total_price)} · {p.bp_projects?.name}</option>)}
+            {(plots as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.plot_no} — {p.size_sqyd} sqyd @ {formatINR(p.price_per_sqyd)}/gaj · {p.bp_projects?.name}</option>)}
           </Select>
-          <Input label="प्लॉट की कुल कीमत (Total ₹)" type="number" value={form.total_amount} onChange={(e: any) => set('total_amount', e.target.value)} />
-          <Input label="Discount (₹)" type="number" value={form.discount_amount} onChange={(e: any) => set('discount_amount', e.target.value)} />
         </div>
 
-        {/* 2. PAYMENT PLAN — independent checkboxes (combo allowed) */}
+        {/* 2. PRICING BREAKDOWN */}
+        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Pricing Breakdown</div>
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="आकार / Size (वर्ग गज / sq.yd)" type="number" value={form.size_sqyd} onChange={(e:any) => set('size_sqyd', e.target.value)} />
+          <Input label="प्रति गज दर / Rate per sq.yd (₹)" type="number" value={form.rate_per_sqyd} onChange={(e:any) => set('rate_per_sqyd', e.target.value)} />
+          <Input label="विकास शुल्क / Development charges (₹)" type="number" value={form.dev_charges} onChange={(e:any) => set('dev_charges', e.target.value)} placeholder="0" />
+          <Input label="PLC charges (₹)" type="number" value={form.plc_charges} onChange={(e:any) => set('plc_charges', e.target.value)} placeholder="auto from plot" />
+          <Input label="Discount (₹)" type="number" value={form.discount_amount} onChange={(e:any) => set('discount_amount', e.target.value)} />
+        </div>
+
+        {/* Live calc panel */}
+        <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg text-sm">
+          <div className="grid grid-cols-2 gap-y-1.5 gap-x-4">
+            <div className="text-gray-600">Base price <span className="text-[10px] text-gray-400">({size || 0} × ₹{rate || 0})</span></div>
+            <div className="text-right font-semibold">{formatINR(basePrice)}</div>
+            <div className="text-gray-600">+ Development charges</div>
+            <div className="text-right font-semibold">{formatINR(dev)}</div>
+            <div className="text-gray-600">+ PLC charges</div>
+            <div className="text-right font-semibold">{formatINR(plc)}</div>
+            <div className="text-gray-600">− Discount</div>
+            <div className="text-right font-semibold text-red-700">{disc > 0 ? '−' : ''}{formatINR(disc)}</div>
+            <div className="text-gray-900 font-semibold border-t border-gray-300 pt-1.5">कुल नेट / Total net value</div>
+            <div className="text-right text-green-700 font-bold text-base border-t border-gray-300 pt-1.5">{formatINR(totalNet)}</div>
+          </div>
+          {selectedBroker && brokerRankPct > 0 && (
+            <div className="mt-3 pt-3 border-t border-gray-200 flex items-start gap-2 text-xs text-blue-900 bg-blue-50 -mx-3 -mb-3 px-3 py-2 rounded-b-lg">
+              <Info size={13} className="mt-0.5 shrink-0"/>
+              <div>
+                <b>{selectedBroker.name}</b>'s commission ({brokerRankPct}% of base price): <b>{formatINR(commissionAmt)}</b>.
+                Development & PLC charges are excluded from commission.
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 3. PAYMENT PLAN */}
         {!editing && (
           <>
             <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Payment Plan</div>
-            <div className="text-[11px] text-gray-500 mb-3">Tick everything the customer is paying today. You can mix any combination — Token + Booking + EMI is supported.</div>
+            <div className="text-[11px] text-gray-500 mb-3">Tick everything the customer is paying today. Token + Booking + EMI combinations are supported.</div>
 
-            {/* Token */}
-            <PayBlock
-              checked={form.token_enabled} onCheck={v => set('token_enabled', v)}
-              label="Token amount" subtitle="Recorded as a token receipt"
-              color="amber"
-            >
+            <PayBlock checked={form.token_enabled} onCheck={v => set('token_enabled', v)} label="Token amount" subtitle="Token receipt will be auto-generated" color="amber">
               <PayFields prefix="token" form={form} set={set} />
             </PayBlock>
 
-            {/* Booking Amount */}
-            <PayBlock
-              checked={form.booking_enabled} onCheck={v => set('booking_enabled', v)}
-              label="Booking amount" subtitle="The main booking deposit (most bookings have this)"
-              color="blue"
-            >
+            <PayBlock checked={form.booking_enabled} onCheck={v => set('booking_enabled', v)} label="Booking amount" subtitle="The main booking deposit" color="blue">
               <PayFields prefix="booking" form={form} set={set} />
             </PayBlock>
 
-            {/* EMI */}
-            <PayBlock
-              checked={form.emi_enabled} onCheck={v => set('emi_enabled', v)}
-              label="EMI plan for the balance" subtitle={`Principal: ${formatINR(principalPreview)} · Per instalment: ${formatINR(emiAmtPreview)}`}
-              color="emerald"
-            >
+            <PayBlock checked={form.emi_enabled} onCheck={v => set('emi_enabled', v)} label="EMI plan for the balance" subtitle={`Principal: ${formatINR(principalPreview)} · Per instalment: ${formatINR(emiAmtPreview)}`} color="emerald">
               <div className="grid grid-cols-3 gap-3">
                 <Input label="# Instalments" type="number" value={form.emi_n} onChange={(e:any)=>set('emi_n', e.target.value)} />
                 <Select label="Frequency" value={form.emi_freq} onChange={(e:any)=>set('emi_freq', e.target.value)}>
@@ -507,22 +563,13 @@ export default function Bookings() {
               </div>
             </PayBlock>
 
-            {/* Full payment */}
-            <PayBlock
-              checked={form.full_enabled} onCheck={v => set('full_enabled', v)}
-              label="Full payment today" subtitle="Customer is settling the entire plot cost in one shot"
-              color="violet"
-            >
-              <PayFields prefix="full" form={form} set={set} amountPlaceholder={form.total_amount ? `Defaults to total ${formatINR(Number(form.total_amount))}` : ''} hideBranch />
+            <PayBlock checked={form.full_enabled} onCheck={v => set('full_enabled', v)} label="Full payment today" subtitle="Customer settles the entire net total in one shot" color="violet">
+              <PayFields prefix="full" form={form} set={set} amountPlaceholder={totalNet ? `Defaults to total ${formatINR(totalNet)}` : ''} hideBranch />
             </PayBlock>
-
-            {(form.token_enabled || form.booking_enabled || form.full_enabled) && (
-              <div className="mt-2 text-[11px] text-gray-500">Receipts will be auto-generated with sequential receipt numbers (6301+).</div>
-            )}
           </>
         )}
 
-        {/* 3. CUSTOMER */}
+        {/* 4. CUSTOMER */}
         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100 flex items-center justify-between">
           <span>Customer</span>
           {!editing && (
@@ -577,7 +624,7 @@ export default function Bookings() {
           </div>
         )}
 
-        {/* 4. BOOKING META */}
+        {/* 5. BOOKING META */}
         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Booking</div>
         <div className="grid grid-cols-2 gap-3">
           <Input label="Application Date" type="date" value={form.application_date} onChange={(e: any) => set('application_date', e.target.value)} />
@@ -585,12 +632,12 @@ export default function Bookings() {
           <Input label="Customer Bank Name" value={form.customer_bank_name} onChange={(e: any) => set('customer_bank_name', e.target.value)} placeholder="e.g. HDFC Bank" />
         </div>
 
-        {/* 5. SPONSOR & APPROVALS */}
+        {/* 6. SPONSOR & APPROVALS */}
         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Sponsor & Approvals</div>
         <div className="grid grid-cols-2 gap-3">
           <Select label="परिचयकर्ता / Upline Broker" value={form.broker_id} onChange={(e: any) => handleBrokerChange(e.target.value)}>
             <option value="">No Broker</option>
-            {(brokers as any[]).map((b: any) => <option key={b.id} value={b.id}>{b.name} [{b.broker_id}]</option>)}
+            {(brokers as any[]).map((b: any) => <option key={b.id} value={b.id}>{b.name} [{b.broker_id}] · {b.rank}</option>)}
           </Select>
           <Input label="परिचयकर्ता कोड (Upline Code)" value={form.upline_broker_code} onChange={(e: any) => set('upline_broker_code', e.target.value)} />
           <Input label="Manager Signed By" value={form.manager_signature_by} onChange={(e: any) => set('manager_signature_by', e.target.value)} placeholder="Office manager name" />
@@ -615,7 +662,6 @@ export default function Bookings() {
   )
 }
 
-// Reusable payment block: checkbox header + collapsed/expanded body
 function PayBlock({ checked, onCheck, label, subtitle, color, children }: any) {
   const palette: Record<string, string> = {
     amber:   'bg-amber-50 border-amber-200',
@@ -637,7 +683,6 @@ function PayBlock({ checked, onCheck, label, subtitle, color, children }: any) {
   )
 }
 
-// Reusable amount/date/mode/UTR row used by Token, Booking, Full payment
 function PayFields({ prefix, form, set, amountPlaceholder = '', hideBranch = false }: any) {
   const k = (s: string) => `${prefix}_${s}`
   return (
