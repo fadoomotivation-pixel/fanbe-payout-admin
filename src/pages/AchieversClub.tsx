@@ -1,6 +1,13 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { Star, Award, TrendingUp, Users } from 'lucide-react';
+import { Star, Award, Info } from 'lucide-react';
+
+interface ClubConfig {
+  target_sq_yards: number;
+  consecutive_months: number;
+  allocation_per_sq_yard_inr: number;
+  payout_installments: number;
+}
 
 interface AchieverRow {
   broker_id: string;
@@ -27,6 +34,14 @@ export default function AchieversClub() {
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState('all');
   const [search, setSearch] = useState('');
+  const [config, setConfig] = useState<ClubConfig | null>(null);
+
+  useEffect(() => {
+    supabase.from('achievers_club_config')
+      .select('target_sq_yards,consecutive_months,allocation_per_sq_yard_inr,payout_installments')
+      .eq('id', 1).maybeSingle()
+      .then(({ data }) => { if (data) setConfig(data as ClubConfig); });
+  }, []);
 
   useEffect(() => {
     async function fetchAchievers() {
@@ -107,6 +122,32 @@ export default function AchieversClub() {
           </div>
         </div>
       </div>
+
+      {/* Club rules from brochure */}
+      {config && (
+        <div className="mb-5 grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-amber-700 flex items-center gap-1"><Info size={11}/>Target</p>
+            <p className="text-sm font-bold text-gray-800 mt-1">{config.target_sq_yards.toLocaleString('en-IN')} Sq Yds</p>
+            <p className="text-xs text-gray-500">team business / month for {config.consecutive_months} months</p>
+          </div>
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-blue-700">Consecutive Months</p>
+            <p className="text-sm font-bold text-gray-800 mt-1">{config.consecutive_months}</p>
+            <p className="text-xs text-gray-500">to qualify + maintain</p>
+          </div>
+          <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-green-700">Allocation</p>
+            <p className="text-sm font-bold text-gray-800 mt-1">₹{config.allocation_per_sq_yard_inr}/sq yd</p>
+            <p className="text-xs text-gray-500">on fresh monthly sale</p>
+          </div>
+          <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-purple-700">Payout</p>
+            <p className="text-sm font-bold text-gray-800 mt-1">{config.payout_installments} instalments</p>
+            <p className="text-xs text-gray-500">equal monthly split per achiever</p>
+          </div>
+        </div>
+      )}
 
       {/* Search */}
       <input

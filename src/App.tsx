@@ -31,6 +31,7 @@ import BankAccounts from '@/pages/BankAccounts'
 import CommissionRanks from '@/pages/CommissionRanks'
 import AchieversClub from '@/pages/AchieversClub'
 import TeamRewards from '@/pages/TeamRewards'
+import PayoutTerms from '@/pages/PayoutTerms'
 
 function Guard({children}:{children:any}){
   const[session,setSession]=useState<any>(undefined)
@@ -65,6 +66,7 @@ export default function App(){
         <Route path="/commission-ranks" element={<CommissionRanks/>}/>
         <Route path="/achievers-club" element={<AchieversClub/>}/>
         <Route path="/team-rewards" element={<TeamRewards/>}/>
+        <Route path="/payout-terms" element={<PayoutTerms/>}/>
         <Route path="/expenses" element={<Expenses/>}/>
         <Route path="/balance-sheet" element={<BalanceSheet/>}/>
         <Route path="/tickets" element={<Tickets/>}/>

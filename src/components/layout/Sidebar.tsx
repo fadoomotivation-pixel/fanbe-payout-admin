@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Users, Building2, Map, BookOpen, CreditCard, Banknote, Settings, LogOut, ChevronLeft, ChevronRight, BarChart2, FileText, UserCheck, Layers, MessageSquare, Megaphone, ShieldCheck, Receipt, Wallet, Calculator, Inbox, UserPlus, History, TrendingUp, Landmark, Star, Gift, Trophy } from 'lucide-react'
+import { LayoutDashboard, Users, Building2, Map, BookOpen, CreditCard, Banknote, Settings, LogOut, ChevronLeft, ChevronRight, BarChart2, FileText, UserCheck, Layers, MessageSquare, Megaphone, ShieldCheck, Receipt, Wallet, Calculator, Inbox, UserPlus, History, TrendingUp, Landmark, Star, Gift, Trophy, ScrollText } from 'lucide-react'
 import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
@@ -30,6 +30,7 @@ const NAV = [
     {to:'/commission-ranks',icon:Trophy,label:'Rank Slabs'},
     {to:'/achievers-club',icon:Star,label:'Achievers Club'},
     {to:'/team-rewards',icon:Gift,label:'Team Rewards'},
+    {to:'/payout-terms',icon:ScrollText,label:'Payout Terms'},
   ]},
   { group:'Operations', items:[
     {to:'/expenses',icon:Receipt,label:'Expenses'},
