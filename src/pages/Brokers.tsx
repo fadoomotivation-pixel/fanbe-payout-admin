@@ -8,7 +8,7 @@ import { Input, Select } from '@/components/ui/Input.tsx'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { KYC_COLORS, formatINR } from '@/lib/utils'
-import { Plus, Search, KeyRound, Copy, Check, Eye, UserPlus } from 'lucide-react'
+import { Plus, Search, KeyRound, Copy, Check, Eye, UserPlus, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const EMPTY = {
@@ -98,7 +98,6 @@ export default function Brokers() {
   const [editing, setEditing] = useState<any>(null)
   const [form, setForm] = useState<any>(EMPTY)
   const [q, setQ] = useState('')
-  const [sponsorSearch, setSponsorSearch] = useState('')
   const [copiedKey, setCopiedKey] = useState<string|null>(null)
   const [loginResult, setLoginResult] = useState<any>(null)
   const [editPassword, setEditPassword] = useState('')
@@ -106,7 +105,6 @@ export default function Brokers() {
 
   const open = (b?: any) => {
     setEditing(b || null)
-    setSponsorSearch('')
     setEditPassword('')
     setShowEditPassword(false)
     setForm(b ? {
@@ -161,10 +159,6 @@ export default function Brokers() {
 
   const allBrokers = brokers as any[]
   const filtered = allBrokers.filter((b: any) => `${b.name||''}${b.phone||''}${b.broker_id||''}${b.email||''}`.toLowerCase().includes(q.toLowerCase()))
-  const sponsorOptions = allBrokers
-    .filter((b: any) => b.id !== editing?.id)
-    .filter((b: any) => !sponsorSearch || `${b.name||''}${b.broker_id||''}${b.phone||''}`.toLowerCase().includes(sponsorSearch.toLowerCase()))
-    .slice(0, 10)
 
   const rankList = ranks as any[]
   const rankPctFor = (rankName: string) => rankList.find((r: any) => r.rank_name === rankName)?.commission_pct
@@ -308,24 +302,13 @@ export default function Brokers() {
 
           <div className="col-span-2 mt-2 pt-3 border-t border-gray-100">
             <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Sponsor / Upline (drives differential payouts)</label>
-            <p className="text-xs text-gray-400 mt-0.5">Search by name, broker ID or phone. Leave empty for top-of-tree brokers.</p>
-          </div>
-          <div className="col-span-2">
-            <input value={sponsorSearch} onChange={e => setSponsorSearch(e.target.value)} placeholder="Search sponsor by name / ID / phone…" className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white mb-2" />
-            <Select label="" value={form.sponsor_id} onChange={(e: any) => set('sponsor_id', e.target.value)}>
-              <option value="">— No sponsor (top of tree) —</option>
-              {sponsorOptions.map((b: any) => (
-                <option key={b.id} value={b.id}>{b.name} [{b.broker_id}] · {b.rank} · {b.phone}</option>
-              ))}
-            </Select>
-            {form.sponsor_id && (() => {
-              const s = allBrokers.find((b: any) => b.id === form.sponsor_id)
-              return s ? (
-                <div className="mt-2 p-2 bg-indigo-50 rounded text-xs text-indigo-700">
-                  ↑ Upline: <b>{s.name}</b> [{s.broker_id}] — Rank: <b>{s.rank}</b>
-                </div>
-              ) : null
-            })()}
+            <p className="text-xs text-gray-400 mt-0.5 mb-2">Type a name, broker ID or phone to filter. Pick a result from the list, or leave blank for top-of-tree brokers.</p>
+            <SponsorPicker
+              brokers={allBrokers}
+              value={form.sponsor_id}
+              excludeId={editing?.id}
+              onChange={(id) => set('sponsor_id', id)}
+            />
           </div>
 
           <Input label="Date of Joining" type="date" value={form.date_of_joining} onChange={(e: any) => set('date_of_joining', e.target.value)} />
@@ -391,6 +374,96 @@ function Field({ label, value, copyKey, copiedKey, onCopy }: any) {
         {copiedKey === copyKey ? <Check size={11}/> : <Copy size={11}/>}
         {copiedKey === copyKey ? 'Copied' : 'Copy'}
       </button>
+    </div>
+  )
+}
+
+// Combobox-style sponsor picker. Single input → live filtered dropdown → click to pick.
+// Selected sponsor is shown as a chip with a Change button.
+function SponsorPicker({ brokers, value, excludeId, onChange }: { brokers: any[]; value: string; excludeId?: string; onChange: (id: string) => void }) {
+  const [q, setQ] = useState('')
+  const [open, setOpen] = useState(false)
+  const selected = brokers.find((b: any) => b.id === value)
+
+  const filtered = brokers
+    .filter((b: any) => b.id !== excludeId)
+    .filter((b: any) => !q || `${b.name || ''} ${b.broker_id || ''} ${b.phone || ''} ${b.rank || ''}`.toLowerCase().includes(q.toLowerCase()))
+    .slice(0, 30)
+
+  if (selected) {
+    return (
+      <div className="flex items-center gap-2 p-2.5 rounded-lg border border-indigo-200 bg-indigo-50">
+        <div className="w-9 h-9 rounded-full bg-indigo-200 text-indigo-800 flex items-center justify-center font-bold text-sm">
+          {(selected.name || '?')[0].toUpperCase()}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="font-semibold text-sm text-gray-900 truncate">{selected.name}</div>
+          <div className="text-xs text-gray-500 truncate">[{selected.broker_id}] · {selected.rank || '—'} · {selected.phone || '—'}</div>
+        </div>
+        <button
+          type="button"
+          onClick={() => { onChange(''); setQ(''); setOpen(true) }}
+          className="text-xs px-2 py-1 rounded text-indigo-700 hover:bg-indigo-100"
+        >
+          Change
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange('')}
+          className="text-gray-400 hover:text-red-600 p-1 rounded hover:bg-red-50"
+          title="Remove sponsor"
+        >
+          <X size={14}/>
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="relative">
+      <div className="relative">
+        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"/>
+        <input
+          type="text"
+          value={q}
+          onChange={e => { setQ(e.target.value); setOpen(true) }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+          placeholder="Search by name, broker ID or phone…"
+          className="w-full rounded-lg border border-gray-200 pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+        />
+      </div>
+      {open && (
+        <div className="absolute z-50 left-0 right-0 mt-1 max-h-72 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg">
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => { onChange(''); setOpen(false); setQ('') }}
+            className="w-full text-left px-3 py-2 text-xs text-gray-500 hover:bg-gray-50 border-b border-gray-100"
+          >
+            — No sponsor (top of tree) —
+          </button>
+          {filtered.length === 0 ? (
+            <div className="px-3 py-4 text-center text-xs text-gray-400">No matches.</div>
+          ) : filtered.map((b: any) => (
+            <button
+              key={b.id}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => { onChange(b.id); setOpen(false); setQ('') }}
+              className="w-full text-left px-3 py-2 hover:bg-blue-50 flex items-center gap-2 border-b border-gray-50 last:border-b-0"
+            >
+              <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-[10px] shrink-0">
+                {(b.name || '?')[0].toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="font-medium text-sm text-gray-900 truncate">{b.name} <span className="font-mono text-[10px] text-gray-400">[{b.broker_id}]</span></div>
+                <div className="text-[11px] text-gray-500 truncate">{b.rank || '—'} · {b.phone || '—'}</div>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
