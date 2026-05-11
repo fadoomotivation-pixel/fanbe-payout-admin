@@ -36,26 +36,19 @@ const today = () => new Date().toISOString().slice(0,10)
 
 const EMPTY: any = {
   plot_id:'', customer_id:'', broker_id:'', project_id:'', stage:'token_received',
-
-  // Pricing breakdown (the booking math)
   size_sqyd:'', rate_per_sqyd:'',
   dev_charges:'0', plc_charges:'0', discount_amount:'0',
-
   notes:'',
   application_date: today(), booking_time:'', customer_bank_name:'',
   upline_broker_code:'', manager_signature_by:'', affidavit_accepted:true,
   cust_mode: 'new' as CustMode,
   new_customer: { ...NEW_CUST_EMPTY },
-
   token_enabled: false,
   token_amount: '', token_date: today(), token_mode: 'cash', token_utr: '', token_drawn_on: '', token_branch: '',
-
   booking_enabled: true,
   booking_amount: '', booking_date: today(), booking_mode: 'cash', booking_utr: '', booking_drawn_on: '', booking_branch: '',
-
   emi_enabled: false,
   emi_n: '12', emi_freq: 'monthly', emi_start: today(),
-
   full_enabled: false,
   full_amount: '', full_date: today(), full_mode: 'cash', full_utr: '',
 }
@@ -80,6 +73,24 @@ export default function Bookings() {
         .order('created_at', { ascending: false })
       if (error) throw error
       return data
+    },
+  })
+
+  // Sum verified payments per booking → drives the Paid / Balance columns.
+  const { data: paidByBooking = {} } = useQuery<Record<string, number>>({
+    queryKey: ['payments_by_booking'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('bp_payments')
+        .select('booking_id, amount')
+        .eq('verification_status', 'verified')
+      if (error) throw error
+      const out: Record<string, number> = {}
+      for (const p of data || []) {
+        if (!p.booking_id) continue
+        out[p.booking_id] = (out[p.booking_id] || 0) + Number(p.amount || 0)
+      }
+      return out
     },
   })
 
@@ -132,7 +143,6 @@ export default function Bookings() {
     },
   })
 
-  // ── Pricing math ───────────────────────────────────────────────
   const num = (v: any) => Number(v) || 0
   const size  = num(form.size_sqyd)
   const rate  = num(form.rate_per_sqyd)
@@ -142,7 +152,6 @@ export default function Bookings() {
   const disc  = num(form.discount_amount)
   const totalNet = Math.max(0, basePrice + dev + plc - disc)
 
-  // ── Broker commission preview (BASE PRICE ONLY, excludes dev + plc) ──
   const selectedBroker = (brokers as any[]).find((b: any) => b.id === form.broker_id)
   const brokerRankPct = selectedBroker
     ? Number((ranks as any[]).find((r: any) => r.rank_name === selectedBroker.rank)?.commission_pct || 0)
@@ -195,7 +204,6 @@ export default function Bookings() {
     mutationFn: async (p: any) => {
       const { cust_mode, new_customer, ...rest } = p
       let customer_id = rest.customer_id
-
       if (cust_mode === 'new') {
         if (!new_customer?.name || !new_customer?.phone) throw new Error('New customer name & phone required')
         const { data: nc, error: ncErr } = await supabase.from('bp_customers').insert({
@@ -206,86 +214,52 @@ export default function Bookings() {
         if (ncErr || !nc) throw ncErr || new Error('Failed to create customer')
         customer_id = nc.id
       }
-
       const stage = autoStage(rest)
       const project = (projects as any[]).find((pj: any) => pj.id === rest.project_id)
       const broker  = (brokers as any[]).find((b: any) => b.id === rest.broker_id)
       const brokerPct = broker ? Number((ranks as any[]).find((r: any) => r.rank_name === broker.rank)?.commission_pct || 0) : 0
-
-      const sz   = num(rest.size_sqyd)
-      const rt   = num(rest.rate_per_sqyd)
+      const sz   = num(rest.size_sqyd); const rt = num(rest.rate_per_sqyd)
       const base = Math.round(sz * rt)
-      const d    = num(rest.dev_charges)
-      const pl   = num(rest.plc_charges)
-      const dsc  = num(rest.discount_amount)
+      const d    = num(rest.dev_charges); const pl = num(rest.plc_charges); const dsc = num(rest.discount_amount)
       const total = Math.max(0, base + d + pl - dsc)
-
       const tokenAmt   = rest.token_enabled   ? num(rest.token_amount) : 0
       const bookingAmt = rest.booking_enabled ? num(rest.booking_amount) : 0
       const fullAmt    = rest.full_enabled    ? (num(rest.full_amount) || total) : 0
-
       const bookingPayload: any = {
         plot_id: rest.plot_id || null, customer_id, broker_id: rest.broker_id || null, project_id: rest.project_id || null,
         stage,
-        size_sqyd: sz || null,
-        rate_per_sqyd: rt || null,
-        base_price: base || null,
-        dev_charges: d,
-        plc_charges: pl,
-        discount_amount: dsc,
-        plot_total_price: total,
-        total_amount: total,
-
-        token_amount: tokenAmt || null,
-        token_date: rest.token_enabled ? rest.token_date : null,
-        booking_amount: bookingAmt || null,
-        booking_date: rest.booking_enabled ? rest.booking_date : null,
-        full_payment_amount: fullAmt || null,
-        full_payment_date: rest.full_enabled ? rest.full_date : null,
-
-        // Commission applies only to BASE price (not dev/plc)
+        size_sqyd: sz || null, rate_per_sqyd: rt || null, base_price: base || null,
+        dev_charges: d, plc_charges: pl, discount_amount: dsc,
+        plot_total_price: total, total_amount: total,
+        token_amount: tokenAmt || null, token_date: rest.token_enabled ? rest.token_date : null,
+        booking_amount: bookingAmt || null, booking_date: rest.booking_enabled ? rest.booking_date : null,
+        full_payment_amount: fullAmt || null, full_payment_date: rest.full_enabled ? rest.full_date : null,
         commission_rate: brokerPct || null,
         commission_amount: brokerPct > 0 ? Math.round(base * brokerPct / 100) : null,
-
-        notes: rest.notes || null,
-        scheme_name: project?.name || null,
-        application_date: rest.application_date || null,
-        booking_time: rest.booking_time || null,
+        notes: rest.notes || null, scheme_name: project?.name || null,
+        application_date: rest.application_date || null, booking_time: rest.booking_time || null,
         customer_bank_name: rest.customer_bank_name || null,
         upline_broker_code: rest.upline_broker_code || null,
         manager_signature_by: rest.manager_signature_by || null,
         affidavit_accepted: !!rest.affidavit_accepted,
         payment_type: rest.emi_enabled ? 'emi' : (rest.full_enabled ? 'full' : (rest.booking_enabled ? 'booking' : 'token')),
       }
-
       const { data: bk, error } = await supabase.from('bp_bookings').insert(bookingPayload).select().single()
       if (error) throw error
-
       const sponsorName = broker?.name || null
-
-      if (rest.token_enabled && tokenAmt > 0) {
-        await recordPaymentRow({ booking_id: bk.id, customer_id, payment_type: 'token', amount: tokenAmt, payment_date: rest.token_date, payment_mode: rest.token_mode, utr_ref: rest.token_utr, drawn_on_bank: rest.token_drawn_on, branch: rest.token_branch, sponsor_name: sponsorName })
-      }
-      if (rest.booking_enabled && bookingAmt > 0) {
-        await recordPaymentRow({ booking_id: bk.id, customer_id, payment_type: 'booking', amount: bookingAmt, payment_date: rest.booking_date, payment_mode: rest.booking_mode, utr_ref: rest.booking_utr, drawn_on_bank: rest.booking_drawn_on, branch: rest.booking_branch, sponsor_name: sponsorName })
-      }
-      if (rest.full_enabled && fullAmt > 0) {
-        await recordPaymentRow({ booking_id: bk.id, customer_id, payment_type: 'full_payment', amount: fullAmt, payment_date: rest.full_date, payment_mode: rest.full_mode, utr_ref: rest.full_utr, sponsor_name: sponsorName })
-      }
-
+      if (rest.token_enabled && tokenAmt > 0)   await recordPaymentRow({ booking_id: bk.id, customer_id, payment_type: 'token',        amount: tokenAmt,   payment_date: rest.token_date,   payment_mode: rest.token_mode,   utr_ref: rest.token_utr,   drawn_on_bank: rest.token_drawn_on,   branch: rest.token_branch,   sponsor_name: sponsorName })
+      if (rest.booking_enabled && bookingAmt > 0) await recordPaymentRow({ booking_id: bk.id, customer_id, payment_type: 'booking',      amount: bookingAmt, payment_date: rest.booking_date, payment_mode: rest.booking_mode, utr_ref: rest.booking_utr, drawn_on_bank: rest.booking_drawn_on, branch: rest.booking_branch, sponsor_name: sponsorName })
+      if (rest.full_enabled && fullAmt > 0)     await recordPaymentRow({ booking_id: bk.id, customer_id, payment_type: 'full_payment', amount: fullAmt,    payment_date: rest.full_date,    payment_mode: rest.full_mode,    utr_ref: rest.full_utr, sponsor_name: sponsorName })
       if (rest.emi_enabled) {
         const principal = Math.max(0, total - tokenAmt - bookingAmt - fullAmt)
-        if (principal > 0) {
-          await generateEmiSchedule(bk.id, customer_id, principal, num(rest.emi_n) || 12, rest.emi_freq || 'monthly', rest.emi_start || today())
-        }
+        if (principal > 0) await generateEmiSchedule(bk.id, customer_id, principal, num(rest.emi_n) || 12, rest.emi_freq || 'monthly', rest.emi_start || today())
       }
-
       return bk
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['bookings'] })
       qc.invalidateQueries({ queryKey: ['customers'] })
-      qc.invalidateQueries({ queryKey: ['payments'] })
+      qc.invalidateQueries({ queryKey: ['payments_by_booking'] })
       qc.invalidateQueries({ queryKey: ['emi_schedules'] })
       toast.success('Booking saved')
     },
@@ -297,12 +271,9 @@ export default function Bookings() {
       const project = (projects as any[]).find((pj: any) => pj.id === data.project_id)
       const broker  = (brokers as any[]).find((b: any) => b.id === data.broker_id)
       const brokerPct = broker ? Number((ranks as any[]).find((r: any) => r.rank_name === broker.rank)?.commission_pct || 0) : 0
-      const sz   = num(data.size_sqyd)
-      const rt   = num(data.rate_per_sqyd)
+      const sz   = num(data.size_sqyd); const rt = num(data.rate_per_sqyd)
       const base = Math.round(sz * rt)
-      const d    = num(data.dev_charges)
-      const pl   = num(data.plc_charges)
-      const dsc  = num(data.discount_amount)
+      const d    = num(data.dev_charges); const pl = num(data.plc_charges); const dsc = num(data.discount_amount)
       const total = Math.max(0, base + d + pl - dsc)
       const payload = {
         plot_id: data.plot_id || null, customer_id: data.customer_id || null,
@@ -365,11 +336,8 @@ export default function Bookings() {
   }
 
   const save = async () => {
-    if (editing) {
-      await update.mutateAsync({ id: editing.id, data: form })
-    } else {
-      await create.mutateAsync(form)
-    }
+    if (editing) await update.mutateAsync({ id: editing.id, data: form })
+    else await create.mutateAsync(form)
     setModal(false)
   }
 
@@ -401,8 +369,6 @@ export default function Bookings() {
   const totalValue  = all.filter((b: any) => b.stage === 'booking_done').reduce((s: number, b: any) => s + Number(b.total_amount || b.plot_total_price || 0), 0)
   const filtered = stageFilter === 'all' ? all : all.filter((b: any) => b.stage === stageFilter)
 
-  // Payment / balance preview — token + booking + full are deducted
-  // from the total net value to show the admin the remaining balance.
   const tokenAmt = form.token_enabled ? num(form.token_amount) : 0
   const bookingAmt = form.booking_enabled ? num(form.booking_amount) : 0
   const fullAmt = form.full_enabled ? (num(form.full_amount) || totalNet) : 0
@@ -410,6 +376,8 @@ export default function Bookings() {
   const balanceDue = Math.max(0, totalNet - paidToday)
   const principalPreview = balanceDue
   const emiAmtPreview = principalPreview > 0 && num(form.emi_n) > 0 ? Math.round(principalPreview / num(form.emi_n)) : 0
+
+  const paidMap = paidByBooking as Record<string, number>
 
   const cols = [
     { header: 'Booking No', render: (r: any) => <span className="font-mono text-xs font-semibold text-blue-700">{r.booking_no}</span> },
@@ -442,6 +410,20 @@ export default function Bookings() {
       ),
     },
     {
+      header: 'Paid / Balance',
+      render: (r: any) => {
+        const paid = paidMap[r.id] || 0
+        const total = Number(r.total_amount || r.plot_total_price || 0)
+        const bal = Math.max(0, total - paid)
+        return (
+          <div>
+            <div className="font-semibold text-emerald-700 text-sm">{formatINR(paid)}</div>
+            <div className={`text-[11px] font-medium ${bal > 0 ? 'text-orange-600' : 'text-gray-400'}`}>Bal {formatINR(bal)}</div>
+          </div>
+        )
+      },
+    },
+    {
       header: 'Stage',
       render: (r: any) => {
         const meta = STAGE_META[r.stage as Stage] || STAGE_META.token_received
@@ -472,7 +454,7 @@ export default function Bookings() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Bookings</h1>
-          <p className="text-sm text-gray-500">{all.length} total · Confirmed value: {formatINR(totalValue)}</p>
+          <p className="text-sm text-gray-500">{all.length} total · Confirmed value: {formatINR(totalValue)} · pipeline: Token Received → Booking Done</p>
         </div>
         <Button onClick={() => open()}><Plus size={14} />New Booking</Button>
       </div>
@@ -491,7 +473,6 @@ export default function Bookings() {
       </div>
 
       <Modal open={modal} onClose={() => setModal(false)} title={editing ? 'Edit Booking' : 'New Booking — आवेदन-पत्र'}>
-        {/* 1. SCHEME & PLOT */}
         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">आवासीय योजना (Scheme) & Plot</div>
         <div className="grid grid-cols-2 gap-3">
           <Select label="आवासीय योजना का नाम (Project / Scheme)" value={form.project_id} onChange={(e: any) => set('project_id', e.target.value)} className="col-span-2">
@@ -504,7 +485,6 @@ export default function Bookings() {
           </Select>
         </div>
 
-        {/* 2. PRICING BREAKDOWN */}
         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Pricing Breakdown</div>
         <div className="grid grid-cols-2 gap-3">
           <Input label="आकार / Size (वर्ग गज / sq.yd)" type="number" value={form.size_sqyd} onChange={(e:any) => set('size_sqyd', e.target.value)} />
@@ -514,7 +494,6 @@ export default function Bookings() {
           <Input label="Discount (₹)" type="number" value={form.discount_amount} onChange={(e:any) => set('discount_amount', e.target.value)} />
         </div>
 
-        {/* Live calc panel */}
         <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg text-sm">
           <div className="grid grid-cols-2 gap-y-1.5 gap-x-4">
             <div className="text-gray-600">Base price <span className="text-[10px] text-gray-400">({size || 0} × ₹{rate || 0})</span></div>
@@ -529,24 +508,9 @@ export default function Bookings() {
             <div className="text-right text-green-700 font-bold text-base border-t border-gray-300 pt-1.5">{formatINR(totalNet)}</div>
             {!editing && paidToday > 0 && (
               <>
-                {tokenAmt > 0 && (
-                  <>
-                    <div className="text-gray-600">− Token paid today</div>
-                    <div className="text-right font-semibold text-red-700">−{formatINR(tokenAmt)}</div>
-                  </>
-                )}
-                {bookingAmt > 0 && (
-                  <>
-                    <div className="text-gray-600">− Booking amount paid today</div>
-                    <div className="text-right font-semibold text-red-700">−{formatINR(bookingAmt)}</div>
-                  </>
-                )}
-                {fullAmt > 0 && (
-                  <>
-                    <div className="text-gray-600">− Full payment today</div>
-                    <div className="text-right font-semibold text-red-700">−{formatINR(fullAmt)}</div>
-                  </>
-                )}
+                {tokenAmt > 0 && (<><div className="text-gray-600">− Token paid today</div><div className="text-right font-semibold text-red-700">−{formatINR(tokenAmt)}</div></>)}
+                {bookingAmt > 0 && (<><div className="text-gray-600">− Booking amount paid today</div><div className="text-right font-semibold text-red-700">−{formatINR(bookingAmt)}</div></>)}
+                {fullAmt > 0 && (<><div className="text-gray-600">− Full payment today</div><div className="text-right font-semibold text-red-700">−{formatINR(fullAmt)}</div></>)}
                 <div className="text-gray-900 font-semibold border-t border-gray-300 pt-1.5">शेष / Balance due</div>
                 <div className={`text-right font-bold text-base border-t border-gray-300 pt-1.5 ${balanceDue > 0 ? 'text-orange-700' : 'text-green-700'}`}>{formatINR(balanceDue)}</div>
               </>
@@ -555,15 +519,11 @@ export default function Bookings() {
           {selectedBroker && brokerRankPct > 0 && (
             <div className="mt-3 pt-3 border-t border-gray-200 flex items-start gap-2 text-xs text-blue-900 bg-blue-50 -mx-3 -mb-3 px-3 py-2 rounded-b-lg">
               <Info size={13} className="mt-0.5 shrink-0"/>
-              <div>
-                <b>{selectedBroker.name}</b>'s commission ({brokerRankPct}% of base price): <b>{formatINR(commissionAmt)}</b>.
-                Development & PLC charges are excluded from commission.
-              </div>
+              <div><b>{selectedBroker.name}</b>'s commission ({brokerRankPct}% of base price): <b>{formatINR(commissionAmt)}</b>. Development & PLC charges are excluded from commission.</div>
             </div>
           )}
         </div>
 
-        {/* 3. PAYMENT PLAN */}
         {!editing && (
           <>
             <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Payment Plan</div>
@@ -596,7 +556,6 @@ export default function Bookings() {
           </>
         )}
 
-        {/* 4. CUSTOMER */}
         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100 flex items-center justify-between">
           <span>Customer</span>
           {!editing && (
@@ -651,7 +610,6 @@ export default function Bookings() {
           </div>
         )}
 
-        {/* 5. BOOKING META */}
         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Booking</div>
         <div className="grid grid-cols-2 gap-3">
           <Input label="Application Date" type="date" value={form.application_date} onChange={(e: any) => set('application_date', e.target.value)} />
@@ -659,7 +617,6 @@ export default function Bookings() {
           <Input label="Customer Bank Name" value={form.customer_bank_name} onChange={(e: any) => set('customer_bank_name', e.target.value)} placeholder="e.g. HDFC Bank" />
         </div>
 
-        {/* 6. SPONSOR & APPROVALS */}
         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Sponsor & Approvals</div>
         <div className="grid grid-cols-2 gap-3">
           <Select label="परिचयकर्ता / Upline Broker" value={form.broker_id} onChange={(e: any) => handleBrokerChange(e.target.value)}>
