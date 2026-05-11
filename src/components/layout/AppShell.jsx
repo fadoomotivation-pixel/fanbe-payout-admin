@@ -10,12 +10,15 @@ import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
 
-// Simplified workflow: Customer → Booking. Inquiries / Customer History removed
-// from navigation (routes kept for backward compatibility / direct URL access).
+// Grouping reorganized so admin can quickly answer:
+//   • Big picture                 → Main
+//   • Customer-side flows         → Customer / Real Estate
+//   • Commission & broker payout  → Commission & Payouts
 const NAV = [
   { group: 'Main', items: [
     { to: '/',               icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/analytics',      icon: BarChart2,        label: 'Analytics' },
+    { to: '/reports',        icon: FileText,         label: 'Reports' },
     { to: '/balance-sheet',  icon: TrendingUp,       label: 'Balance Sheet' },
   ]},
   { group: 'Customer', items: [
@@ -28,13 +31,13 @@ const NAV = [
     { to: '/payments',  icon: CreditCard, label: 'Payments' },
     { to: '/emi',       icon: Calculator, label: 'EMI Schedule' },
   ]},
-  { group: 'Brokerage', items: [
+  { group: 'Commission & Payouts', items: [
     { to: '/brokers',          icon: Users,    label: 'Brokers' },
-    { to: '/kyc',              icon: UserCheck,label: 'KYC Review' },
+    { to: '/commission',       icon: Layers,   label: 'Commission Ledger' },
     { to: '/payouts',          icon: Banknote, label: 'Payouts' },
     { to: '/withdrawals',      icon: Wallet,   label: 'Withdrawals' },
-    { to: '/commission',       icon: Layers,   label: 'Commission Rules' },
     { to: '/commission-ranks', icon: Layers,   label: 'Rank Slabs' },
+    { to: '/kyc',              icon: UserCheck,label: 'KYC Review' },
   ]},
   { group: 'Operations', items: [
     { to: '/expenses', icon: Receipt,    label: 'Expenses' },
@@ -44,7 +47,6 @@ const NAV = [
   { group: 'Admin', items: [
     { to: '/roles',         icon: ShieldCheck, label: 'Roles & Perms' },
     { to: '/bank-accounts', icon: Landmark,    label: 'Bank Accounts' },
-    { to: '/reports',       icon: FileText,    label: 'Reports' },
     { to: '/settings',      icon: Settings,    label: 'Settings' },
   ]},
 ]
