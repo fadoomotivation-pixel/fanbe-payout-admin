@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/Button.tsx'
 import { Input, Select } from '@/components/ui/Input.tsx'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
-import { KYC_COLORS } from '@/lib/utils'
+import { KYC_COLORS, formatINR } from '@/lib/utils'
 import { Plus, Search, KeyRound, Copy, Check, Eye, UserPlus } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -48,6 +48,27 @@ export default function Brokers() {
     },
   })
 
+  const { data: earningsByBroker = {} } = useQuery({
+    queryKey: ['broker_earnings'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('bp_bookings')
+        .select('broker_id, commission_amount, application_date, stage')
+        .eq('stage', 'booking_done')
+      if (error) throw error
+      const out: Record<string, { total: number; ytd: number; count: number }> = {}
+      const year = new Date().getFullYear()
+      for (const b of data || []) {
+        if (!b.broker_id) continue
+        const o = out[b.broker_id] ??= { total: 0, ytd: 0, count: 0 }
+        const c = Number(b.commission_amount || 0)
+        o.total += c; o.count += 1
+        if (b.application_date && new Date(b.application_date).getFullYear() === year) o.ytd += c
+      }
+      return out
+    },
+  })
+
   const { data: ranks = [] } = useQuery({
     queryKey: ['commission_ranks_active'],
     queryFn: async () => {
@@ -80,7 +101,6 @@ export default function Brokers() {
   const [sponsorSearch, setSponsorSearch] = useState('')
   const [copiedKey, setCopiedKey] = useState<string|null>(null)
   const [loginResult, setLoginResult] = useState<any>(null)
-  // Edit-mode only: admin types a password to reset login. On Add we always use phone digits.
   const [editPassword, setEditPassword] = useState('')
   const [showEditPassword, setShowEditPassword] = useState(false)
 
@@ -123,7 +143,6 @@ export default function Brokers() {
       const created = await create.mutateAsync(payload)
       qc.invalidateQueries({ queryKey: ['brokers'] })
 
-      // Always use the phone digits as the broker's first password.
       const pwd = digitsOnly(form.phone)
       if (pwd.length >= 6 && payload.email) {
         try {
@@ -149,6 +168,7 @@ export default function Brokers() {
 
   const rankList = ranks as any[]
   const rankPctFor = (rankName: string) => rankList.find((r: any) => r.rank_name === rankName)?.commission_pct
+  const earnings: any = earningsByBroker
 
   const copy = async (text: string, key: string) => {
     try { await navigator.clipboard.writeText(text); setCopiedKey(key); setTimeout(() => setCopiedKey(null), 1200) } catch { toast.error('Copy failed') }
@@ -169,11 +189,21 @@ export default function Brokers() {
 
   const cols = [
     { header: 'Broker ID', render: (r: any) => <span className="font-mono text-xs bg-gray-100 px-2 py-0.5 rounded">{r.broker_id}</span> },
-    { header: 'Name', render: (r: any) => <span className="font-medium">{r.name}</span> },
+    { header: 'Name', render: (r: any) => <Link to={`/brokers/${r.id}`} className="font-medium text-blue-700 hover:underline">{r.name}</Link> },
     { header: 'Phone', key: 'phone' },
     { header: 'Rank', render: (r: any) => {
       const pct = rankPctFor(r.rank)
       return <div><span className="text-sm">{r.rank || '—'}</span>{pct != null && <div className="text-[10px] text-gray-400">{pct}% commission</div>}</div>
+    }},
+    { header: 'Earned (YTD)', render: (r: any) => {
+      const e = earnings[r.id]
+      if (!e) return <span className="text-xs text-gray-300">—</span>
+      return (
+        <div>
+          <div className="font-semibold text-green-700 text-sm">{formatINR(e.ytd)}</div>
+          <div className="text-[10px] text-gray-400">Total {formatINR(e.total)} · {e.count} bk</div>
+        </div>
+      )
     }},
     { header: 'Sponsor', render: (r: any) => r.sponsor?.name ? <span className="text-xs text-gray-600">{r.sponsor.name} <span className="text-gray-400">[{r.sponsor.broker_id}]</span></span> : <span className="text-xs text-gray-400">—</span> },
     { header: 'KYC', render: (r: any) => <Badge label={r.kyc_status || 'pending'} className={KYC_COLORS[r.kyc_status] || 'bg-gray-100 text-gray-600'} /> },
@@ -185,6 +215,7 @@ export default function Brokers() {
       header: '',
       render: (r: any) => (
         <div className="flex gap-1">
+          <Link to={`/brokers/${r.id}`} className="text-xs px-2 py-1 rounded bg-blue-50 hover:bg-blue-100 text-blue-700">Profile</Link>
           <Button size="sm" variant="ghost" onClick={() => open(r)}>Edit</Button>
           <Link to={`/broker/dashboard?broker_id=${r.id}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700" title="Open broker portal as this broker (read-only shadow mode)">
             <Eye size={12}/>View as
@@ -197,10 +228,7 @@ export default function Brokers() {
   const effectiveEmail = form.email?.trim() || syntheticEmailFromPhone(form.phone)
   const phoneDigits = digitsOnly(form.phone)
 
-  // Login section now reads-only on Add (always uses phone-as-password).
-  // On Edit, admin can reset password explicitly.
   const loginSection = () => {
-    // Already linked
     if (editing?.auth_user_id) {
       return (
         <div className="mt-2 p-3 bg-emerald-50 rounded-lg text-sm text-emerald-900 flex items-center gap-2">
@@ -212,7 +240,6 @@ export default function Brokers() {
         </div>
       )
     }
-    // Editing existing broker without login: allow admin to set a password explicitly
     if (editing) {
       return (
         <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-2">
@@ -237,12 +264,9 @@ export default function Brokers() {
         </div>
       )
     }
-    // Add mode: password = phone (always). Show as read-only preview.
     return (
       <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-1.5">
-        <div className="text-xs text-blue-900">
-          The broker will sign in at <b>/broker/login</b> with:
-        </div>
+        <div className="text-xs text-blue-900">The broker will sign in at <b>/broker/login</b> with:</div>
         <div className="grid grid-cols-2 gap-2 text-xs">
           <div className="bg-white rounded px-2 py-1.5"><span className="text-gray-500">Email</span><div className="font-mono">{effectiveEmail || '(fill phone above)'}</div></div>
           <div className="bg-white rounded px-2 py-1.5"><span className="text-gray-500">Password</span><div className="font-mono">{phoneDigits || '(fill phone above)'}</div></div>
@@ -255,7 +279,7 @@ export default function Brokers() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <div><h1 className="text-xl font-bold text-gray-900">Brokers</h1><p className="text-sm text-gray-500">{allBrokers.length} brokers registered · ranks driven by Commission Ranks ({rankList.length})</p></div>
+        <div><h1 className="text-xl font-bold text-gray-900">Brokers</h1><p className="text-sm text-gray-500">{allBrokers.length} brokers · click a name for the full earnings profile</p></div>
         <Button onClick={() => open()}><Plus size={14} />Add Broker</Button>
       </div>
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
