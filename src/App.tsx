@@ -7,6 +7,7 @@ import BrokerLogin from '@/pages/BrokerLogin'
 import BrokerDashboard from '@/pages/BrokerDashboard'
 import Dashboard from '@/pages/Dashboard'
 import Brokers from '@/pages/Brokers'
+import BrokerProfile from '@/pages/BrokerProfile'
 import Payouts from '@/pages/Payouts'
 import Projects from '@/pages/Projects'
 import Plots from '@/pages/Plots'
@@ -59,6 +60,7 @@ export default function App(){
         <Route path="/payments" element={<Payments/>}/>
         <Route path="/emi" element={<EMI/>}/>
         <Route path="/brokers" element={<Brokers/>}/>
+        <Route path="/brokers/:id" element={<BrokerProfile/>}/>
         <Route path="/kyc" element={<KYC/>}/>
         <Route path="/payouts" element={<Payouts/>}/>
         <Route path="/withdrawals" element={<Withdrawals/>}/>
