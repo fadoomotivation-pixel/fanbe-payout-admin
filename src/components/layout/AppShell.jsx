@@ -101,7 +101,7 @@ export default function AppShell() {
           {!collapsed && (
             <div className="sidebar-logo-text">
               <div className="sidebar-logo-title">Fanbe Group</div>
-              <div className="sidebar-logo-sub">Real Estate CRM</div>
+              <div className="sidebar-logo-sub">Control Panel</div>
             </div>
           )}
         </div>
