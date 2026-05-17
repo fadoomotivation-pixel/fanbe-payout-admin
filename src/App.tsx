@@ -33,6 +33,7 @@ import CommissionRanks from '@/pages/CommissionRanks'
 import AchieversClub from '@/pages/AchieversClub'
 import TeamRewards from '@/pages/TeamRewards'
 import PayoutTerms from '@/pages/PayoutTerms'
+import PayoutCycles from '@/pages/PayoutCycles'
 
 function Guard({children}:{children:any}){
   const[session,setSession]=useState<any>(undefined)
@@ -63,6 +64,7 @@ export default function App(){
         <Route path="/brokers/:id" element={<BrokerProfile/>}/>
         <Route path="/kyc" element={<KYC/>}/>
         <Route path="/payouts" element={<Payouts/>}/>
+        <Route path="/payout-cycles" element={<PayoutCycles/>}/>
         <Route path="/withdrawals" element={<Withdrawals/>}/>
         <Route path="/commission" element={<Commission/>}/>
         <Route path="/commission-ranks" element={<CommissionRanks/>}/>

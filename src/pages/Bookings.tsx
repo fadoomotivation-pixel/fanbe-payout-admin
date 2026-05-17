@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { Table } from '@/components/ui/Table.tsx'
 import { Button } from '@/components/ui/Button.tsx'
@@ -9,8 +9,10 @@ import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import { printApplicationForm } from '@/lib/printTemplates'
+import { logClosure, getCurrentUserId } from '@/lib/closure'
+import { ClosureDialog } from '@/components/ClosureDialog'
 import EmiPanel from '@/components/EmiPanel'
-import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info, Banknote, IndianRupee } from 'lucide-react'
+import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info, Banknote, IndianRupee, Lock, Unlock } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const STAGES = ['token_received','booking_done','cancelled'] as const
@@ -23,7 +25,7 @@ const STAGE_META: Record<Stage, { label: string; color: string }> = {
 }
 const PIPELINE_STAGES: Stage[] = ['token_received','booking_done']
 
-type Category = 'all' | 'token' | 'advance' | 'full' | 'cancelled'
+type Category = 'all' | 'token' | 'advance' | 'full' | 'cancelled' | 'closed'
 
 const CATEGORY_META: Record<Category, { label: string; sub: string; activeClass: string; idleClass: string }> = {
   all:       { label: 'All Bookings',    sub: 'Everything across stages',                   activeClass: 'bg-gray-900 text-white border-gray-900',         idleClass: 'bg-white text-gray-600 border-gray-200 hover:border-gray-400' },
@@ -31,6 +33,7 @@ const CATEGORY_META: Record<Category, { label: string; sub: string; activeClass:
   advance:   { label: 'Advance Booking', sub: 'Booking amount paid · EMI in progress',      activeClass: 'bg-blue-600 text-white border-blue-600',         idleClass: 'bg-white text-blue-700 border-blue-200 hover:border-blue-400' },
   full:      { label: 'Full Payment',    sub: 'Fully settled · zero balance',               activeClass: 'bg-emerald-600 text-white border-emerald-600',   idleClass: 'bg-white text-emerald-700 border-emerald-200 hover:border-emerald-400' },
   cancelled: { label: 'Cancelled',       sub: 'Cancelled bookings',                         activeClass: 'bg-red-600 text-white border-red-600',           idleClass: 'bg-white text-red-700 border-red-200 hover:border-red-400' },
+  closed:    { label: 'Closed',          sub: 'Locked · settled & archived',                 activeClass: 'bg-slate-900 text-white border-slate-900',        idleClass: 'bg-white text-slate-700 border-slate-300 hover:border-slate-500' },
 }
 
 const PAYMENT_MODES = ['cash','neft','rtgs','imps','upi','cheque','dd'] as const
@@ -66,13 +69,13 @@ const EMPTY: any = {
 
 export default function Bookings() {
   const qc = useQueryClient()
-  const navigate = useNavigate()
   const [modal, setModal]     = useState(false)
   const [editing, setEditing] = useState<any>(null)
   const [form, setForm]       = useState<any>(EMPTY)
   const [category, setCategory] = useState<Category>('all')
   const [emiBooking, setEmiBooking] = useState<any>(null)
   const [recordBookingFor, setRecordBookingFor] = useState<any>(null)
+  const [closureFor, setClosureFor] = useState<{ booking: any; action: 'close' | 'reopen' } | null>(null)
   const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }))
   const setNC = (k: string, v: any) => setForm((p: any) => ({ ...p, new_customer: { ...p.new_customer, [k]: v } }))
 
@@ -407,6 +410,59 @@ export default function Bookings() {
     onError: (e: any) => toast.error(e.message),
   })
 
+  const closeBooking = useMutation({
+    mutationFn: async (p: { booking: any; reason: string }) => {
+      const userId = await getCurrentUserId()
+      const { error } = await supabase.from('bp_bookings').update({
+        closed_at: new Date().toISOString(),
+        closed_by: userId,
+        closure_notes: p.reason || null,
+        reopened_at: null,
+        reopened_by: null,
+        reopen_reason: null,
+        updated_at: new Date().toISOString(),
+      }).eq('id', p.booking.id)
+      if (error) throw error
+      if (p.booking.plot_id && p.booking.stage === 'booking_done') {
+        await supabase.from('bp_plots').update({ status: 'sold' }).eq('id', p.booking.plot_id)
+      }
+      await logClosure({ entityType: 'booking', entityId: p.booking.id, action: 'closed', reason: p.reason, metadata: { booking_no: p.booking.booking_no, stage: p.booking.stage, total: p.booking.total_amount } })
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['bookings'] })
+      qc.invalidateQueries({ queryKey: ['plots_avail'] })
+      qc.invalidateQueries({ queryKey: ['plots'] })
+      toast.success('Booking closed')
+      setClosureFor(null)
+    },
+    onError: (e: any) => toast.error(e.message),
+  })
+
+  const reopenBooking = useMutation({
+    mutationFn: async (p: { booking: any; reason: string }) => {
+      if (!p.reason) throw new Error('Reopen reason is required')
+      const userId = await getCurrentUserId()
+      const { error } = await supabase.from('bp_bookings').update({
+        closed_at: null,
+        reopened_at: new Date().toISOString(),
+        reopened_by: userId,
+        reopen_reason: p.reason,
+        updated_at: new Date().toISOString(),
+      }).eq('id', p.booking.id)
+      if (error) throw error
+      await syncPlotStatus(p.booking.plot_id, p.booking.stage as Stage)
+      await logClosure({ entityType: 'booking', entityId: p.booking.id, action: 'reopened', reason: p.reason, metadata: { booking_no: p.booking.booking_no } })
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['bookings'] })
+      qc.invalidateQueries({ queryKey: ['plots_avail'] })
+      qc.invalidateQueries({ queryKey: ['plots'] })
+      toast.success('Booking reopened')
+      setClosureFor(null)
+    },
+    onError: (e: any) => toast.error(e.message),
+  })
+
   const open = (b?: any) => {
     setEditing(b || null)
     setForm(b ? {
@@ -475,6 +531,8 @@ export default function Bookings() {
   const paidMap = paidByBooking as Record<string, number>
   const emiMap = emiByBooking as Record<string, boolean>
 
+  const isClosed = (b: any) => !!b.closed_at
+
   const categorize = (b: any): Category => {
     if (b.stage === 'cancelled') return 'cancelled'
     if (b.stage === 'token_received') return 'token'
@@ -483,13 +541,24 @@ export default function Bookings() {
     return total > 0 && paid >= total ? 'full' : 'advance'
   }
 
+  // For per-tab counts: operational tabs exclude closed; "closed" is its own bucket.
   const categoryCounts = all.reduce((acc, b) => {
-    const c = categorize(b)
-    acc[c] = (acc[c] || 0) + 1
+    if (isClosed(b)) { acc.closed++; acc.all++; return acc }
+    acc[categorize(b)]++
+    acc.all++
     return acc
-  }, { all: all.length, token: 0, advance: 0, full: 0, cancelled: 0 } as Record<Category, number>)
+  }, { all: 0, token: 0, advance: 0, full: 0, cancelled: 0, closed: 0 } as Record<Category, number>)
 
-  const filtered = category === 'all' ? all : all.filter((b: any) => categorize(b) === category)
+  const filtered =
+    category === 'all'    ? all :
+    category === 'closed' ? all.filter(isClosed) :
+                            all.filter((b: any) => !isClosed(b) && categorize(b) === category)
+
+  const fullyPaid = (b: any) => {
+    const total = Number(b.total_amount || b.plot_total_price || 0)
+    return total > 0 && (paidMap[b.id] || 0) >= total
+  }
+  const canClose = (b: any) => !isClosed(b) && (fullyPaid(b) || b.stage === 'cancelled')
 
   const cols = [
     { header: 'Booking No', render: (r: any) => <span className="font-mono text-xs font-semibold text-blue-700">{r.booking_no}</span> },
@@ -561,7 +630,16 @@ export default function Bookings() {
       header: 'Stage',
       render: (r: any) => {
         const meta = STAGE_META[r.stage as Stage] || STAGE_META.token_received
-        return <Badge label={meta.label} className={meta.color} />
+        return (
+          <div className="flex flex-col gap-1">
+            <Badge label={meta.label} className={meta.color} />
+            {isClosed(r) && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-700 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded">
+                <Lock size={9}/>Closed {formatDate(r.closed_at)}
+              </span>
+            )}
+          </div>
+        )
       },
     },
     { header: 'Date', render: (r: any) => <span className="text-xs text-gray-500">{formatDate(r.application_date || r.created_at)}</span> },
@@ -571,6 +649,18 @@ export default function Bookings() {
         const cat = categorize(r)
         const hasEmi = !!emiMap[r.id]
         const ns = nextStage(r.stage as Stage)
+        const locked = isClosed(r)
+        if (locked) {
+          return (
+            <div className="flex gap-1 flex-wrap">
+              <Button size="sm" variant="ghost" onClick={() => setEmiBooking(r)}><Calculator size={12} />EMI</Button>
+              <Button size="sm" variant="ghost" onClick={() => printApplicationForm(r)}><Printer size={12} />Form</Button>
+              <Button size="sm" variant="secondary" onClick={() => setClosureFor({ booking: r, action: 'reopen' })}>
+                <Unlock size={12}/>Reopen
+              </Button>
+            </div>
+          )
+        }
         return (
           <div className="flex gap-1 flex-wrap">
             {cat === 'token' && (
@@ -589,6 +679,11 @@ export default function Bookings() {
             {cat === 'token' && ns && (
               <Button size="sm" variant="ghost" onClick={() => advanceStage.mutate({ id: r.id, stage: ns })}><ArrowRight size={12} />Mark {STAGE_META[ns].label}</Button>
             )}
+            {canClose(r) && (
+              <Button size="sm" variant="secondary" onClick={() => setClosureFor({ booking: r, action: 'close' })}>
+                <Lock size={12}/>Close
+              </Button>
+            )}
           </div>
         )
       },
@@ -605,8 +700,8 @@ export default function Bookings() {
         <Button onClick={() => open()}><Plus size={14} />New Booking</Button>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-5">
-        {(['all','token','advance','full','cancelled'] as Category[]).map(c => {
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 mb-5">
+        {(['all','token','advance','full','cancelled','closed'] as Category[]).map(c => {
           const meta = CATEGORY_META[c]
           const active = category === c
           return (
@@ -631,8 +726,9 @@ export default function Bookings() {
           <span>
             {category === 'token'     && 'These customers have paid the token only. Use "Record Booking" to capture the booking deposit and optionally start the EMI plan in one step.'}
             {category === 'advance'   && 'Booking deposit received. Start an EMI plan for the remaining balance, or record further payments from the EMI panel.'}
-            {category === 'full'      && 'Fully settled bookings — total collected matches the net value. No action required.'}
-            {category === 'cancelled' && 'Cancelled bookings. Plot has been released back to inventory.'}
+            {category === 'full'      && 'Fully settled bookings — total collected matches the net value. Use "Close" to lock the booking once the registry is complete.'}
+            {category === 'cancelled' && 'Cancelled bookings. Plot has been released back to inventory. Close to archive permanently.'}
+            {category === 'closed'    && 'Closed bookings are locked and read-only. Reopening requires a written reason and is logged in the audit trail.'}
           </span>
         </div>
       )}
@@ -811,6 +907,21 @@ export default function Bookings() {
       </Modal>
 
       <EmiPanel booking={emiBooking} open={!!emiBooking} onClose={() => setEmiBooking(null)} />
+
+      <ClosureDialog
+        open={!!closureFor}
+        action={closureFor?.action === 'reopen' ? 'reopen' : 'close'}
+        entityLabel={`booking ${closureFor?.booking?.booking_no || ''}`}
+        warning={closureFor?.action === 'close' && closureFor.booking && !fullyPaid(closureFor.booking) && closureFor.booking.stage !== 'cancelled' ? `Balance of ${formatINR(Math.max(0, Number(closureFor.booking.total_amount || 0) - (paidMap[closureFor.booking.id] || 0)))} is still outstanding.` : undefined}
+        reasonRequired={closureFor?.action === 'reopen'}
+        onClose={() => setClosureFor(null)}
+        onConfirm={async (reason) => {
+          if (!closureFor) return
+          if (closureFor.action === 'close') await closeBooking.mutateAsync({ booking: closureFor.booking, reason })
+          else await reopenBooking.mutateAsync({ booking: closureFor.booking, reason })
+        }}
+        submitting={closeBooking.isPending || reopenBooking.isPending}
+      />
 
       <RecordBookingPaymentModal
         booking={recordBookingFor}
