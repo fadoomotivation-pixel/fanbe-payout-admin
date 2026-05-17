@@ -3,10 +3,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { Button } from '@/components/ui/Button.tsx'
 import { Input } from '@/components/ui/Input.tsx'
-import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
-import { CheckCircle, Calendar, Wallet, AlertTriangle, Plus } from 'lucide-react'
+import { CheckCircle, Calendar, Wallet, AlertTriangle, Plus, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -145,9 +144,45 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
 
   useEffect(() => { if (!open) setCreating(false) }, [open])
 
+  // Bottom-sheet transition: keep the panel mounted briefly after close so the slide-down animation can play.
+  const [visible, setVisible] = useState(false)
+  const [rendered, setRendered] = useState(false)
+  useEffect(() => {
+    if (open) {
+      setRendered(true)
+      const id = requestAnimationFrame(() => setVisible(true))
+      document.body.style.overflow = 'hidden'
+      return () => { cancelAnimationFrame(id); document.body.style.overflow = '' }
+    }
+    setVisible(false)
+    const t = setTimeout(() => setRendered(false), 220)
+    return () => clearTimeout(t)
+  }, [open])
+
+  const close = () => { setVisible(false); setTimeout(onClose, 200) }
+
+  if (!rendered) return null
+
   return (
-    <Modal open={open} onClose={onClose} title={`EMI Schedule — ${booking?.booking_no || ''}`}>
-      {schedLoading ? (
+    <div className="fixed inset-0 z-50 flex flex-col justify-end">
+      <div
+        className={`absolute inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-200 ${visible ? 'opacity-100' : 'opacity-0'}`}
+        onClick={close}
+      />
+      <div
+        className={`relative w-full bg-white rounded-t-3xl shadow-2xl flex flex-col max-h-[90vh] transform transition-transform duration-200 ease-out ${visible ? 'translate-y-0' : 'translate-y-full'}`}
+        role="dialog"
+        aria-modal="true"
+      >
+        <div className="flex justify-center pt-2.5 pb-1.5">
+          <div className="w-12 h-1.5 bg-gray-300 rounded-full"/>
+        </div>
+        <div className="flex items-center justify-between px-6 pb-3 border-b border-gray-100">
+          <h2 className="text-base font-semibold text-gray-900">EMI Schedule — {booking?.booking_no || ''}</h2>
+          <button onClick={close} className="p-1.5 rounded-lg hover:bg-gray-100"><X size={16}/></button>
+        </div>
+        <div className="overflow-y-auto flex-1 px-6 py-5">
+          {schedLoading ? (
         <p className="text-sm text-gray-400">Loading…</p>
       ) : !sched ? (
         creating ? (
@@ -207,8 +242,10 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
             </table>
           </div>
         </div>
-      )}
-    </Modal>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }
 
