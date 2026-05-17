@@ -4,7 +4,8 @@ import { supabase } from '@/lib/supabase'
 import {
   LogOut, Users, Wallet, Award, TrendingUp, ArrowUpRight, AlertCircle,
   ChevronRight, EyeOff, BarChart3, Coins, Receipt, CalendarDays, Send,
-  ShieldCheck, Crown,
+  ShieldCheck, Crown, Phone, MessageCircle, Edit3, Building, Settings as Cog,
+  Activity, CheckCircle2, XCircle, Lock, Unlock, Banknote, FileText,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -18,7 +19,7 @@ function shortMonth(key: string) {
   return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(m) - 1] || key
 }
 
-type Tab = 'overview' | 'customers' | 'team' | 'payouts' | 'withdrawals'
+type Tab = 'overview' | 'customers' | 'team' | 'payouts' | 'withdrawals' | 'activity' | 'admin'
 
 export default function BrokerDashboard() {
   const navigate = useNavigate()
@@ -40,6 +41,20 @@ export default function BrokerDashboard() {
   const [wdModal, setWdModal] = useState(false)
   const [wdAmount, setWdAmount] = useState('')
   const [wdSubmitting, setWdSubmitting] = useState(false)
+  // ── Admin shadow modals ──
+  const [profileModal, setProfileModal] = useState(false)
+  const [bankModal, setBankModal]       = useState(false)
+  const [kycModal, setKycModal]         = useState<{ mode: 'approve' | 'reject' } | null>(null)
+  const [profileForm, setProfileForm]   = useState<any>({})
+  const [bankForm, setBankForm]         = useState<any>({})
+  const [kycReason, setKycReason]       = useState('')
+  const [savingProfile, setSavingProfile] = useState(false)
+  const [savingBank, setSavingBank]       = useState(false)
+  const [savingKyc, setSavingKyc]         = useState(false)
+  // ── Multi-level team ──
+  const [expandedTeam, setExpandedTeam] = useState<Set<string>>(new Set())
+  const [subTeams, setSubTeams]         = useState<Record<string, any[]>>({})
+  const [activity, setActivity]         = useState<any[]>([])
 
   useEffect(() => { (async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -134,6 +149,24 @@ export default function BrokerDashboard() {
     }
     Object.values(grouped).forEach((g: any) => g.outstanding = Math.max(0, g.totalCost - g.totalPaid))
     setCustomers(Object.values(grouped))
+
+    // ── Activity timeline: merge events from bookings, withdrawals, payouts, closure_audit ──
+    const events: any[] = []
+    for (const bb of (bk.data || []) as any[]) {
+      if (bb.created_at) events.push({ at: bb.created_at, kind: 'booking_created', title: `Booking ${bb.booking_no} created`, sub: `${bb.bp_customers?.name || '—'} · Plot ${bb.bp_plots?.plot_no || '—'}`, icon: 'booking', amount: bb.total_amount || bb.plot_total_price })
+      if (bb.closed_at) events.push({ at: bb.closed_at, kind: 'booking_closed', title: `Booking ${bb.booking_no} closed`, sub: `${bb.bp_customers?.name || '—'} · Plot ${bb.bp_plots?.plot_no || '—'}`, icon: 'lock', amount: bb.total_amount || bb.plot_total_price })
+    }
+    for (const w of (wd.data || []) as any[]) {
+      if (w.created_at) events.push({ at: w.created_at, kind: 'withdrawal_requested', title: 'Withdrawal requested', sub: w.bank_name || '—', icon: 'send', amount: w.amount, status: w.status })
+      if (w.paid_at)    events.push({ at: w.paid_at,    kind: 'withdrawal_paid',      title: 'Withdrawal paid',     sub: `UTR ${w.utr || '—'}`, icon: 'check', amount: w.net_amount || w.amount })
+      if (w.closed_at)  events.push({ at: w.closed_at,  kind: 'withdrawal_closed',    title: 'Withdrawal closed',   sub: w.bank_name || '—',    icon: 'lock', amount: w.net_amount || w.amount })
+    }
+    for (const p of (po.data || []) as any[]) {
+      if (p.created_at) events.push({ at: p.created_at, kind: 'payout',            title: `Payout L${p.level || '?'}`,         sub: p.income_type || '—', icon: 'coins', amount: p.net_payout })
+    }
+    events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+    setActivity(events.slice(0, 40))
+
     setLoading(false)
   })() }, [navigate, shadowBrokerId])
 
@@ -200,6 +233,84 @@ export default function BrokerDashboard() {
 
   const tdsPct = broker?.tds_applicable ? 5 : 0
   const wdNet = Math.max(0, (Number(wdAmount) || 0) * (1 - tdsPct / 100))
+
+  // ── Admin shadow actions ─────────────────────────────────────────
+  const openProfile = () => {
+    setProfileForm({
+      name: broker?.name || '', phone: broker?.phone || '', email: broker?.email || '',
+      pan_no: broker?.pan_no || '', aadhaar_no: broker?.aadhaar_no || '',
+      rank: broker?.rank || '', status: broker?.status || 'active',
+      tds_applicable: !!broker?.tds_applicable, kyc_status: broker?.kyc_status || 'pending',
+      date_of_joining: broker?.date_of_joining || '',
+    })
+    setProfileModal(true)
+  }
+  const openBank = () => {
+    setBankForm({
+      bank_name: broker?.bank_name || '', account_no: broker?.account_no || '',
+      ifsc: broker?.ifsc || '', account_holder: broker?.account_holder || broker?.name || '',
+    })
+    setBankModal(true)
+  }
+
+  const saveProfile = async () => {
+    if (!broker) return
+    setSavingProfile(true)
+    const { error } = await supabase.from('brokers').update({
+      ...profileForm,
+      date_of_joining: profileForm.date_of_joining || null,
+      updated_at: new Date().toISOString(),
+    }).eq('id', broker.id)
+    setSavingProfile(false)
+    if (error) return toast.error(error.message)
+    setBroker({ ...broker, ...profileForm })
+    setProfileModal(false)
+    toast.success('Profile updated')
+  }
+
+  const saveBank = async () => {
+    if (!broker) return
+    setSavingBank(true)
+    const { error } = await supabase.from('brokers').update({
+      ...bankForm, updated_at: new Date().toISOString(),
+    }).eq('id', broker.id)
+    setSavingBank(false)
+    if (error) return toast.error(error.message)
+    setBroker({ ...broker, ...bankForm })
+    setBankModal(false)
+    toast.success('Bank details updated')
+  }
+
+  const submitKyc = async () => {
+    if (!broker || !kycModal) return
+    const mode = kycModal.mode
+    if (mode === 'reject' && !kycReason.trim()) return toast.error('Reason required to reject')
+    setSavingKyc(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    const newStatus = mode === 'approve' ? 'approved' : 'rejected'
+    const { error } = await supabase.from('brokers').update({
+      kyc_status: newStatus,
+      kyc_reviewed_at: new Date().toISOString(),
+      kyc_reviewed_by: user?.id || null,
+      updated_at: new Date().toISOString(),
+    }).eq('id', broker.id)
+    setSavingKyc(false)
+    if (error) return toast.error(error.message)
+    setBroker({ ...broker, kyc_status: newStatus })
+    setKycModal(null); setKycReason('')
+    toast.success(`KYC ${newStatus}`)
+  }
+
+  // ── L2 team expansion ────────────────────────────────────────────
+  const toggleTeam = async (id: string) => {
+    const next = new Set(expandedTeam)
+    if (next.has(id)) { next.delete(id); setExpandedTeam(next); return }
+    next.add(id); setExpandedTeam(next)
+    if (!subTeams[id]) {
+      const { data } = await supabase.from('brokers').select('id, name, broker_id, rank, phone').eq('sponsor_id', id)
+      setSubTeams(prev => ({ ...prev, [id]: data || [] }))
+    }
+  }
 
   const submitWithdrawal = async () => {
     if (adminShadow) { toast.error('Shadow mode is read-only'); return }
@@ -294,6 +405,42 @@ export default function BrokerDashboard() {
           </div>
         )}
 
+        {/* Admin shadow control bar */}
+        {adminShadow && (
+          <div className="bg-white border border-amber-200 rounded-xl p-4 shadow-sm">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-amber-900 inline-flex items-center gap-1.5">
+                <Cog size={14}/>Admin shadow controls
+              </h3>
+              <span className="text-[10px] text-gray-400">Acts on broker {broker?.broker_id}</span>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              <button onClick={openProfile} className="px-3 py-2 text-xs rounded-lg border border-gray-200 hover:border-amber-300 hover:bg-amber-50 inline-flex items-center gap-2">
+                <Edit3 size={13} className="text-amber-600"/>
+                <span className="font-medium">Edit profile</span>
+              </button>
+              <button onClick={openBank} className="px-3 py-2 text-xs rounded-lg border border-gray-200 hover:border-amber-300 hover:bg-amber-50 inline-flex items-center gap-2">
+                <Building size={13} className="text-amber-600"/>
+                <span className="font-medium">Bank details</span>
+              </button>
+              {broker?.kyc_status === 'pending' ? (
+                <>
+                  <button onClick={() => setKycModal({ mode: 'approve' })} className="px-3 py-2 text-xs rounded-lg border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 inline-flex items-center gap-2">
+                    <CheckCircle2 size={13}/>Approve KYC
+                  </button>
+                  <button onClick={() => setKycModal({ mode: 'reject' })} className="px-3 py-2 text-xs rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-800 inline-flex items-center gap-2">
+                    <XCircle size={13}/>Reject KYC
+                  </button>
+                </>
+              ) : (
+                <div className={`col-span-2 px-3 py-2 text-xs rounded-lg inline-flex items-center gap-2 ${broker?.kyc_status === 'approved' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-rose-50 text-rose-800 border border-rose-200'}`}>
+                  <ShieldCheck size={13}/>KYC {broker?.kyc_status} {broker?.kyc_reviewed_at && `· ${formatDate(broker.kyc_reviewed_at)}`}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Tab bar */}
         <div className="flex gap-2 border-b border-gray-200 overflow-x-auto">
           {([
@@ -302,6 +449,7 @@ export default function BrokerDashboard() {
             { key: 'team',        label: `Team (${downline.length})`,           icon: Users },
             { key: 'payouts',     label: `Payouts (${payouts.length})`,         icon: Receipt },
             { key: 'withdrawals', label: `Withdrawals (${withdrawals.length})`, icon: Send },
+            { key: 'activity',    label: `Activity (${activity.length})`,       icon: Activity },
           ] as { key: Tab; label: string; icon: any }[]).map(t => (
             <button key={t.key} onClick={() => setTab(t.key)}
               className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px inline-flex items-center gap-1.5 whitespace-nowrap ${tab === t.key ? 'border-emerald-600 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
@@ -451,21 +599,100 @@ export default function BrokerDashboard() {
         )}
 
         {tab === 'team' && (
-          <Section title={`My direct team (${downline.length})`}>
+          <Section title={`My team tree (${downline.length} direct)`}>
             {downline.length === 0 ? <p className="text-sm text-gray-500">No direct downline yet.</p> : (
               <div className="divide-y divide-gray-100">
-                {downline.map(d => (
-                  <div key={d.id} className="py-2 flex items-center justify-between">
-                    <div>
-                      <div className="font-medium text-sm">{d.name}</div>
-                      <div className="text-xs text-gray-500 font-mono">[{d.broker_id}] · {d.rank}</div>
+                {downline.map(d => {
+                  const open = expandedTeam.has(d.id)
+                  const subs = subTeams[d.id] || []
+                  return (
+                    <div key={d.id}>
+                      <div className="py-2 flex items-center justify-between gap-2">
+                        <button onClick={() => toggleTeam(d.id)} className="flex-1 flex items-center gap-2 text-left">
+                          <ChevronRight size={14} className={`text-gray-400 transition-transform ${open ? 'rotate-90' : ''}`}/>
+                          <div>
+                            <div className="font-medium text-sm">{d.name}</div>
+                            <div className="text-xs text-gray-500 font-mono">[{d.broker_id}] · {d.rank}</div>
+                          </div>
+                        </button>
+                        <div className="flex items-center gap-1.5">
+                          {d.phone && (
+                            <>
+                              <a href={`tel:${d.phone}`} className="p-1.5 rounded-full bg-blue-50 hover:bg-blue-100 text-blue-700" title="Call"><Phone size={12}/></a>
+                              <a href={`https://wa.me/${String(d.phone).replace(/[^\d]/g,'')}`} target="_blank" rel="noreferrer" className="p-1.5 rounded-full bg-emerald-50 hover:bg-emerald-100 text-emerald-700" title="WhatsApp"><MessageCircle size={12}/></a>
+                            </>
+                          )}
+                          <div className="text-right ml-2">
+                            <div className="text-sm font-semibold text-emerald-700">{formatINR(downlineEarnings[d.id] || 0)}</div>
+                            <div className="text-[10px] text-gray-400">earned</div>
+                          </div>
+                        </div>
+                      </div>
+                      {open && (
+                        <div className="ml-6 pb-3 border-l-2 border-emerald-100 pl-3 space-y-1">
+                          {subs.length === 0 ? (
+                            <div className="text-xs text-gray-400 italic py-1">No sub-team under {d.name}.</div>
+                          ) : subs.map((s: any) => (
+                            <div key={s.id} className="flex items-center justify-between text-xs py-1">
+                              <div>
+                                <span className="font-medium">{s.name}</span>
+                                <span className="text-gray-400 font-mono ml-2">[{s.broker_id}]</span>
+                                <span className="text-gray-400 ml-2">· {s.rank}</span>
+                              </div>
+                              {s.phone && (
+                                <div className="flex items-center gap-1">
+                                  <a href={`tel:${s.phone}`} className="p-1 rounded-full bg-blue-50 text-blue-700"><Phone size={10}/></a>
+                                  <a href={`https://wa.me/${String(s.phone).replace(/[^\d]/g,'')}`} target="_blank" rel="noreferrer" className="p-1 rounded-full bg-emerald-50 text-emerald-700"><MessageCircle size={10}/></a>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    <div className="text-right">
-                      <div className="text-sm font-semibold text-emerald-700">{formatINR(downlineEarnings[d.id] || 0)}</div>
-                      <div className="text-[10px] text-gray-400">their earned · {d.phone}</div>
+                  )
+                })}
+              </div>
+            )}
+          </Section>
+        )}
+
+        {tab === 'activity' && (
+          <Section title="Activity timeline" icon={<Activity size={14}/>}>
+            {activity.length === 0 ? (
+              <p className="text-sm text-gray-500">No activity yet.</p>
+            ) : (
+              <div className="divide-y divide-gray-100">
+                {activity.map((e, i) => {
+                  const Ic =
+                    e.icon === 'booking' ? FileText :
+                    e.icon === 'lock'    ? Lock :
+                    e.icon === 'send'    ? Send :
+                    e.icon === 'check'   ? CheckCircle2 :
+                    e.icon === 'coins'   ? Coins :
+                                           Activity
+                  const tint =
+                    e.kind === 'booking_created'     ? 'bg-blue-50 text-blue-700' :
+                    e.kind === 'booking_closed'     ? 'bg-slate-100 text-slate-700' :
+                    e.kind === 'withdrawal_requested' ? 'bg-amber-50 text-amber-700' :
+                    e.kind === 'withdrawal_paid'    ? 'bg-emerald-50 text-emerald-700' :
+                    e.kind === 'withdrawal_closed'  ? 'bg-slate-100 text-slate-700' :
+                    e.kind === 'payout'             ? 'bg-indigo-50 text-indigo-700' :
+                                                      'bg-gray-50 text-gray-700'
+                  return (
+                    <div key={i} className="py-2.5 flex items-start gap-3">
+                      <div className={`w-7 h-7 rounded-full flex items-center justify-center ${tint} shrink-0`}><Ic size={13}/></div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-gray-900">{e.title}</div>
+                        <div className="text-xs text-gray-500 truncate">{e.sub}</div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        {e.amount != null && <div className="text-sm font-semibold text-gray-900">{formatINR(e.amount)}</div>}
+                        <div className="text-[10px] text-gray-400">{formatDate(e.at)}</div>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </Section>
@@ -547,6 +774,117 @@ export default function BrokerDashboard() {
           </div>
         </div>
       )}
+
+      {/* ── Admin: Edit Profile Modal ─────────────────────────────── */}
+      {profileModal && (
+        <AdminModal title="Edit broker profile" subtitle={`Modifying ${broker?.name}`} onClose={() => setProfileModal(false)}>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Name"><input value={profileForm.name || ''} onChange={e => setProfileForm((p: any) => ({ ...p, name: e.target.value }))} className={fld}/></Field>
+            <Field label="Phone"><input value={profileForm.phone || ''} onChange={e => setProfileForm((p: any) => ({ ...p, phone: e.target.value }))} className={fld}/></Field>
+            <Field label="Email"><input value={profileForm.email || ''} onChange={e => setProfileForm((p: any) => ({ ...p, email: e.target.value }))} className={fld}/></Field>
+            <Field label="Date of joining"><input type="date" value={profileForm.date_of_joining || ''} onChange={e => setProfileForm((p: any) => ({ ...p, date_of_joining: e.target.value }))} className={fld}/></Field>
+            <Field label="PAN"><input value={profileForm.pan_no || ''} onChange={e => setProfileForm((p: any) => ({ ...p, pan_no: e.target.value.toUpperCase() }))} className={fld}/></Field>
+            <Field label="Aadhaar"><input value={profileForm.aadhaar_no || ''} onChange={e => setProfileForm((p: any) => ({ ...p, aadhaar_no: e.target.value }))} className={fld}/></Field>
+            <Field label="Rank">
+              <select value={profileForm.rank || ''} onChange={e => setProfileForm((p: any) => ({ ...p, rank: e.target.value }))} className={fld}>
+                {ranks.map((r: any) => <option key={r.id} value={r.rank_name}>{r.rank_name}</option>)}
+              </select>
+            </Field>
+            <Field label="Status">
+              <select value={profileForm.status || 'active'} onChange={e => setProfileForm((p: any) => ({ ...p, status: e.target.value }))} className={fld}>
+                {['active','inactive','suspended','blacklisted'].map(s => <option key={s} value={s} className="capitalize">{s}</option>)}
+              </select>
+            </Field>
+            <Field label="KYC status">
+              <select value={profileForm.kyc_status || 'pending'} onChange={e => setProfileForm((p: any) => ({ ...p, kyc_status: e.target.value }))} className={fld}>
+                {['pending','approved','rejected','re_review'].map(s => <option key={s} value={s} className="capitalize">{s.replace(/_/g,' ')}</option>)}
+              </select>
+            </Field>
+            <label className="text-xs text-gray-600 flex items-center gap-2 mt-5">
+              <input type="checkbox" checked={!!profileForm.tds_applicable} onChange={e => setProfileForm((p: any) => ({ ...p, tds_applicable: e.target.checked }))}/>
+              TDS applicable (5%) on payouts
+            </label>
+          </div>
+          <div className="flex justify-end gap-2 mt-5">
+            <button onClick={() => setProfileModal(false)} className="px-4 py-2 rounded-lg border border-gray-200 text-sm">Cancel</button>
+            <button onClick={saveProfile} disabled={savingProfile} className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-semibold disabled:opacity-50">
+              {savingProfile ? 'Saving…' : 'Save profile'}
+            </button>
+          </div>
+        </AdminModal>
+      )}
+
+      {/* ── Admin: Bank Details Modal ─────────────────────────────── */}
+      {bankModal && (
+        <AdminModal title="Bank details" subtitle="Used for withdrawal payouts" onClose={() => setBankModal(false)}>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Bank name"><input value={bankForm.bank_name || ''} onChange={e => setBankForm((p: any) => ({ ...p, bank_name: e.target.value }))} className={fld}/></Field>
+            <Field label="Account holder"><input value={bankForm.account_holder || ''} onChange={e => setBankForm((p: any) => ({ ...p, account_holder: e.target.value }))} className={fld}/></Field>
+            <Field label="Account number"><input value={bankForm.account_no || ''} onChange={e => setBankForm((p: any) => ({ ...p, account_no: e.target.value }))} className={fld}/></Field>
+            <Field label="IFSC"><input value={bankForm.ifsc || ''} onChange={e => setBankForm((p: any) => ({ ...p, ifsc: e.target.value.toUpperCase() }))} className={fld}/></Field>
+          </div>
+          <div className="flex justify-end gap-2 mt-5">
+            <button onClick={() => setBankModal(false)} className="px-4 py-2 rounded-lg border border-gray-200 text-sm">Cancel</button>
+            <button onClick={saveBank} disabled={savingBank} className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-semibold disabled:opacity-50">
+              {savingBank ? 'Saving…' : 'Save bank'}
+            </button>
+          </div>
+        </AdminModal>
+      )}
+
+      {/* ── Admin: KYC Approve/Reject Modal ───────────────────────── */}
+      {kycModal && (
+        <AdminModal
+          title={kycModal.mode === 'approve' ? 'Approve KYC' : 'Reject KYC'}
+          subtitle={`Acting on broker ${broker?.broker_id}`}
+          onClose={() => { setKycModal(null); setKycReason('') }}
+        >
+          <div className={`rounded-lg p-3 text-sm flex items-start gap-2 ${kycModal.mode === 'approve' ? 'bg-emerald-50 text-emerald-900 border border-emerald-200' : 'bg-rose-50 text-rose-900 border border-rose-200'}`}>
+            {kycModal.mode === 'approve' ? <CheckCircle2 size={16} className="mt-0.5"/> : <XCircle size={16} className="mt-0.5"/>}
+            <div>{kycModal.mode === 'approve' ? 'The broker can request withdrawals once KYC is approved.' : 'Reject — the broker stays on hold for payouts.'}</div>
+          </div>
+          {kycModal.mode === 'reject' && (
+            <div className="mt-3">
+              <label className="text-xs text-gray-500 block mb-1">Reason (required)</label>
+              <textarea value={kycReason} onChange={e => setKycReason(e.target.value)} rows={3} className={`${fld} resize-none`}/>
+            </div>
+          )}
+          <div className="flex justify-end gap-2 mt-5">
+            <button onClick={() => { setKycModal(null); setKycReason('') }} className="px-4 py-2 rounded-lg border border-gray-200 text-sm">Cancel</button>
+            <button onClick={submitKyc} disabled={savingKyc} className={`px-4 py-2 rounded-lg text-white text-sm font-semibold disabled:opacity-50 ${kycModal.mode === 'approve' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-rose-600 hover:bg-rose-700'}`}>
+              {savingKyc ? 'Saving…' : kycModal.mode === 'approve' ? 'Approve KYC' : 'Reject KYC'}
+            </button>
+          </div>
+        </AdminModal>
+      )}
+    </div>
+  )
+}
+
+const fld = 'w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400'
+
+function Field({ label, children }: any) {
+  return (
+    <div>
+      <label className="text-xs text-gray-500 block mb-1">{label}</label>
+      {children}
+    </div>
+  )
+}
+
+function AdminModal({ title, subtitle, onClose, children }: any) {
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4" onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} className="bg-white rounded-2xl max-w-lg w-full p-5 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <h3 className="text-lg font-bold text-gray-900">{title}</h3>
+            {subtitle && <p className="text-xs text-gray-500">{subtitle}</p>}
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl leading-none">✕</button>
+        </div>
+        {children}
+      </div>
     </div>
   )
 }
