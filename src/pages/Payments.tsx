@@ -99,14 +99,18 @@ export default function Payments() {
 
   const updateStatus = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      const payload: any = { verification_status: status }
+      if (status === 'verified') payload.verified_at = new Date().toISOString()
+      if (status === 'rejected') payload.verified_at = null
       const { error } = await supabase
         .from('bp_payments')
-        .update({ verification_status: status, verified_at: new Date().toISOString() })
+        .update(payload)
         .eq('id', id)
       if (error) throw error
     },
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['payments'] })
+      qc.invalidateQueries({ queryKey: ['payments_by_booking'] })
       const updated = payments.find((p: any) => p.id === vars.id)
       if (vars.status === 'verified' && updated) printPaymentReceipt({ ...updated, verification_status: 'verified', verified_at: new Date().toISOString() })
       toast.success(vars.status === 'verified' ? 'Payment verified — receipt printed' : 'Payment rejected')
