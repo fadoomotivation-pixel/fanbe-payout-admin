@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { Search, User, Wallet, CalendarDays, AlertTriangle, Printer, FileText } from 'lucide-react'
 import { formatINR, formatDate } from '@/lib/utils'
@@ -6,12 +7,25 @@ import { printPaymentReceipt } from '@/lib/printTemplates'
 import toast from 'react-hot-toast'
 
 export default function Customers() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [customers, setCustomers] = useState<any[]>([])
   const [loading, setLoading]     = useState(true)
   const [q, setQ]                 = useState('')
-  const [activeId, setActiveId]   = useState<string | null>(null)
+  const [activeId, setActiveIdState] = useState<string | null>(searchParams.get('customer'))
   const [detail, setDetail]       = useState<any>(null)
   const [detailLoading, setDetailLoading] = useState(false)
+
+  const setActiveId = (id: string | null) => {
+    setActiveIdState(id)
+    const next = new URLSearchParams(searchParams)
+    if (id) next.set('customer', id); else next.delete('customer')
+    setSearchParams(next, { replace: true })
+  }
+
+  useEffect(() => {
+    const fromUrl = searchParams.get('customer')
+    if (fromUrl && fromUrl !== activeId) setActiveIdState(fromUrl)
+  }, [searchParams])
 
   useEffect(() => { (async () => {
     const { data, error } = await supabase

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { Table } from '@/components/ui/Table.tsx'
 import { Button } from '@/components/ui/Button.tsx'
@@ -9,7 +10,7 @@ import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import { printApplicationForm } from '@/lib/printTemplates'
 import EmiPanel from '@/components/EmiPanel'
-import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info } from 'lucide-react'
+import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info, Banknote, IndianRupee } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const STAGES = ['token_received','booking_done','cancelled'] as const
@@ -21,6 +22,16 @@ const STAGE_META: Record<Stage, { label: string; color: string }> = {
   cancelled:      { label: 'Cancelled',      color: 'bg-red-50 text-red-700 border border-red-200' },
 }
 const PIPELINE_STAGES: Stage[] = ['token_received','booking_done']
+
+type Category = 'all' | 'token' | 'advance' | 'full' | 'cancelled'
+
+const CATEGORY_META: Record<Category, { label: string; sub: string; activeClass: string; idleClass: string }> = {
+  all:       { label: 'All Bookings',    sub: 'Everything across stages',                   activeClass: 'bg-gray-900 text-white border-gray-900',         idleClass: 'bg-white text-gray-600 border-gray-200 hover:border-gray-400' },
+  token:     { label: 'Token Booking',   sub: 'Token paid · awaiting booking amount',       activeClass: 'bg-orange-600 text-white border-orange-600',     idleClass: 'bg-white text-orange-700 border-orange-200 hover:border-orange-400' },
+  advance:   { label: 'Advance Booking', sub: 'Booking amount paid · EMI in progress',      activeClass: 'bg-blue-600 text-white border-blue-600',         idleClass: 'bg-white text-blue-700 border-blue-200 hover:border-blue-400' },
+  full:      { label: 'Full Payment',    sub: 'Fully settled · zero balance',               activeClass: 'bg-emerald-600 text-white border-emerald-600',   idleClass: 'bg-white text-emerald-700 border-emerald-200 hover:border-emerald-400' },
+  cancelled: { label: 'Cancelled',       sub: 'Cancelled bookings',                         activeClass: 'bg-red-600 text-white border-red-600',           idleClass: 'bg-white text-red-700 border-red-200 hover:border-red-400' },
+}
 
 const PAYMENT_MODES = ['cash','neft','rtgs','imps','upi','cheque','dd'] as const
 type CustMode = 'existing' | 'new'
@@ -55,11 +66,13 @@ const EMPTY: any = {
 
 export default function Bookings() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const [modal, setModal]     = useState(false)
   const [editing, setEditing] = useState<any>(null)
   const [form, setForm]       = useState<any>(EMPTY)
-  const [stageFilter, setStageFilter] = useState<Stage | 'all'>('all')
+  const [category, setCategory] = useState<Category>('all')
   const [emiBooking, setEmiBooking] = useState<any>(null)
+  const [recordBookingFor, setRecordBookingFor] = useState<any>(null)
   const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }))
   const setNC = (k: string, v: any) => setForm((p: any) => ({ ...p, new_customer: { ...p.new_customer, [k]: v } }))
 
@@ -90,6 +103,18 @@ export default function Bookings() {
         if (!p.booking_id) continue
         out[p.booking_id] = (out[p.booking_id] || 0) + Number(p.amount || 0)
       }
+      return out
+    },
+  })
+
+  // Booking IDs that already have an EMI schedule — drives "Start EMI" vs "View EMI" labels.
+  const { data: emiByBooking = {} } = useQuery<Record<string, boolean>>({
+    queryKey: ['emi_schedules_by_booking'],
+    queryFn: async () => {
+      const { data, error } = await supabase.from('emi_schedules').select('booking_id')
+      if (error) throw error
+      const out: Record<string, boolean> = {}
+      for (const s of data || []) if (s.booking_id) out[s.booking_id] = true
       return out
     },
   })
@@ -344,6 +369,44 @@ export default function Bookings() {
     onError: (e: any) => toast.error(e.message),
   })
 
+  // Quick-action used from the "Token Booking" tab: receive the booking deposit, move stage forward,
+  // mark the plot booked, and optionally pop the EMI panel so the user can set up instalments next.
+  const recordBookingPayment = useMutation({
+    mutationFn: async (p: { booking: any; amount: number; date: string; mode: string; utr: string; drawn_on: string; branch: string; openEmiAfter: boolean }) => {
+      if (p.amount <= 0) throw new Error('Amount must be greater than zero')
+      const b = p.booking
+      await recordPaymentRow({
+        booking_id: b.id, customer_id: b.customer_id,
+        payment_type: 'booking', amount: p.amount, payment_date: p.date,
+        payment_mode: p.mode, utr_ref: p.utr,
+        drawn_on_bank: p.drawn_on, branch: p.branch,
+        sponsor_name: b.brokers?.name || null,
+      })
+      const updatePayload: any = {
+        stage: 'booking_done',
+        booking_amount: Number(b.booking_amount || 0) + p.amount,
+        booking_date: b.booking_date || p.date,
+        payment_type: b.payment_type === 'token' ? 'booking' : b.payment_type,
+        updated_at: new Date().toISOString(),
+      }
+      const { error } = await supabase.from('bp_bookings').update(updatePayload).eq('id', b.id)
+      if (error) throw error
+      await syncPlotStatus(b.plot_id, 'booking_done')
+      return { booking: b, openEmiAfter: p.openEmiAfter }
+    },
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['bookings'] })
+      qc.invalidateQueries({ queryKey: ['payments_by_booking'] })
+      qc.invalidateQueries({ queryKey: ['payments'] })
+      qc.invalidateQueries({ queryKey: ['plots_avail'] })
+      qc.invalidateQueries({ queryKey: ['plots'] })
+      toast.success('Booking amount recorded')
+      setRecordBookingFor(null)
+      if (res?.openEmiAfter) setEmiBooking(res.booking)
+    },
+    onError: (e: any) => toast.error(e.message),
+  })
+
   const open = (b?: any) => {
     setEditing(b || null)
     setForm(b ? {
@@ -399,9 +462,7 @@ export default function Bookings() {
   }
 
   const all = bookings as any[]
-  const stageCounts = STAGES.reduce((acc, s) => ({ ...acc, [s]: all.filter((b: any) => b.stage === s).length }), {} as Record<string, number>)
   const totalValue  = all.filter((b: any) => b.stage === 'booking_done').reduce((s: number, b: any) => s + Number(b.total_amount || b.plot_total_price || 0), 0)
-  const filtered = stageFilter === 'all' ? all : all.filter((b: any) => b.stage === stageFilter)
 
   const tokenAmt = form.token_enabled ? num(form.token_amount) : 0
   const bookingAmt = form.booking_enabled ? num(form.booking_amount) : 0
@@ -412,17 +473,44 @@ export default function Bookings() {
   const emiAmtPreview = principalPreview > 0 && num(form.emi_n) > 0 ? Math.round(principalPreview / num(form.emi_n)) : 0
 
   const paidMap = paidByBooking as Record<string, number>
+  const emiMap = emiByBooking as Record<string, boolean>
+
+  const categorize = (b: any): Category => {
+    if (b.stage === 'cancelled') return 'cancelled'
+    if (b.stage === 'token_received') return 'token'
+    const total = Number(b.total_amount || b.plot_total_price || 0)
+    const paid = paidMap[b.id] || 0
+    return total > 0 && paid >= total ? 'full' : 'advance'
+  }
+
+  const categoryCounts = all.reduce((acc, b) => {
+    const c = categorize(b)
+    acc[c] = (acc[c] || 0) + 1
+    return acc
+  }, { all: all.length, token: 0, advance: 0, full: 0, cancelled: 0 } as Record<Category, number>)
+
+  const filtered = category === 'all' ? all : all.filter((b: any) => categorize(b) === category)
 
   const cols = [
     { header: 'Booking No', render: (r: any) => <span className="font-mono text-xs font-semibold text-blue-700">{r.booking_no}</span> },
     {
       header: 'Customer',
-      render: (r: any) => (
-        <div>
-          <div className="font-medium text-gray-900">{r.bp_customers?.name}</div>
-          <div className="text-xs text-gray-400">{r.bp_customers?.customer_code ? r.bp_customers.customer_code + ' · ' : ''}{r.bp_customers?.phone}</div>
-        </div>
-      ),
+      render: (r: any) => {
+        const cid = r.bp_customers?.id || r.customer_id
+        const name = r.bp_customers?.name || '—'
+        const sub = `${r.bp_customers?.customer_code ? r.bp_customers.customer_code + ' · ' : ''}${r.bp_customers?.phone || ''}`
+        return cid ? (
+          <Link to={`/customer-history?customer=${cid}`} className="block group">
+            <div className="font-medium text-gray-900 group-hover:text-blue-700 group-hover:underline">{name}</div>
+            <div className="text-xs text-gray-400">{sub}</div>
+          </Link>
+        ) : (
+          <div>
+            <div className="font-medium text-gray-900">{name}</div>
+            <div className="text-xs text-gray-400">{sub}</div>
+          </div>
+        )
+      },
     },
     {
       header: 'Plot / Scheme',
@@ -433,7 +521,19 @@ export default function Bookings() {
         </div>
       ),
     },
-    { header: 'Broker',  render: (r: any) => <span className="text-sm">{r.brokers?.name || '—'}</span> },
+    {
+      header: 'Broker',
+      render: (r: any) => {
+        const bid = r.broker_id
+        const name = r.brokers?.name
+        if (!bid || !name) return <span className="text-sm text-gray-400">—</span>
+        return (
+          <Link to={`/brokers/${bid}`} className="text-sm text-blue-700 hover:underline">
+            {name}{r.brokers?.broker_id ? <span className="text-[10px] text-gray-400 ml-1">[{r.brokers.broker_id}]</span> : null}
+          </Link>
+        )
+      },
+    },
     {
       header: 'Net / Base',
       render: (r: any) => (
@@ -468,14 +568,26 @@ export default function Bookings() {
     {
       header: 'Actions',
       render: (r: any) => {
+        const cat = categorize(r)
+        const hasEmi = !!emiMap[r.id]
         const ns = nextStage(r.stage as Stage)
         return (
           <div className="flex gap-1 flex-wrap">
+            {cat === 'token' && (
+              <Button size="sm" onClick={() => setRecordBookingFor(r)}><Banknote size={12} />Record Booking</Button>
+            )}
+            {(cat === 'token' || cat === 'advance') && (
+              <Button size="sm" variant={hasEmi ? 'ghost' : 'secondary'} onClick={() => setEmiBooking(r)}>
+                <Calculator size={12} />{hasEmi ? 'EMI' : 'Start EMI'}
+              </Button>
+            )}
+            {cat === 'full' && (
+              <Button size="sm" variant="ghost" onClick={() => setEmiBooking(r)}><Calculator size={12} />EMI</Button>
+            )}
             <Button size="sm" variant="ghost" onClick={() => open(r)}><FileText size={12} />Edit</Button>
-            <Button size="sm" variant="ghost" onClick={() => setEmiBooking(r)}><Calculator size={12} />EMI</Button>
             <Button size="sm" variant="ghost" onClick={() => printApplicationForm(r)}><Printer size={12} />Form</Button>
-            {ns && r.stage !== 'cancelled' && (
-              <Button size="sm" onClick={() => advanceStage.mutate({ id: r.id, stage: ns })}><ArrowRight size={12} />{STAGE_META[ns].label}</Button>
+            {cat === 'token' && ns && (
+              <Button size="sm" variant="ghost" onClick={() => advanceStage.mutate({ id: r.id, stage: ns })}><ArrowRight size={12} />Mark {STAGE_META[ns].label}</Button>
             )}
           </div>
         )
@@ -493,14 +605,37 @@ export default function Bookings() {
         <Button onClick={() => open()}><Plus size={14} />New Booking</Button>
       </div>
 
-      <div className="flex gap-2 mb-5 overflow-x-auto pb-1">
-        <button onClick={() => setStageFilter('all')} className={`px-4 py-2 rounded-xl text-sm font-medium border transition-all whitespace-nowrap ${stageFilter === 'all' ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'}`}>All ({all.length})</button>
-        {STAGES.map(s => (
-          <button key={s} onClick={() => setStageFilter(s)} className={`px-4 py-2 rounded-xl text-sm font-medium border transition-all whitespace-nowrap ${stageFilter === s ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'}`}>
-            {STAGE_META[s].label} ({stageCounts[s] || 0})
-          </button>
-        ))}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-5">
+        {(['all','token','advance','full','cancelled'] as Category[]).map(c => {
+          const meta = CATEGORY_META[c]
+          const active = category === c
+          return (
+            <button
+              key={c}
+              onClick={() => setCategory(c)}
+              className={`text-left px-4 py-3 rounded-xl text-sm font-medium border transition-all ${active ? meta.activeClass : meta.idleClass}`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold">{meta.label}</span>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${active ? 'bg-white/20' : 'bg-gray-100 text-gray-700'}`}>{categoryCounts[c] || 0}</span>
+              </div>
+              <div className={`text-[11px] mt-0.5 ${active ? 'text-white/80' : 'text-gray-500'}`}>{meta.sub}</div>
+            </button>
+          )
+        })}
       </div>
+
+      {category !== 'all' && (
+        <div className="mb-4 px-3 py-2 rounded-lg bg-gray-50 border border-gray-100 text-xs text-gray-600 flex items-start gap-2">
+          <Info size={13} className="mt-0.5 shrink-0 text-gray-400"/>
+          <span>
+            {category === 'token'     && 'These customers have paid the token only. Use "Record Booking" to capture the booking deposit and optionally start the EMI plan in one step.'}
+            {category === 'advance'   && 'Booking deposit received. Start an EMI plan for the remaining balance, or record further payments from the EMI panel.'}
+            {category === 'full'      && 'Fully settled bookings — total collected matches the net value. No action required.'}
+            {category === 'cancelled' && 'Cancelled bookings. Plot has been released back to inventory.'}
+          </span>
+        </div>
+      )}
 
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
         <Table columns={cols} data={filtered} loading={isLoading} />
@@ -676,7 +811,85 @@ export default function Bookings() {
       </Modal>
 
       <EmiPanel booking={emiBooking} open={!!emiBooking} onClose={() => setEmiBooking(null)} />
+
+      <RecordBookingPaymentModal
+        booking={recordBookingFor}
+        paid={recordBookingFor ? (paidMap[recordBookingFor.id] || 0) : 0}
+        onClose={() => setRecordBookingFor(null)}
+        onSubmit={(p) => recordBookingPayment.mutate(p)}
+        submitting={recordBookingPayment.isPending}
+      />
     </div>
+  )
+}
+
+function RecordBookingPaymentModal({ booking, paid, onClose, onSubmit, submitting }: any) {
+  const [amount, setAmount] = useState('')
+  const [date, setDate] = useState(today())
+  const [mode, setMode] = useState('cash')
+  const [utr, setUtr] = useState('')
+  const [drawnOn, setDrawnOn] = useState('')
+  const [branch, setBranch] = useState('')
+
+  useEffect(() => {
+    if (!booking) return
+    const total = Number(booking.total_amount || booking.plot_total_price || 0)
+    const balance = Math.max(0, total - paid)
+    setAmount(balance > 0 ? String(balance) : '')
+    setDate(today())
+    setMode('cash')
+    setUtr(''); setDrawnOn(''); setBranch('')
+  }, [booking, paid])
+
+  if (!booking) return null
+
+  const total = Number(booking.total_amount || booking.plot_total_price || 0)
+  const balance = Math.max(0, total - paid)
+  const amt = Number(amount) || 0
+  const remainingAfter = Math.max(0, balance - amt)
+
+  const submit = (openEmiAfter: boolean) => {
+    onSubmit({ booking, amount: amt, date, mode, utr, drawn_on: drawnOn, branch, openEmiAfter })
+  }
+
+  return (
+    <Modal open={!!booking} onClose={onClose} title={`Record Booking — ${booking.bp_customers?.name || booking.booking_no}`}>
+      <div className="grid grid-cols-2 gap-y-1 gap-x-4 p-3 bg-blue-50 rounded-lg text-xs mb-4 text-blue-900">
+        <span>Booking: <b>{booking.booking_no}</b></span>
+        <span>Plot: <b>{booking.bp_plots?.plot_no || '—'}</b></span>
+        <span>Total: <b>{formatINR(total)}</b></span>
+        <span>Already paid: <b>{formatINR(paid)}</b></span>
+        <span className="col-span-2 pt-1 border-t border-blue-200">Outstanding balance: <b className="text-orange-700">{formatINR(balance)}</b></span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <Input label="राशि / Amount (₹)" type="number" value={amount} onChange={(e: any) => setAmount(e.target.value)} />
+        <Input label="दिनांक / Date" type="date" value={date} onChange={(e: any) => setDate(e.target.value)} />
+        <Select label="Mode" value={mode} onChange={(e: any) => setMode(e.target.value)}>
+          {['cash','neft','rtgs','imps','upi','cheque','dd'].map(m => <option key={m} value={m}>{m.toUpperCase()}</option>)}
+        </Select>
+        <Input label={mode === 'cheque' ? 'Cheque No' : mode === 'dd' ? 'Draft No' : 'UTR / Ref'} value={utr} onChange={(e: any) => setUtr(e.target.value)} placeholder="paste from receipt" />
+        <Input label="Drawn On (Bank)" value={drawnOn} onChange={(e: any) => setDrawnOn(e.target.value)} placeholder="e.g. HDFC Bank" />
+        <Input label="Branch" value={branch} onChange={(e: any) => setBranch(e.target.value)} placeholder="e.g. Sector 12 Gurugram" />
+      </div>
+
+      <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg text-xs grid grid-cols-2 gap-y-1">
+        <span className="text-gray-600">Recording today</span>
+        <span className="text-right font-semibold">{formatINR(amt)}</span>
+        <span className="text-gray-600">Balance after this payment</span>
+        <span className={`text-right font-semibold ${remainingAfter > 0 ? 'text-orange-700' : 'text-emerald-700'}`}>{formatINR(remainingAfter)}</span>
+      </div>
+
+      <div className="flex justify-end gap-2 mt-5">
+        <Button variant="secondary" onClick={onClose}>Cancel</Button>
+        <Button variant="ghost" onClick={() => submit(false)} loading={submitting} disabled={amt <= 0}>
+          <IndianRupee size={12}/>Just Record
+        </Button>
+        <Button onClick={() => submit(true)} loading={submitting} disabled={amt <= 0}>
+          <Calculator size={12}/>Record &amp; Start EMI
+        </Button>
+      </div>
+    </Modal>
   )
 }
 
