@@ -12,9 +12,11 @@ import { LayoutGrid, Info } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const STATUS_COLORS: Record<string, string> = {
-  vacant: 'bg-green-100 text-green-700',
+  available: 'bg-green-100 text-green-700',
+  token: 'bg-amber-100 text-amber-700',
   booked: 'bg-blue-100 text-blue-700',
   cancelled: 'bg-red-100 text-red-700',
+  sold: 'bg-purple-100 text-purple-700',
 }
 
 export default function Plots() {
@@ -25,7 +27,7 @@ export default function Plots() {
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
     queryFn: async () => {
-      const { data, error } = await supabase.from('projects').select('id,project_name,project_code').order('project_name')
+      const { data, error } = await supabase.from('bp_projects').select('id,name,location').order('name')
       if (error) throw error
       return data
     },
@@ -35,9 +37,9 @@ export default function Plots() {
     queryKey: ['plots', projectFilter, statusFilter],
     queryFn: async () => {
       let q = supabase
-        .from('plots')
-        .select('*, projects(project_name, project_code)')
-        .order('plot_number', { ascending: true })
+        .from('bp_plots')
+        .select('*, bp_projects(name, location)')
+        .order('plot_no', { ascending: true })
       if (projectFilter) q = q.eq('project_id', projectFilter)
       if (statusFilter) q = q.eq('status', statusFilter)
       const { data, error } = await q
@@ -47,20 +49,25 @@ export default function Plots() {
   })
 
   const allPlots = plots as any[]
-  const vacantCount = allPlots.filter(p => p.status === 'vacant').length
+  const availableCount = allPlots.filter(p => p.status === 'available').length
+  const tokenCount = allPlots.filter(p => p.status === 'token').length
   const bookedCount = allPlots.filter(p => p.status === 'booked').length
   const cancelledCount = allPlots.filter(p => p.status === 'cancelled').length
 
   const updatePlot = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: any }) => {
       const { data: d, error } = await supabase
-        .from('plots')
+        .from('bp_plots')
         .update({ ...data, updated_at: new Date().toISOString() })
         .eq('id', id).select().single()
       if (error) throw error
       return d
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['plots'] }); toast.success('Plot updated') },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['plots'] })
+      qc.invalidateQueries({ queryKey: ['plots_avail'] })
+      toast.success('Plot updated')
+    },
     onError: (e: any) => toast.error(e.message),
   })
 
@@ -73,14 +80,12 @@ export default function Plots() {
     setEditing(p)
     setForm({
       project_id: p.project_id || '',
-      plot_number: p.plot_number || '',
-      property_type: p.property_type || '',
-      sector: p.sector || '',
-      dimension: p.dimension || '',
-      area: p.area ?? '',
-      total_cost: p.total_cost ?? '',
-      sqft_rate: p.sqft_rate ?? '',
-      status: p.status,
+      plot_no: p.plot_no || '',
+      size_sqyd: p.size_sqyd ?? '',
+      price_per_sqyd: p.price_per_sqyd ?? '',
+      plc_charges: p.plc_charges ?? '',
+      total_price: p.total_price ?? '',
+      status: p.status || 'available',
     })
     setModal(true)
   }
@@ -88,35 +93,37 @@ export default function Plots() {
   const save = async () => {
     if (!editing) return
     const payload = {
-      ...form,
-      area: form.area !== '' ? parseFloat(form.area) : null,
-      total_cost: form.total_cost !== '' ? parseFloat(form.total_cost) : null,
-      sqft_rate: form.sqft_rate !== '' ? parseFloat(form.sqft_rate) : null,
+      project_id: form.project_id || null,
+      plot_no: form.plot_no || null,
+      size_sqyd: form.size_sqyd !== '' ? parseFloat(form.size_sqyd) : null,
+      price_per_sqyd: form.price_per_sqyd !== '' ? parseFloat(form.price_per_sqyd) : null,
+      plc_charges: form.plc_charges !== '' ? parseFloat(form.plc_charges) : 0,
+      total_price: form.total_price !== '' ? parseFloat(form.total_price) : null,
+      status: form.status,
     }
     await updatePlot.mutateAsync({ id: editing.id, data: payload })
     setModal(false)
   }
 
   const cols = [
-    { header: 'Plot No', render: (r: any) => <span className="font-bold text-gray-900">#{r.plot_number}</span> },
+    { header: 'Plot No', render: (r: any) => <span className="font-bold text-gray-900">#{r.plot_no || '—'}</span> },
     {
       header: 'Project',
       render: (r: any) => (
         <div>
-          <span className="font-medium text-xs text-gray-700">{r.projects?.project_name}</span>
-          <span className="ml-1 text-xs text-gray-400 font-mono">[{r.projects?.project_code}]</span>
+          <span className="font-medium text-xs text-gray-700">{r.bp_projects?.name || '—'}</span>
+          {r.bp_projects?.location && <span className="ml-1 text-xs text-gray-400">· {r.bp_projects.location}</span>}
         </div>
       ),
     },
-    { header: 'Type', render: (r: any) => r.property_type || '—' },
-    { header: 'Sector', render: (r: any) => r.sector || '—' },
-    { header: 'Dimension', render: (r: any) => r.dimension || '—' },
-    { header: 'Area (sqft)', render: (r: any) => r.area ? r.area.toLocaleString('en-IN') : '—' },
-    { header: 'Total Cost', render: (r: any) => r.total_cost ? formatINR(r.total_cost) : '—' },
+    { header: 'Size (sqyd)', render: (r: any) => r.size_sqyd ? Number(r.size_sqyd).toLocaleString('en-IN') : '—' },
+    { header: 'Rate / sqyd', render: (r: any) => r.price_per_sqyd ? formatINR(r.price_per_sqyd) : '—' },
+    { header: 'PLC', render: (r: any) => r.plc_charges ? formatINR(r.plc_charges) : '—' },
+    { header: 'Total Price', render: (r: any) => r.total_price ? formatINR(r.total_price) : '—' },
     {
       header: 'Status',
       render: (r: any) => (
-        <Badge label={r.status} className={STATUS_COLORS[r.status] || 'bg-gray-100 text-gray-600'} />
+        <Badge label={r.status || 'available'} className={STATUS_COLORS[r.status] || 'bg-gray-100 text-gray-600'} />
       ),
     },
     { header: '', render: (r: any) => <Button size="sm" variant="ghost" onClick={() => openEdit(r)}>Edit</Button> },
@@ -142,10 +149,11 @@ export default function Plots() {
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-5 gap-4 mb-6">
         {[
           { label: 'Total', value: allPlots.length, color: 'bg-gray-50 text-gray-700' },
-          { label: 'Vacant', value: vacantCount, color: 'bg-green-50 text-green-700' },
+          { label: 'Available', value: availableCount, color: 'bg-green-50 text-green-700' },
+          { label: 'Token', value: tokenCount, color: 'bg-amber-50 text-amber-700' },
           { label: 'Booked', value: bookedCount, color: 'bg-blue-50 text-blue-700' },
           { label: 'Cancelled', value: cancelledCount, color: 'bg-red-50 text-red-700' },
         ].map(s => (
@@ -160,11 +168,12 @@ export default function Plots() {
         <div className="p-4 border-b border-gray-100 flex gap-3">
           <select value={projectFilter} onChange={e => setProjectFilter(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
             <option value="">All Projects</option>
-            {(projects as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.project_name} [{p.project_code}]</option>)}
+            {(projects as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.name}{p.location ? ` · ${p.location}` : ''}</option>)}
           </select>
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
             <option value="">All Status</option>
-            <option value="vacant">Vacant</option>
+            <option value="available">Available</option>
+            <option value="token">Token</option>
             <option value="booked">Booked</option>
             <option value="cancelled">Cancelled</option>
           </select>
@@ -172,21 +181,20 @@ export default function Plots() {
         <Table columns={cols} data={plots} loading={isLoading} />
       </div>
 
-      <Modal open={modal} onClose={() => setModal(false)} title={`Edit Plot #${editing?.plot_number ?? ''}`}>
+      <Modal open={modal} onClose={() => setModal(false)} title={`Edit Plot #${editing?.plot_no ?? ''}`}>
         <div className="grid grid-cols-2 gap-4">
           <Select label="Project" value={form.project_id} onChange={(e: any) => set('project_id', e.target.value)} className="col-span-2">
             <option value="">Select Project</option>
-            {(projects as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.project_name} [{p.project_code}]</option>)}
+            {(projects as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.name}{p.location ? ` · ${p.location}` : ''}</option>)}
           </Select>
-          <Input label="Plot Number" value={form.plot_number} onChange={(e: any) => set('plot_number', e.target.value)} required />
-          <Input label="Property Type" value={form.property_type} onChange={(e: any) => set('property_type', e.target.value)} />
-          <Input label="Sector" value={form.sector} onChange={(e: any) => set('sector', e.target.value)} />
-          <Input label="Dimension" value={form.dimension} onChange={(e: any) => set('dimension', e.target.value)} placeholder="e.g. 30x60" />
-          <Input label="Area (sqft)" type="number" value={form.area} onChange={(e: any) => set('area', e.target.value)} />
-          <Input label="Sqft Rate (₹)" type="number" value={form.sqft_rate} onChange={(e: any) => set('sqft_rate', e.target.value)} />
-          <Input label="Total Cost (₹)" type="number" value={form.total_cost} onChange={(e: any) => set('total_cost', e.target.value)} />
+          <Input label="Plot No" value={form.plot_no} onChange={(e: any) => set('plot_no', e.target.value)} required />
+          <Input label="Size (sqyd)" type="number" value={form.size_sqyd} onChange={(e: any) => set('size_sqyd', e.target.value)} />
+          <Input label="Rate per sqyd (₹)" type="number" value={form.price_per_sqyd} onChange={(e: any) => set('price_per_sqyd', e.target.value)} />
+          <Input label="PLC Charges (₹)" type="number" value={form.plc_charges} onChange={(e: any) => set('plc_charges', e.target.value)} placeholder="0" />
+          <Input label="Total Price (₹)" type="number" value={form.total_price} onChange={(e: any) => set('total_price', e.target.value)} />
           <Select label="Status" value={form.status} onChange={(e: any) => set('status', e.target.value)}>
-            <option value="vacant">Vacant</option>
+            <option value="available">Available</option>
+            <option value="token">Token</option>
             <option value="booked">Booked</option>
             <option value="cancelled">Cancelled</option>
           </Select>

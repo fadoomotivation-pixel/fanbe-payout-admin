@@ -49,8 +49,24 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
     },
   })
 
-  // Auto-generate from booking total - booking_amount
-  const principalSuggest = Math.max(0, Number(booking?.total_amount || 0) - Number(booking?.booking_amount || 0))
+  // EMI instalments are excluded from this sum so re-creating the schedule doesn't compound principal.
+  const { data: paidSoFar = 0 } = useQuery({
+    queryKey: ['booking_paid_non_emi', booking?.id],
+    enabled: !!booking?.id && open,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('bp_payments')
+        .select('amount, payment_type')
+        .eq('booking_id', booking.id)
+        .eq('verification_status', 'verified')
+      if (error) throw error
+      return (data || [])
+        .filter((p: any) => p.payment_type !== 'emi')
+        .reduce((s: number, p: any) => s + Number(p.amount || 0), 0)
+    },
+  })
+
+  const principalSuggest = Math.max(0, Number(booking?.total_amount || 0) - Number(paidSoFar || 0))
 
   const createSched = useMutation({
     mutationFn: async () => {

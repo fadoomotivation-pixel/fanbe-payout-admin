@@ -194,10 +194,20 @@ export default function Bookings() {
   }
 
   function autoStage(f: any): Stage {
-    if (f.full_enabled) return 'booking_done'
-    if (f.booking_enabled || f.emi_enabled) return 'booking_done'
-    if (f.token_enabled) return 'token_received'
+    if (f.full_enabled || f.booking_enabled) return 'booking_done'
+    if (f.token_enabled || f.emi_enabled) return 'token_received'
     return 'token_received'
+  }
+
+  function plotStatusForStage(stage: Stage): 'available' | 'token' | 'booked' {
+    if (stage === 'cancelled') return 'available'
+    if (stage === 'token_received') return 'token'
+    return 'booked'
+  }
+
+  async function syncPlotStatus(plotId: string | null | undefined, stage: Stage) {
+    if (!plotId) return
+    await supabase.from('bp_plots').update({ status: plotStatusForStage(stage) }).eq('id', plotId)
   }
 
   const create = useMutation({
@@ -254,6 +264,7 @@ export default function Bookings() {
         const principal = Math.max(0, total - tokenAmt - bookingAmt - fullAmt)
         if (principal > 0) await generateEmiSchedule(bk.id, customer_id, principal, num(rest.emi_n) || 12, rest.emi_freq || 'monthly', rest.emi_start || today())
       }
+      await syncPlotStatus(rest.plot_id, stage)
       return bk
     },
     onSuccess: () => {
@@ -261,6 +272,8 @@ export default function Bookings() {
       qc.invalidateQueries({ queryKey: ['customers'] })
       qc.invalidateQueries({ queryKey: ['payments_by_booking'] })
       qc.invalidateQueries({ queryKey: ['emi_schedules'] })
+      qc.invalidateQueries({ queryKey: ['plots_avail'] })
+      qc.invalidateQueries({ queryKey: ['plots'] })
       toast.success('Booking saved')
     },
     onError: (e: any) => toast.error(e.message),
@@ -275,6 +288,7 @@ export default function Bookings() {
       const base = Math.round(sz * rt)
       const d    = num(data.dev_charges); const pl = num(data.plc_charges); const dsc = num(data.discount_amount)
       const total = Math.max(0, base + d + pl - dsc)
+      const { data: current } = await supabase.from('bp_bookings').select('plot_id').eq('id', id).single()
       const payload = {
         plot_id: data.plot_id || null, customer_id: data.customer_id || null,
         broker_id: data.broker_id || null, project_id: data.project_id || null,
@@ -297,18 +311,36 @@ export default function Bookings() {
       }
       const { data: d2, error } = await supabase.from('bp_bookings').update(payload).eq('id', id).select().single()
       if (error) throw error
+      const newPlotId = data.plot_id || null
+      const oldPlotId = current?.plot_id || null
+      if (oldPlotId && oldPlotId !== newPlotId) {
+        await supabase.from('bp_plots').update({ status: 'available' }).eq('id', oldPlotId)
+      }
+      await syncPlotStatus(newPlotId, data.stage as Stage)
       return d2
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['bookings'] }); toast.success('Booking updated') },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['bookings'] })
+      qc.invalidateQueries({ queryKey: ['plots_avail'] })
+      qc.invalidateQueries({ queryKey: ['plots'] })
+      toast.success('Booking updated')
+    },
     onError: (e: any) => toast.error(e.message),
   })
 
   const advanceStage = useMutation({
     mutationFn: async ({ id, stage }: { id: string; stage: Stage }) => {
+      const { data: current } = await supabase.from('bp_bookings').select('plot_id').eq('id', id).single()
       const { error } = await supabase.from('bp_bookings').update({ stage, updated_at: new Date().toISOString() }).eq('id', id)
       if (error) throw error
+      await syncPlotStatus(current?.plot_id, stage)
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['bookings'] }); toast.success('Stage advanced') },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['bookings'] })
+      qc.invalidateQueries({ queryKey: ['plots_avail'] })
+      qc.invalidateQueries({ queryKey: ['plots'] })
+      toast.success('Stage advanced')
+    },
     onError: (e: any) => toast.error(e.message),
   })
 
@@ -353,9 +385,11 @@ export default function Bookings() {
   }
 
   const handleBrokerChange = (brokerId: string) => {
-    set('broker_id', brokerId)
-    const b = (brokers as any[]).find((br: any) => br.id === brokerId)
-    if (b?.broker_id) set('upline_broker_code', b.broker_id)
+    setForm((p: any) => {
+      const b = (brokers as any[]).find((br: any) => br.id === brokerId)
+      const shouldPopulate = b?.broker_id && !p.upline_broker_code?.trim()
+      return { ...p, broker_id: brokerId, upline_broker_code: shouldPopulate ? b.broker_id : p.upline_broker_code }
+    })
   }
 
   const nextStage = (current: Stage): Stage | null => {
