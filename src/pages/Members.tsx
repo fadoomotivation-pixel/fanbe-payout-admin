@@ -79,12 +79,35 @@ export default function Members() {
     </div>
   )
 
+  const totalRows     = rows.length
+  const customerRows  = rows.filter(r => r.is_customer).length
+  const memberOnly    = totalRows - customerRows
+
   return (
-    <div className="p-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Registry Members</h1>
+    <div className="p-3 md:p-6 space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h1 className="text-2xl font-semibold">Members &amp; Customers</h1>
+          <p className="text-xs text-slate-500 mt-0.5">Registry of prospects + converted buyers. Convert a member to make them eligible for a booking.</p>
+        </div>
         <button onClick={() => open()} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm">+ Add Member</button>
       </div>
+
+      {/* ── Funnel explainer ────────────────────────────────────────── */}
+      <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-emerald-50 border border-indigo-100 rounded-xl p-4">
+        <div className="text-[11px] font-semibold text-indigo-700 uppercase tracking-wider mb-2">How the funnel works</div>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-sm">
+          <FunnelStep n="1" title="Inquiry"      sub="Walk-in or web lead"          color="bg-amber-100 text-amber-800"/>
+          <FunnelStep n="2" title="Member"       sub={`${memberOnly} on registry`}  color="bg-blue-100 text-blue-800"   active/>
+          <FunnelStep n="3" title="Customer"     sub={`${customerRows} converted`}  color="bg-emerald-100 text-emerald-800" active/>
+          <FunnelStep n="4" title="Booking"      sub="Plot allocated · payments tracked" color="bg-violet-100 text-violet-800"/>
+          <FunnelStep n="5" title="Commission"   sub="Earned by broker · MLM upline" color="bg-rose-100 text-rose-800"/>
+        </div>
+        <div className="text-[11px] text-slate-600 mt-2 leading-relaxed">
+          <b>Member</b> = a prospect on the registry (basic + nominee details captured). <b>Customer</b> = a member who has been promoted (via <i>Convert</i>) so they can be attached to a booking. Only Customers appear in the booking customer picker.
+        </div>
+      </div>
+
       <div className="bg-white rounded-xl shadow overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-left"><tr><th className="p-3">Code</th><th className="p-3">Name</th><th className="p-3">Father / Husband</th><th className="p-3">Mobile</th><th className="p-3">DOB</th><th className="p-3">Nominee</th><th className="p-3">Status</th><th className="p-3">Action</th></tr></thead>
@@ -108,6 +131,7 @@ export default function Members() {
         </table>
       </div>
 
+      {/* end of table card above; modal below */}
       {show && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4 overflow-y-auto">
           <div className="bg-white rounded-xl p-6 w-full max-w-2xl my-8">
@@ -144,6 +168,18 @@ export default function Members() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function FunnelStep({ n, title, sub, color, active }: any) {
+  return (
+    <div className={`rounded-lg px-3 py-2 ${active ? color + ' border border-current/20' : 'bg-white border border-slate-200 text-slate-500'}`}>
+      <div className="flex items-center gap-1 mb-0.5">
+        <span className={`w-4 h-4 rounded-full text-[10px] font-bold flex items-center justify-center ${active ? 'bg-white/60' : 'bg-slate-100'}`}>{n}</span>
+        <span className="text-xs font-bold">{title}</span>
+      </div>
+      <div className="text-[10px] opacity-80">{sub}</div>
     </div>
   )
 }

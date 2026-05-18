@@ -11,6 +11,7 @@ import { formatINR, formatDate } from '@/lib/utils'
 import { printApplicationForm } from '@/lib/printTemplates'
 import { logClosure, getCurrentUserId } from '@/lib/closure'
 import { ClosureDialog } from '@/components/ClosureDialog'
+import { distributeBookingCommission, reverseBookingCommission } from '@/lib/payoutEngine'
 import EmiPanel from '@/components/EmiPanel'
 import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info, Banknote, IndianRupee, Lock, Unlock, Search, Download, X, Filter, ChevronDown } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -303,16 +304,23 @@ export default function Bookings() {
         if (principal > 0) await generateEmiSchedule(bk.id, customer_id, principal, num(rest.emi_n) || 12, rest.emi_freq || 'monthly', rest.emi_start || today())
       }
       await syncPlotStatus(rest.plot_id, stage)
-      return bk
+      let distributed = 0
+      if (stage === 'booking_done') {
+        const rows = await distributeBookingCommission(bk.id)
+        distributed = rows.length
+      }
+      return { ...bk, distributed }
     },
-    onSuccess: () => {
+    onSuccess: (res: any) => {
       qc.invalidateQueries({ queryKey: ['bookings'] })
       qc.invalidateQueries({ queryKey: ['customers'] })
       qc.invalidateQueries({ queryKey: ['payments_by_booking'] })
       qc.invalidateQueries({ queryKey: ['emi_schedules'] })
       qc.invalidateQueries({ queryKey: ['plots_avail'] })
       qc.invalidateQueries({ queryKey: ['plots'] })
-      toast.success('Booking saved')
+      qc.invalidateQueries({ queryKey: ['payouts'] })
+      qc.invalidateQueries({ queryKey: ['commission_ledger'] })
+      toast.success(`Booking saved${res?.distributed ? ` · MLM distributed to ${res.distributed} broker${res.distributed !== 1 ? 's' : ''}` : ''}`)
     },
     onError: (e: any) => toast.error(e.message),
   })
@@ -372,11 +380,19 @@ export default function Bookings() {
       const { error } = await supabase.from('bp_bookings').update({ stage, updated_at: new Date().toISOString() }).eq('id', id)
       if (error) throw error
       await syncPlotStatus(current?.plot_id, stage)
+      if (stage === 'booking_done') {
+        const rows = await distributeBookingCommission(id)
+        if (rows.length > 0) toast.success(`MLM distributed to ${rows.length} broker${rows.length !== 1 ? 's' : ''}`)
+      } else if (stage === 'cancelled') {
+        await reverseBookingCommission(id)
+      }
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['bookings'] })
       qc.invalidateQueries({ queryKey: ['plots_avail'] })
       qc.invalidateQueries({ queryKey: ['plots'] })
+      qc.invalidateQueries({ queryKey: ['payouts'] })
+      qc.invalidateQueries({ queryKey: ['commission_ledger'] })
       toast.success('Stage advanced')
     },
     onError: (e: any) => toast.error(e.message),
@@ -405,7 +421,8 @@ export default function Bookings() {
       const { error } = await supabase.from('bp_bookings').update(updatePayload).eq('id', b.id)
       if (error) throw error
       await syncPlotStatus(b.plot_id, 'booking_done')
-      return { booking: b, openEmiAfter: p.openEmiAfter }
+      const rows = await distributeBookingCommission(b.id)
+      return { booking: b, openEmiAfter: p.openEmiAfter, distributed: rows.length }
     },
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['bookings'] })
@@ -413,7 +430,9 @@ export default function Bookings() {
       qc.invalidateQueries({ queryKey: ['payments'] })
       qc.invalidateQueries({ queryKey: ['plots_avail'] })
       qc.invalidateQueries({ queryKey: ['plots'] })
-      toast.success('Booking amount recorded')
+      qc.invalidateQueries({ queryKey: ['payouts'] })
+      qc.invalidateQueries({ queryKey: ['commission_ledger'] })
+      toast.success(`Booking amount recorded${res?.distributed ? ` · MLM distributed to ${res.distributed} broker${res.distributed !== 1 ? 's' : ''}` : ''}`)
       setRecordBookingFor(null)
       if (res?.openEmiAfter) setEmiBooking(res.booking)
     },
@@ -497,6 +516,11 @@ export default function Bookings() {
   }
 
   const save = async () => {
+    if (!editing) {
+      if (form.token_enabled && !num(form.token_amount))     { toast.error('Token amount is required (or uncheck the section)'); return }
+      if (form.booking_enabled && !num(form.booking_amount)) { toast.error('Booking amount is required (or uncheck the section if the customer has not paid the booking deposit yet)'); return }
+      if (form.full_enabled && !num(form.full_amount))       { toast.error('Full payment amount is required (or uncheck the section)'); return }
+    }
     if (editing) await update.mutateAsync({ id: editing.id, data: form })
     else await create.mutateAsync(form)
     setModal(false)
@@ -742,9 +766,21 @@ export default function Bookings() {
       header: 'Stage',
       render: (r: any) => {
         const meta = STAGE_META[r.stage as Stage] || STAGE_META.token_received
+        const bookingPending = r.stage === 'token_received' && !Number(r.booking_amount || 0)
+        const bookingReceived = r.stage === 'token_received' && Number(r.booking_amount || 0) > 0
         return (
           <div className="flex flex-col gap-1">
             <Badge label={meta.label} className={meta.color} />
+            {bookingPending && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
+                ⏳ Booking deposit pending
+              </span>
+            )}
+            {bookingReceived && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded">
+                ₹{Number(r.booking_amount).toLocaleString()} booking paid
+              </span>
+            )}
             {isClosed(r) && (
               <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-700 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded">
                 <Lock size={9}/>Closed {formatDate(r.closed_at)}
@@ -973,12 +1009,22 @@ export default function Bookings() {
             <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Payment Plan</div>
             <div className="text-[11px] text-gray-500 mb-3">Tick everything the customer is paying today. Token + Booking + EMI combinations are supported.</div>
 
-            <PayBlock checked={form.token_enabled} onCheck={v => set('token_enabled', v)} label="Token amount" subtitle="Token receipt will be auto-generated" color="amber">
-              <PayFields prefix="token" form={form} set={set} />
+            <PayBlock checked={form.token_enabled} onCheck={v => set('token_enabled', v)} label="Token amount" subtitle="Token receipt will be auto-generated" color="amber"
+              warning={form.token_enabled && !num(form.token_amount) ? 'Enter the token amount or uncheck this section' : undefined}>
+              <PayFields prefix="token" form={form} set={set}
+                amountError={form.token_enabled && !num(form.token_amount) ? 'Required' : undefined} />
             </PayBlock>
 
-            <PayBlock checked={form.booking_enabled} onCheck={v => set('booking_enabled', v)} label="Booking amount" subtitle="The main booking deposit" color="blue">
-              <PayFields prefix="booking" form={form} set={set} />
+            <PayBlock checked={form.booking_enabled} onCheck={v => set('booking_enabled', v)} label="Booking amount" subtitle={
+              form.booking_enabled && !num(form.booking_amount)
+                ? 'Booking deposit pending — booking will not advance until amount is recorded'
+                : form.token_enabled && form.booking_enabled
+                  ? 'Token + Booking — full upfront. The booking will be marked Booking Done.'
+                  : 'The main booking deposit'
+            } color="blue"
+              warning={form.booking_enabled && !num(form.booking_amount) ? 'Enter the booking deposit amount, or uncheck if the customer has not paid it yet.' : undefined}>
+              <PayFields prefix="booking" form={form} set={set}
+                amountError={form.booking_enabled && !num(form.booking_amount) ? 'Required when this section is enabled' : undefined} />
             </PayBlock>
 
             <PayBlock checked={form.emi_enabled} onCheck={v => set('emi_enabled', v)} label="EMI plan for the balance" subtitle={`Principal: ${formatINR(principalPreview)} · Per instalment: ${formatINR(emiAmtPreview)}`} color="emerald">
@@ -1196,15 +1242,16 @@ function RecordBookingPaymentModal({ booking, paid, onClose, onSubmit, submittin
   )
 }
 
-function PayBlock({ checked, onCheck, label, subtitle, color, children }: any) {
+function PayBlock({ checked, onCheck, label, subtitle, color, children, warning }: any) {
   const palette: Record<string, string> = {
     amber:   'bg-amber-50 border-amber-200',
     blue:    'bg-blue-50 border-blue-200',
     emerald: 'bg-emerald-50 border-emerald-200',
     violet:  'bg-violet-50 border-violet-200',
   }
+  const borderClass = warning ? 'bg-rose-50 border-rose-300' : (checked ? palette[color] || 'bg-gray-50 border-gray-200' : 'bg-white border-gray-200')
   return (
-    <div className={`mb-3 rounded-lg border p-3 ${checked ? palette[color] || 'bg-gray-50 border-gray-200' : 'bg-white border-gray-200'}`}>
+    <div className={`mb-3 rounded-lg border p-3 ${borderClass}`}>
       <label className="flex items-start gap-2 cursor-pointer">
         <input type="checkbox" checked={checked} onChange={e => onCheck(e.target.checked)} className="mt-0.5 rounded" />
         <div className="flex-1">
@@ -1212,16 +1259,25 @@ function PayBlock({ checked, onCheck, label, subtitle, color, children }: any) {
           <div className="text-[11px] text-gray-500">{subtitle}</div>
         </div>
       </label>
+      {warning && (
+        <div className="mt-2 pl-6 text-xs font-medium text-rose-700 inline-flex items-center gap-1.5">
+          <Info size={12}/>{warning}
+        </div>
+      )}
       {checked && <div className="mt-3 pl-6">{children}</div>}
     </div>
   )
 }
 
-function PayFields({ prefix, form, set, amountPlaceholder = '', hideBranch = false }: any) {
+function PayFields({ prefix, form, set, amountPlaceholder = '', hideBranch = false, amountError }: any) {
   const k = (s: string) => `${prefix}_${s}`
   return (
     <div className="grid grid-cols-2 gap-3">
-      <Input label="Amount (₹)" type="number" value={form[k('amount')]} onChange={(e:any)=>set(k('amount'), e.target.value)} placeholder={amountPlaceholder} />
+      <div>
+        <Input label="Amount (₹)" type="number" value={form[k('amount')]} onChange={(e:any)=>set(k('amount'), e.target.value)} placeholder={amountPlaceholder}
+          className={amountError ? 'border-rose-400 focus:ring-rose-300' : ''} />
+        {amountError && <div className="text-[11px] text-rose-700 mt-1">{amountError}</div>}
+      </div>
       <Input label="Date" type="date" value={form[k('date')]} onChange={(e:any)=>set(k('date'), e.target.value)} />
       <Select label="Mode" value={form[k('mode')]} onChange={(e:any)=>set(k('mode'), e.target.value)}>
         {PAYMENT_MODES.map(m => <option key={m} value={m}>{m.toUpperCase()}</option>)}

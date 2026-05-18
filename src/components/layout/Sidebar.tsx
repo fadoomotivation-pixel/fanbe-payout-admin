@@ -9,9 +9,9 @@ const NAV = [
     {to:'/analytics',icon:BarChart2,label:'Analytics'},
     {to:'/balance-sheet',icon:TrendingUp,label:'Balance Sheet'},
   ]},
-  { group:'Pipeline', items:[
+  { group:'Sales Pipeline', items:[
     {to:'/inquiries',icon:Inbox,label:'Inquiries'},
-    {to:'/members',icon:UserPlus,label:'Registry Members'},
+    {to:'/members',icon:UserPlus,label:'Members & Customers'},
     {to:'/customer-history',icon:History,label:'Customer History'},
   ]},
   { group:'Real Estate', items:[
@@ -21,17 +21,21 @@ const NAV = [
     {to:'/payments',icon:CreditCard,label:'Payments'},
     {to:'/emi',icon:Calculator,label:'EMI Schedule'},
   ]},
-  { group:'Brokerage', items:[
+  { group:'Broker Network', items:[
     {to:'/brokers',icon:Users,label:'Brokers'},
     {to:'/kyc',icon:UserCheck,label:'KYC Review'},
-    {to:'/payouts',icon:Banknote,label:'Payouts'},
+    {to:'/commission-ranks',icon:Trophy,label:'Rank Slabs'},
+  ]},
+  { group:'Commissions & Payouts', items:[
+    {to:'/commission',icon:Layers,label:'Commission Ledger'},
+    {to:'/payouts',icon:Banknote,label:'Payout Transactions'},
     {to:'/payout-cycles',icon:CalendarRange,label:'Payout Cycles'},
     {to:'/withdrawals',icon:Wallet,label:'Withdrawals'},
-    {to:'/commission',icon:Layers,label:'Commission Rules'},
-    {to:'/commission-ranks',icon:Trophy,label:'Rank Slabs'},
+    {to:'/payout-terms',icon:ScrollText,label:'Payout Terms'},
+  ]},
+  { group:'Programs', items:[
     {to:'/achievers-club',icon:Star,label:'Achievers Club'},
     {to:'/team-rewards',icon:Gift,label:'Team Rewards'},
-    {to:'/payout-terms',icon:ScrollText,label:'Payout Terms'},
   ]},
   { group:'Operations', items:[
     {to:'/expenses',icon:Receipt,label:'Expenses'},
