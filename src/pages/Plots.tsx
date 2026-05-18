@@ -1,14 +1,13 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { Table } from '@/components/ui/Table.tsx'
 import { Button } from '@/components/ui/Button.tsx'
-import { Input, Select } from '@/components/ui/Input.tsx'
+import { Input, Select, Textarea } from '@/components/ui/Input.tsx'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR } from '@/lib/utils'
-import { LayoutGrid, Info } from 'lucide-react'
+import { LayoutGrid, Plus, Layers, Search, Trash2, Edit3, AlertTriangle } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -19,11 +18,34 @@ const STATUS_COLORS: Record<string, string> = {
   sold: 'bg-purple-100 text-purple-700',
 }
 
+const CATEGORIES = ['residential','commercial','industrial','agricultural','villa','apartment'] as const
+const FACINGS    = ['east','west','north','south','north-east','north-west','south-east','south-west'] as const
+
+const EMPTY_PLOT = {
+  project_id: '', plot_no: '', size_sqyd: '', price_per_sqyd: '', plc_charges: '0',
+  total_price: '', category: 'residential', facing: 'east', block: '', sector: '',
+  floor: '', is_corner: false, notes: '', status: 'available',
+}
+
+const EMPTY_BULK = {
+  project_id: '', prefix: '', start_number: '101', count: '10', pad_width: '0',
+  size_sqyd: '', price_per_sqyd: '', plc_charges: '0',
+  category: 'residential', facing: 'east', block: '', sector: '', is_corner: false,
+}
+
+const padNum = (n: number, w: number) => w > 0 ? String(n).padStart(w, '0') : String(n)
+const computeTotal = (size: any, rate: any, plc: any) => {
+  const s = parseFloat(size) || 0, r = parseFloat(rate) || 0, p = parseFloat(plc) || 0
+  return s * r + p
+}
+
 export default function Plots() {
   const qc = useQueryClient()
   const [projectFilter, setProjectFilter] = useState('')
-  const [statusFilter, setStatusFilter] = useState('')
+  const [statusFilter, setStatusFilter]   = useState('')
+  const [search, setSearch]               = useState('')
 
+  // ── Queries ──────────────────────────────────────────────────────
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
     queryFn: async () => {
@@ -41,121 +63,283 @@ export default function Plots() {
         .select('*, bp_projects(name, location)')
         .order('plot_no', { ascending: true })
       if (projectFilter) q = q.eq('project_id', projectFilter)
-      if (statusFilter) q = q.eq('status', statusFilter)
+      if (statusFilter)  q = q.eq('status', statusFilter)
       const { data, error } = await q
       if (error) throw error
       return data
     },
   })
 
-  const allPlots = plots as any[]
-  const availableCount = allPlots.filter(p => p.status === 'available').length
-  const tokenCount = allPlots.filter(p => p.status === 'token').length
-  const bookedCount = allPlots.filter(p => p.status === 'booked').length
-  const cancelledCount = allPlots.filter(p => p.status === 'cancelled').length
+  // Compute "in-use" plot IDs so Delete can be guarded.
+  const { data: inUseIds = new Set<string>() } = useQuery<Set<string>>({
+    queryKey: ['plots_in_use'],
+    queryFn: async () => {
+      const { data } = await supabase.from('bp_bookings').select('plot_id').not('plot_id', 'is', null)
+      return new Set((data || []).map((b: any) => b.plot_id))
+    },
+  })
+
+  // ── Mutations ─────────────────────────────────────────────────────
+  const createPlot = useMutation({
+    mutationFn: async (data: any) => {
+      const { error } = await supabase.from('bp_plots').insert(data)
+      if (error) throw error
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['plots'] })
+      qc.invalidateQueries({ queryKey: ['plots_avail'] })
+      toast.success('Plot created')
+      setAddModal(false); setAddForm(EMPTY_PLOT)
+    },
+    onError: (e: any) => toast.error(e.message),
+  })
 
   const updatePlot = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: any }) => {
-      const { data: d, error } = await supabase
+      const { error } = await supabase
         .from('bp_plots')
         .update({ ...data, updated_at: new Date().toISOString() })
-        .eq('id', id).select().single()
+        .eq('id', id)
       if (error) throw error
-      return d
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['plots'] })
       qc.invalidateQueries({ queryKey: ['plots_avail'] })
       toast.success('Plot updated')
+      setEditModal(false)
     },
     onError: (e: any) => toast.error(e.message),
   })
 
-  const [modal, setModal] = useState(false)
-  const [editing, setEditing] = useState<any>(null)
-  const [form, setForm] = useState<any>({})
-  const set = (k: string, v: any) => setForm((prev: any) => ({ ...prev, [k]: v }))
+  const deletePlot = useMutation({
+    mutationFn: async (id: string) => {
+      if (inUseIds.has(id)) throw new Error('Plot is linked to a booking — cancel or reassign the booking first.')
+      const { error } = await supabase.from('bp_plots').delete().eq('id', id)
+      if (error) throw error
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['plots'] })
+      qc.invalidateQueries({ queryKey: ['plots_avail'] })
+      qc.invalidateQueries({ queryKey: ['plots_in_use'] })
+      toast.success('Plot deleted')
+    },
+    onError: (e: any) => toast.error(e.message),
+  })
+
+  const bulkGenerate = useMutation({
+    mutationFn: async (bulk: typeof EMPTY_BULK) => {
+      if (!bulk.project_id) throw new Error('Select a project')
+      const count = parseInt(bulk.count)
+      if (!count || count < 1 || count > 500) throw new Error('Count must be between 1 and 500')
+      const start = parseInt(bulk.start_number)
+      if (Number.isNaN(start)) throw new Error('Enter a numeric start number')
+      const padW = parseInt(bulk.pad_width) || 0
+      const size = parseFloat(bulk.size_sqyd)
+      if (!size || size <= 0) throw new Error('Size (sqyd) is required')
+      const rate = parseFloat(bulk.price_per_sqyd) || 0
+      const plc  = parseFloat(bulk.plc_charges) || 0
+
+      // Look for conflicts in this project's plot_nos
+      const wanted = Array.from({ length: count }, (_, i) => `${bulk.prefix}${padNum(start + i, padW)}`)
+      const { data: existing } = await supabase
+        .from('bp_plots').select('plot_no').eq('project_id', bulk.project_id).in('plot_no', wanted)
+      if (existing && existing.length > 0) {
+        const dupes = existing.map((x: any) => x.plot_no).join(', ')
+        throw new Error(`Plot numbers already exist in this project: ${dupes}`)
+      }
+
+      const rows = wanted.map(plotNo => ({
+        project_id: bulk.project_id,
+        plot_no:    plotNo,
+        size_sqyd:  size,
+        price_per_sqyd: rate || null,
+        plc_charges:    plc,
+        total_price:    rate ? size * rate + plc : null,
+        category:   bulk.category || 'residential',
+        facing:     bulk.facing || 'east',
+        block:      bulk.block || null,
+        sector:     bulk.sector || null,
+        is_corner:  !!bulk.is_corner,
+        status:     'available',
+      }))
+      const { error } = await supabase.from('bp_plots').insert(rows)
+      if (error) throw error
+      return count
+    },
+    onSuccess: (count) => {
+      qc.invalidateQueries({ queryKey: ['plots'] })
+      qc.invalidateQueries({ queryKey: ['plots_avail'] })
+      toast.success(`${count} plot${count !== 1 ? 's' : ''} generated`)
+      setBulkModal(false); setBulkForm(EMPTY_BULK)
+    },
+    onError: (e: any) => toast.error(e.message),
+  })
+
+  // ── Local state ───────────────────────────────────────────────────
+  const [addModal, setAddModal]   = useState(false)
+  const [addForm, setAddForm]     = useState<any>(EMPTY_PLOT)
+  const [editModal, setEditModal] = useState(false)
+  const [editing, setEditing]     = useState<any>(null)
+  const [editForm, setEditForm]   = useState<any>({})
+  const [bulkModal, setBulkModal] = useState(false)
+  const [bulkForm, setBulkForm]   = useState<any>(EMPTY_BULK)
+  const [deleteFor, setDeleteFor] = useState<any>(null)
+
+  const allPlots = plots as any[]
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return allPlots
+    return allPlots.filter((p: any) =>
+      String(p.plot_no || '').toLowerCase().includes(q) ||
+      String(p.block || '').toLowerCase().includes(q) ||
+      String(p.sector || '').toLowerCase().includes(q) ||
+      String(p.bp_projects?.name || '').toLowerCase().includes(q)
+    )
+  }, [allPlots, search])
+
+  const availableCount = allPlots.filter(p => p.status === 'available').length
+  const tokenCount     = allPlots.filter(p => p.status === 'token').length
+  const bookedCount    = allPlots.filter(p => p.status === 'booked').length
+  const cancelledCount = allPlots.filter(p => p.status === 'cancelled').length
+
+  // ── Add/Edit helpers ─────────────────────────────────────────────
+  const setA = (k: string, v: any) => setAddForm((p: any) => ({ ...p, [k]: v }))
+  const setE = (k: string, v: any) => setEditForm((p: any) => ({ ...p, [k]: v }))
+  const setB = (k: string, v: any) => setBulkForm((p: any) => ({ ...p, [k]: v }))
+
+  // Auto-recompute total when size/rate/plc change in Add form
+  const addTotalPreview  = computeTotal(addForm.size_sqyd, addForm.price_per_sqyd, addForm.plc_charges)
+  const editTotalPreview = computeTotal(editForm.size_sqyd, editForm.price_per_sqyd, editForm.plc_charges)
+  const bulkTotalPreview = computeTotal(bulkForm.size_sqyd, bulkForm.price_per_sqyd, bulkForm.plc_charges)
+  const bulkPreviewList  = useMemo(() => {
+    const start = parseInt(bulkForm.start_number)
+    const count = Math.min(parseInt(bulkForm.count) || 0, 6)
+    const padW = parseInt(bulkForm.pad_width) || 0
+    if (Number.isNaN(start) || count < 1) return [] as string[]
+    return Array.from({ length: count }, (_, i) => `${bulkForm.prefix || ''}${padNum(start + i, padW)}`)
+  }, [bulkForm.prefix, bulkForm.start_number, bulkForm.count, bulkForm.pad_width])
 
   const openEdit = (p: any) => {
     setEditing(p)
-    setForm({
+    setEditForm({
       project_id: p.project_id || '',
       plot_no: p.plot_no || '',
       size_sqyd: p.size_sqyd ?? '',
       price_per_sqyd: p.price_per_sqyd ?? '',
-      plc_charges: p.plc_charges ?? '',
+      plc_charges: p.plc_charges ?? '0',
       total_price: p.total_price ?? '',
+      category: p.category || 'residential',
+      facing: p.facing || 'east',
+      block: p.block || '',
+      sector: p.sector || '',
+      floor: p.floor || '',
+      is_corner: !!p.is_corner,
+      notes: p.notes || '',
       status: p.status || 'available',
     })
-    setModal(true)
+    setEditModal(true)
   }
 
-  const save = async () => {
+  const saveAdd = async () => {
+    if (!addForm.project_id) return toast.error('Project is required')
+    if (!addForm.plot_no)    return toast.error('Plot number is required')
+    if (!addForm.size_sqyd)  return toast.error('Size (sqyd) is required')
+    const total = addForm.total_price !== '' ? parseFloat(addForm.total_price) : addTotalPreview
+    await createPlot.mutateAsync({
+      project_id: addForm.project_id,
+      plot_no: addForm.plot_no,
+      size_sqyd: parseFloat(addForm.size_sqyd),
+      price_per_sqyd: addForm.price_per_sqyd !== '' ? parseFloat(addForm.price_per_sqyd) : null,
+      plc_charges: addForm.plc_charges !== '' ? parseFloat(addForm.plc_charges) : 0,
+      total_price: total || null,
+      category: addForm.category, facing: addForm.facing,
+      block: addForm.block || null, sector: addForm.sector || null,
+      floor: addForm.floor || null, is_corner: !!addForm.is_corner,
+      notes: addForm.notes || null, status: addForm.status,
+    })
+  }
+
+  const saveEdit = async () => {
     if (!editing) return
-    const payload = {
-      project_id: form.project_id || null,
-      plot_no: form.plot_no || null,
-      size_sqyd: form.size_sqyd !== '' ? parseFloat(form.size_sqyd) : null,
-      price_per_sqyd: form.price_per_sqyd !== '' ? parseFloat(form.price_per_sqyd) : null,
-      plc_charges: form.plc_charges !== '' ? parseFloat(form.plc_charges) : 0,
-      total_price: form.total_price !== '' ? parseFloat(form.total_price) : null,
-      status: form.status,
-    }
-    await updatePlot.mutateAsync({ id: editing.id, data: payload })
-    setModal(false)
+    const total = editForm.total_price !== '' ? parseFloat(editForm.total_price) : editTotalPreview
+    await updatePlot.mutateAsync({ id: editing.id, data: {
+      project_id: editForm.project_id || null,
+      plot_no: editForm.plot_no || null,
+      size_sqyd: editForm.size_sqyd !== '' ? parseFloat(editForm.size_sqyd) : null,
+      price_per_sqyd: editForm.price_per_sqyd !== '' ? parseFloat(editForm.price_per_sqyd) : null,
+      plc_charges: editForm.plc_charges !== '' ? parseFloat(editForm.plc_charges) : 0,
+      total_price: total || null,
+      category: editForm.category, facing: editForm.facing,
+      block: editForm.block || null, sector: editForm.sector || null,
+      floor: editForm.floor || null, is_corner: !!editForm.is_corner,
+      notes: editForm.notes || null, status: editForm.status,
+    }})
   }
 
+  // ── Columns ───────────────────────────────────────────────────────
   const cols = [
-    { header: 'Plot No', render: (r: any) => <span className="font-bold text-gray-900">#{r.plot_no || '—'}</span> },
-    {
-      header: 'Project',
-      render: (r: any) => (
-        <div>
-          <span className="font-medium text-xs text-gray-700">{r.bp_projects?.name || '—'}</span>
-          {r.bp_projects?.location && <span className="ml-1 text-xs text-gray-400">· {r.bp_projects.location}</span>}
-        </div>
-      ),
-    },
-    { header: 'Size (sqyd)', render: (r: any) => r.size_sqyd ? Number(r.size_sqyd).toLocaleString('en-IN') : '—' },
+    { header: 'Plot No', render: (r: any) => (
+      <div>
+        <span className="font-bold text-gray-900">#{r.plot_no || '—'}</span>
+        {(r.block || r.sector) && <div className="text-[10px] text-gray-400">{r.block ? `Blk ${r.block}` : ''}{r.block && r.sector ? ' · ' : ''}{r.sector ? `Sec ${r.sector}` : ''}</div>}
+      </div>
+    )},
+    { header: 'Project', render: (r: any) => (
+      <div>
+        <span className="font-medium text-xs text-gray-700">{r.bp_projects?.name || '—'}</span>
+        {r.bp_projects?.location && <div className="text-[10px] text-gray-400">{r.bp_projects.location}</div>}
+      </div>
+    )},
+    { header: 'Size', render: (r: any) => <span className="text-sm">{r.size_sqyd ? `${Number(r.size_sqyd).toLocaleString('en-IN')} sqyd` : '—'}</span> },
+    { header: 'Type', render: (r: any) => (
+      <div className="text-xs">
+        <div className="capitalize">{r.category || 'residential'}</div>
+        <div className="text-[10px] text-gray-400 capitalize">{r.facing || 'east'}{r.is_corner ? ' · corner' : ''}</div>
+      </div>
+    )},
     { header: 'Rate / sqyd', render: (r: any) => r.price_per_sqyd ? formatINR(r.price_per_sqyd) : '—' },
     { header: 'PLC', render: (r: any) => r.plc_charges ? formatINR(r.plc_charges) : '—' },
-    { header: 'Total Price', render: (r: any) => r.total_price ? formatINR(r.total_price) : '—' },
-    {
-      header: 'Status',
-      render: (r: any) => (
-        <Badge label={r.status || 'available'} className={STATUS_COLORS[r.status] || 'bg-gray-100 text-gray-600'} />
-      ),
-    },
-    { header: '', render: (r: any) => <Button size="sm" variant="ghost" onClick={() => openEdit(r)}>Edit</Button> },
+    { header: 'Total Price', render: (r: any) => r.total_price ? <span className="font-semibold">{formatINR(r.total_price)}</span> : '—' },
+    { header: 'Status', render: (r: any) => <Badge label={r.status || 'available'} className={STATUS_COLORS[r.status] || 'bg-gray-100 text-gray-600'} /> },
+    { header: '', render: (r: any) => {
+      const inUse = inUseIds.has(r.id)
+      return (
+        <div className="flex gap-1">
+          <Button size="sm" variant="ghost" onClick={() => openEdit(r)}><Edit3 size={12}/>Edit</Button>
+          <Button size="sm" variant="ghost" onClick={() => setDeleteFor(r)} disabled={inUse}
+            className={inUse ? 'opacity-40 cursor-not-allowed' : 'text-red-600 hover:bg-red-50'}>
+            <Trash2 size={12}/>{inUse ? 'In use' : 'Delete'}
+          </Button>
+        </div>
+      )
+    }},
   ]
 
   return (
     <div>
+      {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-green-50 rounded-lg"><LayoutGrid size={20} className="text-green-600" /></div>
           <div>
             <h1 className="text-xl font-bold text-gray-900">Plots</h1>
-            <p className="text-sm text-gray-500">{allPlots.length} plots</p>
+            <p className="text-sm text-gray-500">{allPlots.length} plots{search ? ` · ${filtered.length} matching` : ''}</p>
           </div>
         </div>
-      </div>
-
-      <div className="mb-5 flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
-        <Info size={16} className="mt-0.5 shrink-0" />
-        <div>
-          New plots are created from the <Link to="/projects" className="font-semibold underline">Projects</Link> page using the bulk plot generator.
-          This page is for editing or updating existing plots only.
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={() => { setBulkForm(EMPTY_BULK); setBulkModal(true) }}><Layers size={14}/>Bulk Generate</Button>
+          <Button onClick={() => { setAddForm(EMPTY_PLOT); setAddModal(true) }}><Plus size={14}/>Add Plot</Button>
         </div>
       </div>
 
+      {/* KPIs */}
       <div className="grid grid-cols-5 gap-4 mb-6">
         {[
-          { label: 'Total', value: allPlots.length, color: 'bg-gray-50 text-gray-700' },
-          { label: 'Available', value: availableCount, color: 'bg-green-50 text-green-700' },
-          { label: 'Token', value: tokenCount, color: 'bg-amber-50 text-amber-700' },
-          { label: 'Booked', value: bookedCount, color: 'bg-blue-50 text-blue-700' },
-          { label: 'Cancelled', value: cancelledCount, color: 'bg-red-50 text-red-700' },
+          { label: 'Total',     value: allPlots.length, color: 'bg-gray-50 text-gray-700' },
+          { label: 'Available', value: availableCount,  color: 'bg-green-50 text-green-700' },
+          { label: 'Token',     value: tokenCount,      color: 'bg-amber-50 text-amber-700' },
+          { label: 'Booked',    value: bookedCount,     color: 'bg-blue-50 text-blue-700' },
+          { label: 'Cancelled', value: cancelledCount,  color: 'bg-red-50 text-red-700' },
         ].map(s => (
           <div key={s.label} className={`rounded-xl p-4 ${s.color}`}>
             <p className="text-2xl font-bold">{s.value}</p>
@@ -164,46 +348,154 @@ export default function Plots() {
         ))}
       </div>
 
+      {/* Filter bar */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
-        <div className="p-4 border-b border-gray-100 flex gap-3">
+        <div className="p-3 border-b border-gray-100 flex gap-2 flex-wrap items-center">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
+            <input
+              value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Search plot no, block, sector, project..."
+              className="w-full pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            />
+          </div>
           <select value={projectFilter} onChange={e => setProjectFilter(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
             <option value="">All Projects</option>
             {(projects as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.name}{p.location ? ` · ${p.location}` : ''}</option>)}
           </select>
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
             <option value="">All Status</option>
-            <option value="available">Available</option>
-            <option value="token">Token</option>
-            <option value="booked">Booked</option>
-            <option value="cancelled">Cancelled</option>
+            {['available','token','booked','cancelled','sold'].map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>)}
           </select>
+          {(search || projectFilter || statusFilter) && (
+            <button onClick={() => { setSearch(''); setProjectFilter(''); setStatusFilter('') }} className="text-xs text-gray-500 hover:text-gray-800 underline">Clear filters</button>
+          )}
         </div>
-        <Table columns={cols} data={plots} loading={isLoading} />
+        <Table columns={cols} data={filtered} loading={isLoading} />
       </div>
 
-      <Modal open={modal} onClose={() => setModal(false)} title={`Edit Plot #${editing?.plot_no ?? ''}`}>
-        <div className="grid grid-cols-2 gap-4">
-          <Select label="Project" value={form.project_id} onChange={(e: any) => set('project_id', e.target.value)} className="col-span-2">
-            <option value="">Select Project</option>
-            {(projects as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.name}{p.location ? ` · ${p.location}` : ''}</option>)}
-          </Select>
-          <Input label="Plot No" value={form.plot_no} onChange={(e: any) => set('plot_no', e.target.value)} required />
-          <Input label="Size (sqyd)" type="number" value={form.size_sqyd} onChange={(e: any) => set('size_sqyd', e.target.value)} />
-          <Input label="Rate per sqyd (₹)" type="number" value={form.price_per_sqyd} onChange={(e: any) => set('price_per_sqyd', e.target.value)} />
-          <Input label="PLC Charges (₹)" type="number" value={form.plc_charges} onChange={(e: any) => set('plc_charges', e.target.value)} placeholder="0" />
-          <Input label="Total Price (₹)" type="number" value={form.total_price} onChange={(e: any) => set('total_price', e.target.value)} />
-          <Select label="Status" value={form.status} onChange={(e: any) => set('status', e.target.value)}>
-            <option value="available">Available</option>
-            <option value="token">Token</option>
-            <option value="booked">Booked</option>
-            <option value="cancelled">Cancelled</option>
-          </Select>
-        </div>
+      {/* ── Add Plot Modal ───────────────────────────────────────── */}
+      <Modal open={addModal} onClose={() => setAddModal(false)} title="Add Plot">
+        <PlotFormFields f={addForm} set={setA} projects={projects as any[]} totalPreview={addTotalPreview} />
         <div className="flex justify-end gap-2 mt-6">
-          <Button variant="secondary" onClick={() => setModal(false)}>Cancel</Button>
-          <Button onClick={save} loading={updatePlot.isPending}>Save Changes</Button>
+          <Button variant="secondary" onClick={() => setAddModal(false)}>Cancel</Button>
+          <Button onClick={saveAdd} loading={createPlot.isPending}>Create Plot</Button>
         </div>
       </Modal>
+
+      {/* ── Edit Plot Modal ──────────────────────────────────────── */}
+      <Modal open={editModal} onClose={() => setEditModal(false)} title={`Edit Plot #${editing?.plot_no ?? ''}`}>
+        <PlotFormFields f={editForm} set={setE} projects={projects as any[]} totalPreview={editTotalPreview} />
+        <div className="flex justify-end gap-2 mt-6">
+          <Button variant="secondary" onClick={() => setEditModal(false)}>Cancel</Button>
+          <Button onClick={saveEdit} loading={updatePlot.isPending}>Save Changes</Button>
+        </div>
+      </Modal>
+
+      {/* ── Bulk Generate Modal ──────────────────────────────────── */}
+      <Modal open={bulkModal} onClose={() => setBulkModal(false)} title="Bulk Generate Plots">
+        <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3 text-xs text-indigo-900 mb-4">
+          Generate up to <b>500</b> plots at once with shared attributes. Plot numbers are auto-numbered as <code className="bg-white px-1 rounded border">prefix + sequential number</code>.
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Select label="Project" value={bulkForm.project_id} onChange={(e: any) => setB('project_id', e.target.value)} className="col-span-2">
+            <option value="">Select project</option>
+            {(projects as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.name}{p.location ? ` · ${p.location}` : ''}</option>)}
+          </Select>
+
+          <div className="col-span-2 text-xs font-semibold text-gray-500 uppercase tracking-wide mt-1">Numbering</div>
+          <Input label="Prefix" value={bulkForm.prefix} onChange={(e: any) => setB('prefix', e.target.value)} placeholder="e.g. GV-A, RR-D" />
+          <Input label="Start Number" type="number" value={bulkForm.start_number} onChange={(e: any) => setB('start_number', e.target.value)} placeholder="101"/>
+          <Input label="Count" type="number" value={bulkForm.count} onChange={(e: any) => setB('count', e.target.value)} placeholder="10"/>
+          <Input label="Pad Width (0 = none)" type="number" value={bulkForm.pad_width} onChange={(e: any) => setB('pad_width', e.target.value)} placeholder="0"/>
+
+          {bulkPreviewList.length > 0 && (
+            <div className="col-span-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs">
+              <span className="text-gray-500">Preview: </span>
+              <span className="font-mono font-semibold">{bulkPreviewList.join(', ')}{Number(bulkForm.count) > 6 ? `, … (${bulkForm.count} total)` : ''}</span>
+            </div>
+          )}
+
+          <div className="col-span-2 text-xs font-semibold text-gray-500 uppercase tracking-wide mt-1">Shared attributes</div>
+          <Input label="Size (sqyd) *" type="number" value={bulkForm.size_sqyd} onChange={(e: any) => setB('size_sqyd', e.target.value)} />
+          <Input label="Rate per sqyd (₹)" type="number" value={bulkForm.price_per_sqyd} onChange={(e: any) => setB('price_per_sqyd', e.target.value)} />
+          <Input label="PLC charges (₹)" type="number" value={bulkForm.plc_charges} onChange={(e: any) => setB('plc_charges', e.target.value)} />
+          <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs flex flex-col justify-center">
+            <span className="text-gray-500">Computed total / plot</span>
+            <span className="font-semibold text-green-700">{formatINR(bulkTotalPreview)}</span>
+          </div>
+          <Select label="Category" value={bulkForm.category} onChange={(e: any) => setB('category', e.target.value)}>
+            {CATEGORIES.map(c => <option key={c} value={c} className="capitalize">{c}</option>)}
+          </Select>
+          <Select label="Facing" value={bulkForm.facing} onChange={(e: any) => setB('facing', e.target.value)}>
+            {FACINGS.map(f => <option key={f} value={f} className="capitalize">{f}</option>)}
+          </Select>
+          <Input label="Block" value={bulkForm.block} onChange={(e: any) => setB('block', e.target.value)} />
+          <Input label="Sector" value={bulkForm.sector} onChange={(e: any) => setB('sector', e.target.value)} />
+          <label className="col-span-2 flex items-center gap-2 text-sm text-gray-700">
+            <input type="checkbox" checked={bulkForm.is_corner} onChange={e => setB('is_corner', e.target.checked)} />
+            All plots are corner plots
+          </label>
+        </div>
+        <div className="flex justify-end gap-2 mt-6">
+          <Button variant="secondary" onClick={() => setBulkModal(false)}>Cancel</Button>
+          <Button onClick={() => bulkGenerate.mutate(bulkForm)} loading={bulkGenerate.isPending}>
+            <Layers size={14}/>Generate {bulkForm.count || 0} Plots
+          </Button>
+        </div>
+      </Modal>
+
+      {/* ── Delete confirm ───────────────────────────────────────── */}
+      <Modal open={!!deleteFor} onClose={() => setDeleteFor(null)} title={`Delete plot #${deleteFor?.plot_no ?? ''}?`} size="sm">
+        <div className="rounded-lg bg-red-50 border border-red-200 text-red-900 p-3 text-sm flex items-start gap-2">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0"/>
+          <div>This permanently removes the plot from inventory. Make sure no booking references this plot. This action cannot be undone.</div>
+        </div>
+        <div className="flex justify-end gap-2 mt-5">
+          <Button variant="secondary" onClick={() => setDeleteFor(null)}>Cancel</Button>
+          <Button onClick={async () => { await deletePlot.mutateAsync(deleteFor.id); setDeleteFor(null) }} loading={deletePlot.isPending} className="bg-red-600 hover:bg-red-700">
+            <Trash2 size={14}/>Delete plot
+          </Button>
+        </div>
+      </Modal>
+    </div>
+  )
+}
+
+function PlotFormFields({ f, set, projects, totalPreview }: any) {
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <Select label="Project *" value={f.project_id} onChange={(e: any) => set('project_id', e.target.value)} className="col-span-2">
+        <option value="">Select Project</option>
+        {projects.map((p: any) => <option key={p.id} value={p.id}>{p.name}{p.location ? ` · ${p.location}` : ''}</option>)}
+      </Select>
+      <Input label="Plot No *" value={f.plot_no} onChange={(e: any) => set('plot_no', e.target.value)} placeholder="e.g. GV-A101" />
+      <Input label="Size (sqyd) *" type="number" value={f.size_sqyd} onChange={(e: any) => set('size_sqyd', e.target.value)} />
+      <Input label="Rate per sqyd (₹)" type="number" value={f.price_per_sqyd} onChange={(e: any) => set('price_per_sqyd', e.target.value)} />
+      <Input label="PLC Charges (₹)" type="number" value={f.plc_charges} onChange={(e: any) => set('plc_charges', e.target.value)} placeholder="0" />
+      <Input label="Total Price (₹)" type="number" value={f.total_price} onChange={(e: any) => set('total_price', e.target.value)}
+        placeholder={`auto: ${formatINR(totalPreview)}`} />
+      <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs flex flex-col justify-center">
+        <span className="text-gray-500">Computed total</span>
+        <span className="font-semibold text-green-700">{formatINR(totalPreview)}</span>
+      </div>
+      <Select label="Category" value={f.category} onChange={(e: any) => set('category', e.target.value)}>
+        {CATEGORIES.map(c => <option key={c} value={c} className="capitalize">{c}</option>)}
+      </Select>
+      <Select label="Facing" value={f.facing} onChange={(e: any) => set('facing', e.target.value)}>
+        {FACINGS.map(c => <option key={c} value={c} className="capitalize">{c}</option>)}
+      </Select>
+      <Input label="Block" value={f.block} onChange={(e: any) => set('block', e.target.value)} placeholder="A"/>
+      <Input label="Sector" value={f.sector} onChange={(e: any) => set('sector', e.target.value)} placeholder="12"/>
+      <Input label="Floor" value={f.floor} onChange={(e: any) => set('floor', e.target.value)} placeholder="optional"/>
+      <Select label="Status" value={f.status} onChange={(e: any) => set('status', e.target.value)}>
+        {['available','token','booked','cancelled','sold'].map(s => <option key={s} value={s} className="capitalize">{s}</option>)}
+      </Select>
+      <label className="col-span-2 flex items-center gap-2 text-sm text-gray-700">
+        <input type="checkbox" checked={!!f.is_corner} onChange={e => set('is_corner', e.target.checked)} />
+        Corner plot
+      </label>
+      <Textarea label="Notes" value={f.notes} onChange={(e: any) => set('notes', e.target.value)} className="col-span-2" rows={2} />
     </div>
   )
 }

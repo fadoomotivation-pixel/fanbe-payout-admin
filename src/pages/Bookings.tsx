@@ -12,7 +12,7 @@ import { printApplicationForm } from '@/lib/printTemplates'
 import { logClosure, getCurrentUserId } from '@/lib/closure'
 import { ClosureDialog } from '@/components/ClosureDialog'
 import EmiPanel from '@/components/EmiPanel'
-import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info, Banknote, IndianRupee, Lock, Unlock } from 'lucide-react'
+import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info, Banknote, IndianRupee, Lock, Unlock, Search, Download, X, Filter, ChevronDown } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const STAGES = ['token_received','booking_done','cancelled'] as const
@@ -76,6 +76,16 @@ export default function Bookings() {
   const [emiBooking, setEmiBooking] = useState<any>(null)
   const [recordBookingFor, setRecordBookingFor] = useState<any>(null)
   const [closureFor, setClosureFor] = useState<{ booking: any; action: 'close' | 'reopen' } | null>(null)
+  const [bulkCloseFor, setBulkCloseFor] = useState<any[] | null>(null)
+  // ── Admin filter / search state ─────────────────────────────────
+  const [search, setSearch] = useState('')
+  const [filterProject, setFilterProject] = useState('')
+  const [filterBroker, setFilterBroker]   = useState('')
+  const [filterStage, setFilterStage]     = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo]     = useState('')
+  const [showFilters, setShowFilters] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }))
   const setNC = (k: string, v: any) => setForm((p: any) => ({ ...p, new_customer: { ...p.new_customer, [k]: v } }))
 
@@ -549,10 +559,32 @@ export default function Bookings() {
     return acc
   }, { all: 0, token: 0, advance: 0, full: 0, cancelled: 0, closed: 0 } as Record<Category, number>)
 
-  const filtered =
+  const inCategory =
     category === 'all'    ? all :
     category === 'closed' ? all.filter(isClosed) :
                             all.filter((b: any) => !isClosed(b) && categorize(b) === category)
+
+  // Apply admin filters (search, project, broker, stage, date range)
+  const filtered = inCategory.filter((b: any) => {
+    if (filterProject && b.project_id !== filterProject) return false
+    if (filterBroker  && b.broker_id  !== filterBroker)  return false
+    if (filterStage   && b.stage      !== filterStage)   return false
+    if (dateFrom && b.application_date && b.application_date < dateFrom) return false
+    if (dateTo   && b.application_date && b.application_date > dateTo)   return false
+    if (search.trim()) {
+      const q = search.toLowerCase()
+      const hay = [
+        b.booking_no, b.bp_customers?.name, b.bp_customers?.phone, b.bp_customers?.customer_code,
+        b.bp_plots?.plot_no, b.brokers?.name, b.brokers?.broker_id,
+        b.bp_projects?.name, b.scheme_name,
+      ].filter(Boolean).join(' ').toLowerCase()
+      if (!hay.includes(q)) return false
+    }
+    return true
+  })
+
+  const filtersActive = !!(search || filterProject || filterBroker || filterStage || dateFrom || dateTo)
+  const clearFilters = () => { setSearch(''); setFilterProject(''); setFilterBroker(''); setFilterStage(''); setDateFrom(''); setDateTo('') }
 
   const fullyPaid = (b: any) => {
     const total = Number(b.total_amount || b.plot_total_price || 0)
@@ -560,7 +592,87 @@ export default function Bookings() {
   }
   const canClose = (b: any) => !isClosed(b) && (fullyPaid(b) || b.stage === 'cancelled')
 
+  // ── Selection ─────────────────────────────────────────────────
+  const toggleSelect = (id: string) => setSelectedIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const toggleSelectAll = () => setSelectedIds(prev => prev.size === filtered.length ? new Set() : new Set(filtered.map((b: any) => b.id)))
+  const selectedRows = filtered.filter((b: any) => selectedIds.has(b.id))
+  const closeableSelected = selectedRows.filter((b: any) => canClose(b))
+
+  // ── CSV export ────────────────────────────────────────────────
+  const exportCSV = () => {
+    const rows = filtered
+    if (rows.length === 0) return toast.error('Nothing to export')
+    const headers = ['Booking No','Date','Customer','Phone','Plot','Project','Broker','Broker Code','Stage','Total','Paid','Balance','Closed']
+    const data = rows.map((b: any) => {
+      const total = Number(b.total_amount || b.plot_total_price || 0)
+      const paid  = Number(paidMap[b.id] || 0)
+      return [
+        b.booking_no || '',
+        b.application_date || '',
+        b.bp_customers?.name || '',
+        b.bp_customers?.phone || '',
+        b.bp_plots?.plot_no || '',
+        b.bp_projects?.name || '',
+        b.brokers?.name || '',
+        b.brokers?.broker_id || '',
+        b.stage || '',
+        total, paid, Math.max(0, total - paid),
+        b.closed_at ? new Date(b.closed_at).toISOString().slice(0,10) : '',
+      ]
+    })
+    const csv = [headers, ...data].map(r => r.map(cell => {
+      const s = String(cell ?? '')
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+    }).join(',')).join('\r\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `bookings-${new Date().toISOString().slice(0,10)}.csv`; a.click()
+    URL.revokeObjectURL(url)
+    toast.success(`${rows.length} rows exported`)
+  }
+
+  // ── Bulk close ────────────────────────────────────────────────
+  const bulkClose = useMutation({
+    mutationFn: async ({ items, reason }: { items: any[]; reason: string }) => {
+      const userId = await getCurrentUserId()
+      const now = new Date().toISOString()
+      for (const b of items) {
+        const { error } = await supabase.from('bp_bookings').update({
+          closed_at: now, closed_by: userId, closure_notes: reason || null,
+          reopened_at: null, reopened_by: null, reopen_reason: null, updated_at: now,
+        }).eq('id', b.id)
+        if (error) throw error
+        if (b.plot_id && b.stage === 'booking_done') {
+          await supabase.from('bp_plots').update({ status: 'sold' }).eq('id', b.plot_id)
+        }
+        await logClosure({ entityType: 'booking', entityId: b.id, action: 'closed', reason, metadata: { bulk: true, booking_no: b.booking_no, stage: b.stage } })
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['bookings'] })
+      qc.invalidateQueries({ queryKey: ['plots_avail'] })
+      qc.invalidateQueries({ queryKey: ['plots'] })
+      toast.success(`${bulkCloseFor?.length || 0} bookings closed`)
+      setBulkCloseFor(null); setSelectedIds(new Set())
+    },
+    onError: (e: any) => toast.error(e.message),
+  })
+
   const cols = [
+    {
+      key: '__select__',
+      header: (
+        <input type="checkbox"
+          checked={filtered.length > 0 && selectedIds.size === filtered.length}
+          ref={(el: any) => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < filtered.length }}
+          onChange={toggleSelectAll}
+          className="rounded border-gray-300"/>
+      ),
+      render: (r: any) => (
+        <input type="checkbox" checked={selectedIds.has(r.id)} onChange={() => toggleSelect(r.id)} className="rounded border-gray-300"/>
+      ),
+    },
     { header: 'Booking No', render: (r: any) => <span className="font-mono text-xs font-semibold text-blue-700">{r.booking_no}</span> },
     {
       header: 'Customer',
@@ -730,6 +842,73 @@ export default function Bookings() {
             {category === 'cancelled' && 'Cancelled bookings. Plot has been released back to inventory. Close to archive permanently.'}
             {category === 'closed'    && 'Closed bookings are locked and read-only. Reopening requires a written reason and is logged in the audit trail.'}
           </span>
+        </div>
+      )}
+
+      {/* ── Admin filter toolbar ───────────────────────────────── */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm mb-3">
+        <div className="p-3 flex flex-wrap items-center gap-2">
+          <div className="relative flex-1 min-w-[240px]">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search booking no, customer, phone, plot, broker, project..."
+              className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            />
+            {search && (
+              <button onClick={() => setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700"><X size={14}/></button>
+            )}
+          </div>
+          <button onClick={() => setShowFilters(s => !s)} className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border transition ${filtersActive ? 'border-indigo-300 bg-indigo-50 text-indigo-700' : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'}`}>
+            <Filter size={13}/>Filters{filtersActive ? ` · ${[filterProject,filterBroker,filterStage,dateFrom,dateTo].filter(Boolean).length}` : ''}<ChevronDown size={13} className={`transition-transform ${showFilters ? 'rotate-180' : ''}`}/>
+          </button>
+          <button onClick={exportCSV} className="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white text-gray-600 hover:border-gray-300">
+            <Download size={13}/>Export CSV
+          </button>
+          <div className="text-xs text-gray-500 ml-auto">
+            {filtered.length} of {inCategory.length}
+          </div>
+        </div>
+        {showFilters && (
+          <div className="px-3 pb-3 border-t border-gray-100 pt-3 grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+            <select value={filterProject} onChange={e => setFilterProject(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none">
+              <option value="">All Projects</option>
+              {(projects as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <select value={filterBroker} onChange={e => setFilterBroker(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none">
+              <option value="">All Brokers</option>
+              {(brokers as any[]).map((b: any) => <option key={b.id} value={b.id}>{b.name} [{b.broker_id}]</option>)}
+            </select>
+            <select value={filterStage} onChange={e => setFilterStage(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none">
+              <option value="">All Stages</option>
+              {STAGES.map(s => <option key={s} value={s}>{STAGE_META[s].label}</option>)}
+            </select>
+            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} placeholder="From" className="border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none"/>
+            <input type="date" value={dateTo}   onChange={e => setDateTo(e.target.value)}   placeholder="To"   className="border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none"/>
+            {filtersActive && (
+              <button onClick={clearFilters} className="col-span-full text-left text-gray-500 hover:text-gray-800 underline">Clear all filters</button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── Bulk action bar ────────────────────────────────────── */}
+      {selectedIds.size > 0 && (
+        <div className="mb-3 bg-indigo-600 text-white rounded-xl px-4 py-2.5 flex items-center justify-between text-sm shadow-sm">
+          <div className="flex items-center gap-3">
+            <span className="font-semibold">{selectedIds.size} selected</span>
+            {closeableSelected.length !== selectedIds.size && (
+              <span className="text-xs text-indigo-100">({closeableSelected.length} closeable — fully paid or cancelled)</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setBulkCloseFor(closeableSelected)} disabled={closeableSelected.length === 0}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-white text-indigo-700 rounded hover:bg-indigo-50 disabled:opacity-40 disabled:cursor-not-allowed">
+              <Lock size={12}/>Close {closeableSelected.length || ''}
+            </button>
+            <button onClick={() => setSelectedIds(new Set())} className="text-xs text-white/80 hover:text-white">Clear</button>
+          </div>
         </div>
       )}
 
@@ -921,6 +1100,19 @@ export default function Bookings() {
           else await reopenBooking.mutateAsync({ booking: closureFor.booking, reason })
         }}
         submitting={closeBooking.isPending || reopenBooking.isPending}
+      />
+
+      <ClosureDialog
+        open={!!bulkCloseFor}
+        action="close"
+        entityLabel={`${bulkCloseFor?.length || 0} bookings`}
+        description={`You are about to close ${bulkCloseFor?.length || 0} bookings in one go. Each will be locked and its plot (where applicable) marked as sold. Reopening each requires a written reason.`}
+        onClose={() => setBulkCloseFor(null)}
+        onConfirm={async (reason) => {
+          if (!bulkCloseFor || bulkCloseFor.length === 0) return
+          await bulkClose.mutateAsync({ items: bulkCloseFor, reason })
+        }}
+        submitting={bulkClose.isPending}
       />
 
       <RecordBookingPaymentModal
