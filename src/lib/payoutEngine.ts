@@ -375,6 +375,56 @@ export async function reverseBookingCommission(bookingId: string): Promise<void>
   await supabase.from('payout_distributions').delete().eq('booking_id', bookingId)
 }
 
+/**
+ * Per-payment MLM distribution. Called whenever a verified payment is recorded against
+ * a booking (token, booking deposit, full payment, or an EMI installment). Idempotent
+ * keyed on payment_id — won't double-distribute for the same payment.
+ *
+ * This is the primary MLM trigger in the deferred-commission model: commission is paid
+ * to the broker chain only as the customer's money is actually received.
+ */
+export async function distributePaymentCommission(opts: {
+  bookingId: string
+  paymentId: string
+  amount: number
+  instalmentDueDate?: Date
+  instalmentPaidDate?: Date
+}): Promise<DistributionRow[]> {
+  if (!opts.amount || opts.amount <= 0) return []
+
+  // Idempotency: skip if already distributed for this payment
+  const { data: existing } = await supabase
+    .from('payout_distributions')
+    .select('id')
+    .eq('payment_id', opts.paymentId)
+    .limit(1)
+  if (existing && existing.length > 0) return []
+
+  // Need broker for this booking
+  const { data: booking } = await supabase
+    .from('bp_bookings')
+    .select('broker_id')
+    .eq('id', opts.bookingId)
+    .single()
+  if (!booking || !booking.broker_id) return []
+
+  return await distributePayment({
+    bookingId: opts.bookingId,
+    paymentId: opts.paymentId,
+    bookingBrokerId: booking.broker_id,
+    approvedAmount: opts.amount,
+    instalmentDueDate: opts.instalmentDueDate,
+    instalmentPaidDate: opts.instalmentPaidDate,
+  })
+}
+
+/**
+ * Reverse a single payment's commissions. Used when a payment is refunded / deleted.
+ */
+export async function reversePaymentCommission(paymentId: string): Promise<void> {
+  await supabase.from('payout_distributions').delete().eq('payment_id', paymentId)
+}
+
 // ── Config Loader ─────────────────────────────────────────────────────────────
 
 export async function loadPayoutConfig(): Promise<PayoutConfig> {
