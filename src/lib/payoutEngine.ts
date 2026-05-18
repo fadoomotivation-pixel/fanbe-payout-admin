@@ -335,6 +335,46 @@ export async function distributePayment(opts: {
   return rows
 }
 
+/**
+ * Idempotent: distribute commission for a booking that's just been confirmed.
+ * Skips if rows already exist for this booking_id. Reads broker + total from the booking row.
+ * Returns the rows that were inserted (empty array if skipped or no eligible distribution).
+ */
+export async function distributeBookingCommission(bookingId: string): Promise<DistributionRow[]> {
+  // Idempotency: don't double-distribute
+  const { data: existing } = await supabase
+    .from('payout_distributions')
+    .select('id')
+    .eq('booking_id', bookingId)
+    .limit(1)
+  if (existing && existing.length > 0) return []
+
+  const { data: booking } = await supabase
+    .from('bp_bookings')
+    .select('id, broker_id, total_amount, plot_total_price, stage')
+    .eq('id', bookingId)
+    .single()
+  if (!booking || !booking.broker_id) return []
+
+  const base = Number(booking.total_amount || booking.plot_total_price || 0)
+  if (base <= 0) return []
+
+  return await distributePayment({
+    bookingId: booking.id,
+    paymentId: null as any, // null payment_id is allowed for booking-level commission
+    bookingBrokerId: booking.broker_id,
+    approvedAmount: base,
+  })
+}
+
+/**
+ * Reverse: remove any payout_distributions for this booking. Used when a booking is
+ * cancelled or reopened so the MLM chain doesn't keep stale commissions.
+ */
+export async function reverseBookingCommission(bookingId: string): Promise<void> {
+  await supabase.from('payout_distributions').delete().eq('booking_id', bookingId)
+}
+
 // ── Config Loader ─────────────────────────────────────────────────────────────
 
 export async function loadPayoutConfig(): Promise<PayoutConfig> {

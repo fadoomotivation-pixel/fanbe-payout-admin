@@ -3,26 +3,27 @@ import {
   LayoutDashboard, Users, Building2, Map, BookOpen, CreditCard, Banknote,
   Settings, LogOut, ChevronLeft, ChevronRight, BarChart2, FileText,
   UserCheck, Layers, MessageSquare, Megaphone, ShieldCheck, Receipt,
-  Wallet, Calculator, TrendingUp, Landmark,
+  Wallet, Calculator, TrendingUp, Landmark, Trophy, Star, Gift,
+  ScrollText, CalendarRange, Inbox, UserPlus, History,
   Bell, Menu, X, ChevronRight as Chevron
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
 
-// Grouping reorganized so admin can quickly answer:
-//   • Big picture                 → Main
-//   • Customer-side flows         → Customer / Real Estate
-//   • Commission & broker payout  → Commission & Payouts
+// Five clean groups, no duplicate names. Mirrors the funnel:
+//   Pipeline → Real Estate → Broker Network → Commissions & Payouts → Programs
 const NAV = [
-  { group: 'Main', items: [
+  { group: 'Overview', items: [
     { to: '/',               icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/analytics',      icon: BarChart2,        label: 'Analytics' },
     { to: '/reports',        icon: FileText,         label: 'Reports' },
     { to: '/balance-sheet',  icon: TrendingUp,       label: 'Balance Sheet' },
   ]},
-  { group: 'Customer', items: [
-    { to: '/members',        icon: Users,    label: 'Customers' },
+  { group: 'Sales Pipeline', items: [
+    { to: '/inquiries',       icon: Inbox,    label: 'Inquiries' },
+    { to: '/members',         icon: UserPlus, label: 'Members & Customers' },
+    { to: '/customer-history',icon: History,  label: 'Customer History' },
   ]},
   { group: 'Real Estate', items: [
     { to: '/projects',  icon: Building2,  label: 'Projects' },
@@ -31,18 +32,26 @@ const NAV = [
     { to: '/payments',  icon: CreditCard, label: 'Payments' },
     { to: '/emi',       icon: Calculator, label: 'EMI Schedule' },
   ]},
-  { group: 'Commission & Payouts', items: [
+  { group: 'Broker Network', items: [
     { to: '/brokers',          icon: Users,    label: 'Brokers' },
-    { to: '/commission',       icon: Layers,   label: 'Commission Ledger' },
-    { to: '/payouts',          icon: Banknote, label: 'Payouts' },
-    { to: '/withdrawals',      icon: Wallet,   label: 'Withdrawals' },
-    { to: '/commission-ranks', icon: Layers,   label: 'Rank Slabs' },
     { to: '/kyc',              icon: UserCheck,label: 'KYC Review' },
+    { to: '/commission-ranks', icon: Trophy,   label: 'Rank Slabs' },
+  ]},
+  { group: 'Commissions & Payouts', items: [
+    { to: '/commission',    icon: Layers,       label: 'Commission Ledger' },
+    { to: '/payouts',       icon: Banknote,     label: 'Payout Transactions' },
+    { to: '/payout-cycles', icon: CalendarRange,label: 'Payout Cycles' },
+    { to: '/withdrawals',   icon: Wallet,       label: 'Withdrawals' },
+    { to: '/payout-terms',  icon: ScrollText,   label: 'Payout Terms' },
+  ]},
+  { group: 'Programs', items: [
+    { to: '/achievers-club', icon: Star, label: 'Achievers Club' },
+    { to: '/team-rewards',   icon: Gift, label: 'Team Rewards' },
   ]},
   { group: 'Operations', items: [
-    { to: '/expenses', icon: Receipt,    label: 'Expenses' },
+    { to: '/expenses', icon: Receipt,       label: 'Expenses' },
     { to: '/tickets',  icon: MessageSquare, label: 'Tickets' },
-    { to: '/news',     icon: Megaphone,  label: 'News & Events' },
+    { to: '/news',     icon: Megaphone,     label: 'News & Events' },
   ]},
   { group: 'Admin', items: [
     { to: '/roles',         icon: ShieldCheck, label: 'Roles & Perms' },
@@ -52,11 +61,10 @@ const NAV = [
 ]
 
 const MOBILE_TABS = [
-  { to: '/',          icon: LayoutDashboard, label: 'Home' },
-  { to: '/members',   icon: Users,           label: 'Customers' },
-  { to: '/bookings',  icon: BookOpen,        label: 'Bookings' },
-  { to: '/payments',  icon: CreditCard,      label: 'Payments' },
-  { to: '/brokers',   icon: Users,           label: 'Brokers' },
+  { to: '/',           icon: LayoutDashboard, label: 'Home' },
+  { to: '/bookings',   icon: BookOpen,        label: 'Bookings' },
+  { to: '/brokers',    icon: Users,           label: 'Brokers' },
+  { to: '/withdrawals',icon: Wallet,          label: 'Withdrawals' },
 ]
 
 function getPageTitle(pathname) {
