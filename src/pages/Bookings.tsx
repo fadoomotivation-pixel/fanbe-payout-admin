@@ -11,7 +11,7 @@ import { formatINR, formatDate } from '@/lib/utils'
 import { printApplicationForm } from '@/lib/printTemplates'
 import { logClosure, getCurrentUserId } from '@/lib/closure'
 import { ClosureDialog } from '@/components/ClosureDialog'
-import { distributeBookingCommission, reverseBookingCommission } from '@/lib/payoutEngine'
+import { distributePaymentCommission, reverseBookingCommission } from '@/lib/payoutEngine'
 import EmiPanel from '@/components/EmiPanel'
 import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info, Banknote, IndianRupee, Lock, Unlock, Search, Download, X, Filter, ChevronDown } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -60,7 +60,7 @@ const EMPTY: any = {
   new_customer: { ...NEW_CUST_EMPTY },
   token_enabled: false,
   token_amount: '', token_date: today(), token_mode: 'cash', token_utr: '', token_drawn_on: '', token_branch: '',
-  booking_enabled: true,
+  booking_enabled: false,
   booking_amount: '', booking_date: today(), booking_mode: 'cash', booking_utr: '', booking_drawn_on: '', booking_branch: '',
   emi_enabled: false,
   emi_n: '12', emi_freq: 'monthly', emi_start: today(),
@@ -217,10 +217,12 @@ export default function Bookings() {
     await supabase.from('emi_installments').insert(rows)
   }
 
-  async function recordPaymentRow(p: any) {
-    if (p.amount <= 0) return
+  // Records a bp_payments row + fires per-payment MLM distribution.
+  // Returns { paymentId, distributedRows } so callers can surface a toast.
+  async function recordPaymentRow(p: any): Promise<{ paymentId: string | null; distributed: number }> {
+    if (p.amount <= 0) return { paymentId: null, distributed: 0 }
     const { data: rn } = await supabase.rpc('next_receipt_no')
-    const { error } = await supabase.from('bp_payments').insert({
+    const { data: inserted, error } = await supabase.from('bp_payments').insert({
       booking_id: p.booking_id, customer_id: p.customer_id,
       payment_type: p.payment_type, amount: p.amount, payment_mode: p.payment_mode,
       utr_ref: p.utr_ref || null, payment_date: p.payment_date,
@@ -228,8 +230,14 @@ export default function Bookings() {
       receipt_no: rn || null,
       drawn_on_bank: p.drawn_on_bank || (p.payment_mode === 'cash' ? 'Cash' : null),
       branch: p.branch || null, sponsor_name: p.sponsor_name || null,
-    })
+    }).select('id').single()
     if (error) throw error
+    const rows = await distributePaymentCommission({
+      bookingId: p.booking_id,
+      paymentId: inserted.id,
+      amount: Number(p.amount),
+    })
+    return { paymentId: inserted.id, distributed: rows.length }
   }
 
   function autoStage(f: any): Stage {
@@ -296,19 +304,24 @@ export default function Bookings() {
       const { data: bk, error } = await supabase.from('bp_bookings').insert(bookingPayload).select().single()
       if (error) throw error
       const sponsorName = broker?.name || null
-      if (rest.token_enabled && tokenAmt > 0)   await recordPaymentRow({ booking_id: bk.id, customer_id, payment_type: 'token',        amount: tokenAmt,   payment_date: rest.token_date,   payment_mode: rest.token_mode,   utr_ref: rest.token_utr,   drawn_on_bank: rest.token_drawn_on,   branch: rest.token_branch,   sponsor_name: sponsorName })
-      if (rest.booking_enabled && bookingAmt > 0) await recordPaymentRow({ booking_id: bk.id, customer_id, payment_type: 'booking',      amount: bookingAmt, payment_date: rest.booking_date, payment_mode: rest.booking_mode, utr_ref: rest.booking_utr, drawn_on_bank: rest.booking_drawn_on, branch: rest.booking_branch, sponsor_name: sponsorName })
-      if (rest.full_enabled && fullAmt > 0)     await recordPaymentRow({ booking_id: bk.id, customer_id, payment_type: 'full_payment', amount: fullAmt,    payment_date: rest.full_date,    payment_mode: rest.full_mode,    utr_ref: rest.full_utr, sponsor_name: sponsorName })
+      let distributed = 0
+      if (rest.token_enabled && tokenAmt > 0) {
+        const r = await recordPaymentRow({ booking_id: bk.id, customer_id, payment_type: 'token',        amount: tokenAmt,   payment_date: rest.token_date,   payment_mode: rest.token_mode,   utr_ref: rest.token_utr,   drawn_on_bank: rest.token_drawn_on,   branch: rest.token_branch,   sponsor_name: sponsorName })
+        distributed += r.distributed
+      }
+      if (rest.booking_enabled && bookingAmt > 0) {
+        const r = await recordPaymentRow({ booking_id: bk.id, customer_id, payment_type: 'booking',      amount: bookingAmt, payment_date: rest.booking_date, payment_mode: rest.booking_mode, utr_ref: rest.booking_utr, drawn_on_bank: rest.booking_drawn_on, branch: rest.booking_branch, sponsor_name: sponsorName })
+        distributed += r.distributed
+      }
+      if (rest.full_enabled && fullAmt > 0) {
+        const r = await recordPaymentRow({ booking_id: bk.id, customer_id, payment_type: 'full_payment', amount: fullAmt,    payment_date: rest.full_date,    payment_mode: rest.full_mode,    utr_ref: rest.full_utr, sponsor_name: sponsorName })
+        distributed += r.distributed
+      }
       if (rest.emi_enabled) {
         const principal = Math.max(0, total - tokenAmt - bookingAmt - fullAmt)
         if (principal > 0) await generateEmiSchedule(bk.id, customer_id, principal, num(rest.emi_n) || 12, rest.emi_freq || 'monthly', rest.emi_start || today())
       }
       await syncPlotStatus(rest.plot_id, stage)
-      let distributed = 0
-      if (stage === 'booking_done') {
-        const rows = await distributeBookingCommission(bk.id)
-        distributed = rows.length
-      }
       return { ...bk, distributed }
     },
     onSuccess: (res: any) => {
@@ -380,12 +393,9 @@ export default function Bookings() {
       const { error } = await supabase.from('bp_bookings').update({ stage, updated_at: new Date().toISOString() }).eq('id', id)
       if (error) throw error
       await syncPlotStatus(current?.plot_id, stage)
-      if (stage === 'booking_done') {
-        const rows = await distributeBookingCommission(id)
-        if (rows.length > 0) toast.success(`MLM distributed to ${rows.length} broker${rows.length !== 1 ? 's' : ''}`)
-      } else if (stage === 'cancelled') {
-        await reverseBookingCommission(id)
-      }
+      // Per-payment MLM model: commission is distributed when payments are recorded.
+      // Stage advance does not redistribute. Cancelling rolls back all commissions for this booking.
+      if (stage === 'cancelled') await reverseBookingCommission(id)
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['bookings'] })
@@ -404,7 +414,7 @@ export default function Bookings() {
     mutationFn: async (p: { booking: any; amount: number; date: string; mode: string; utr: string; drawn_on: string; branch: string; openEmiAfter: boolean }) => {
       if (p.amount <= 0) throw new Error('Amount must be greater than zero')
       const b = p.booking
-      await recordPaymentRow({
+      const r = await recordPaymentRow({
         booking_id: b.id, customer_id: b.customer_id,
         payment_type: 'booking', amount: p.amount, payment_date: p.date,
         payment_mode: p.mode, utr_ref: p.utr,
@@ -421,8 +431,7 @@ export default function Bookings() {
       const { error } = await supabase.from('bp_bookings').update(updatePayload).eq('id', b.id)
       if (error) throw error
       await syncPlotStatus(b.plot_id, 'booking_done')
-      const rows = await distributeBookingCommission(b.id)
-      return { booking: b, openEmiAfter: p.openEmiAfter, distributed: rows.length }
+      return { booking: b, openEmiAfter: p.openEmiAfter, distributed: r.distributed }
     },
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['bookings'] })
@@ -1009,18 +1018,24 @@ export default function Bookings() {
             <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Payment Plan</div>
             <div className="text-[11px] text-gray-500 mb-3">Tick everything the customer is paying today. Token + Booking + EMI combinations are supported.</div>
 
-            <PayBlock checked={form.token_enabled} onCheck={v => set('token_enabled', v)} label="Token amount" subtitle="Token receipt will be auto-generated" color="amber"
+            <PayBlock checked={form.token_enabled} onCheck={v => set('token_enabled', v)} label="Token amount" subtitle={
+              form.token_enabled && !form.booking_enabled
+                ? 'Token-only today — booking deposit will be recorded later from the Bookings list.'
+                : 'Token receipt will be auto-generated'
+            } color="amber"
               warning={form.token_enabled && !num(form.token_amount) ? 'Enter the token amount or uncheck this section' : undefined}>
               <PayFields prefix="token" form={form} set={set}
                 amountError={form.token_enabled && !num(form.token_amount) ? 'Required' : undefined} />
             </PayBlock>
 
-            <PayBlock checked={form.booking_enabled} onCheck={v => set('booking_enabled', v)} label="Booking amount" subtitle={
-              form.booking_enabled && !num(form.booking_amount)
-                ? 'Booking deposit pending — booking will not advance until amount is recorded'
-                : form.token_enabled && form.booking_enabled
-                  ? 'Token + Booking — full upfront. The booking will be marked Booking Done.'
-                  : 'The main booking deposit'
+            <PayBlock checked={form.booking_enabled} onCheck={v => set('booking_enabled', v)} label="Booking amount (deposit)" subtitle={
+              !form.booking_enabled
+                ? form.token_enabled
+                  ? 'Customer is only paying token today? Leave this off — record the deposit later.'
+                  : 'Tick this when the customer is paying the booking deposit today.'
+                : form.token_enabled
+                  ? 'Token + Booking — full upfront. The booking will advance to "Booking Done".'
+                  : 'Booking-deposit-only today (no separate token).'
             } color="blue"
               warning={form.booking_enabled && !num(form.booking_amount) ? 'Enter the booking deposit amount, or uncheck if the customer has not paid it yet.' : undefined}>
               <PayFields prefix="booking" form={form} set={set}
