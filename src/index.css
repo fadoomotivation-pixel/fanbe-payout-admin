@@ -537,6 +537,7 @@ tbody tr:last-child td { border-bottom: none; }
   .sidebar.mobile-open {
     transform: translateX(0);
     box-shadow: var(--shadow-lg);
+    z-index: 50;  /* must sit above the overlay (z:45) so its content is not blurred */
   }
   .main-col { width: 100%; }
   .mobile-bottom-nav { display: flex; }
