@@ -1034,9 +1034,11 @@ export default function Bookings() {
               warning={form.token_enabled && !num(form.token_amount) ? 'Enter the token amount or uncheck this section' : undefined}>
               <PayFields prefix="token" form={form} set={set}
                 amountError={form.token_enabled && !num(form.token_amount) ? 'Required' : undefined} />
-              {tokenAmt > 0 && totalNet > 0 && (
+              {form.token_enabled && (
                 <InlineBreakdown
+                  hint={totalNet <= 0 ? 'Enter Size + Rate per sq.yd above to see live balance & EMI numbers.' : undefined}
                   rows={[
+                    { label: 'Total plot value', value: formatINR(totalNet), accent: 'text-gray-700' },
                     { label: 'Balance after token', value: formatINR(balanceAfterToken), accent: 'text-orange-700' },
                     { label: '10% booking deposit (suggested)', value: formatINR(suggestedDeposit10pct), accent: 'text-blue-700' },
                     { label: `${emiCount} ${form.emi_freq.replace(/_/g, ' ')} EMIs on balance`, value: `${formatINR(perEmiAfterToken)}${freqLabel}`, accent: 'text-emerald-700' },
@@ -1046,7 +1048,7 @@ export default function Bookings() {
                   onN={(v: any) => set('emi_n', v)}
                   onFreq={(v: any) => set('emi_freq', v)}
                   actions={
-                    !form.booking_enabled && balanceAfterToken > 0 ? (
+                    !form.booking_enabled && balanceAfterToken > 0 && totalNet > 0 ? (
                       <button type="button" onClick={() => { set('booking_enabled', true); set('booking_amount', String(suggestedDeposit10pct)) }}
                         className="text-[11px] px-2 py-1 rounded-md bg-blue-600 text-white hover:bg-blue-700 whitespace-nowrap">
                         Use 10% as booking
@@ -1069,9 +1071,11 @@ export default function Bookings() {
               warning={form.booking_enabled && !num(form.booking_amount) ? 'Enter the booking deposit amount, or uncheck if the customer has not paid it yet.' : undefined}>
               <PayFields prefix="booking" form={form} set={set}
                 amountError={form.booking_enabled && !num(form.booking_amount) ? 'Required when this section is enabled' : undefined} />
-              {bookingAmt > 0 && totalNet > 0 && (
+              {form.booking_enabled && (
                 <InlineBreakdown
+                  hint={totalNet <= 0 ? 'Enter Size + Rate per sq.yd above to see live balance & EMI numbers.' : undefined}
                   rows={[
+                    { label: 'Total plot value', value: formatINR(totalNet), accent: 'text-gray-700' },
                     { label: 'Balance after booking deposit', value: formatINR(balanceAfterBooking), accent: 'text-orange-700' },
                     { label: `${emiCount} ${form.emi_freq.replace(/_/g, ' ')} EMIs on balance`, value: `${formatINR(perEmiAfterBooking)}${freqLabel}`, accent: 'text-emerald-700' },
                     { label: 'Total payable across EMIs', value: formatINR(perEmiAfterBooking * emiCount), accent: 'text-gray-700' },
@@ -1307,7 +1311,7 @@ function RecordBookingPaymentModal({ booking, paid, onClose, onSubmit, submittin
   )
 }
 
-function InlineBreakdown({ rows, emiN, emiFreq, onN, onFreq, actions }: any) {
+function InlineBreakdown({ rows, emiN, emiFreq, onN, onFreq, actions, hint }: any) {
   return (
     <div className="mt-3 rounded-lg border border-white/60 bg-white/70 backdrop-blur-sm shadow-inner p-2.5 text-xs">
       <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
@@ -1326,6 +1330,9 @@ function InlineBreakdown({ rows, emiN, emiFreq, onN, onFreq, actions }: any) {
           {actions}
         </div>
       </div>
+      {hint && (
+        <div className="mb-2 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">{hint}</div>
+      )}
       <div className="space-y-1">
         {rows.map((r: any, i: number) => (
           <div key={i} className="flex items-center justify-between">
