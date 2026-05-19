@@ -37,7 +37,7 @@ export default function Roles(){
     if(error) toast.error(error.message); else { setNewRole(''); load() }
   }
   return(
-    <div className="p-6 space-y-4">
+    <div className="p-3 md:p-6 space-y-4">
       <h1 className="text-2xl font-semibold">Roles & Permissions</h1>
       <div className="grid md:grid-cols-3 gap-4">
         <div className="bg-white rounded-xl shadow p-4 space-y-2">

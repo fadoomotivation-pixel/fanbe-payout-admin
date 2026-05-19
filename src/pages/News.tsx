@@ -24,7 +24,7 @@ export default function News(){
   const toggle=async(r:Row)=>{ await supabase.from('news_events').update({is_active:!r.is_active}).eq('id',r.id); load() }
   const remove=async(id:string)=>{ if(confirm('Delete?')){ await supabase.from('news_events').delete().eq('id',id); load() } }
   return(
-    <div className="p-6 space-y-4">
+    <div className="p-3 md:p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">News & Events</h1>
         <div className="flex gap-2">

@@ -98,8 +98,8 @@ export default function Customers() {
             </div>
           </div>
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-            {loading ? <div className="p-6 text-sm text-gray-400">Loading…</div>
-              : filtered.length === 0 ? <div className="p-6 text-sm text-gray-400">No customers</div>
+            {loading ? <div className="p-3 md:p-6 text-sm text-gray-400">Loading…</div>
+              : filtered.length === 0 ? <div className="p-3 md:p-6 text-sm text-gray-400">No customers</div>
               : <div className="divide-y divide-gray-50 max-h-[70vh] overflow-y-auto">
                   {filtered.map(c => (
                     <button key={c.id} onClick={() => setActiveId(c.id)} className={`w-full text-left px-4 py-3 hover:bg-gray-50 ${activeId === c.id ? 'bg-blue-50 border-l-2 border-blue-500' : ''}`}>

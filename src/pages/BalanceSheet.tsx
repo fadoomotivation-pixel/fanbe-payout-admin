@@ -23,7 +23,7 @@ export default function BalanceSheet(){
     </div>
   )
   return(
-    <div className="p-6 space-y-4">
+    <div className="p-3 md:p-6 space-y-4">
       <h1 className="text-2xl font-semibold">Balance Sheet</h1>
       <div className="grid md:grid-cols-4 gap-4">
         <Card label="Total Revenue" value={rev} tone="border-emerald-500"/>

@@ -96,7 +96,7 @@ export default function CommissionRanks() {
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div className="p-3 md:p-6 max-w-7xl mx-auto">
       <div className="flex items-center gap-3 mb-2">
         <Trophy className="text-amber-500" size={28} />
         <div>

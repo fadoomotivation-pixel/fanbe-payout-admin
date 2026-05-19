@@ -235,9 +235,9 @@ export default function EMI() {
             <span className="text-sm font-semibold text-gray-700">All Schedules ({(schedules as any[]).length})</span>
           </div>
           {schedLoading ? (
-            <div className="p-6 text-center text-sm text-gray-400">Loading…</div>
+            <div className="p-3 md:p-6 text-center text-sm text-gray-400">Loading…</div>
           ) : (schedules as any[]).length === 0 ? (
-            <div className="p-6 text-center text-sm text-gray-400">No schedules yet.</div>
+            <div className="p-3 md:p-6 text-center text-sm text-gray-400">No schedules yet.</div>
           ) : (
             <div className="divide-y divide-gray-50 max-h-[600px] overflow-y-auto">
               {(schedules as any[]).map((s: any) => (

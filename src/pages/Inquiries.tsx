@@ -24,7 +24,7 @@ export default function Inquiries(){
     if(error) toast.error(error.message); else { toast.success('Updated'); load() }
   }
   return(
-    <div className="p-6 space-y-4">
+    <div className="p-3 md:p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Inquiries</h1>
         <div className="flex gap-2">
@@ -55,7 +55,7 @@ export default function Inquiries(){
                 </td>
               </tr>
             ))}
-            {!loading&&rows.length===0&&<tr><td className="p-6 text-slate-500" colSpan={7}>No inquiries yet.</td></tr>}
+            {!loading&&rows.length===0&&<tr><td className="p-3 md:p-6 text-slate-500" colSpan={7}>No inquiries yet.</td></tr>}
           </tbody>
         </table>
       </div>

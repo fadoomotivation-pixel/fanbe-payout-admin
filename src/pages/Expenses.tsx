@@ -31,7 +31,7 @@ export default function Expenses(){
   }
   const total=rows.reduce((s,r)=>s+Number(r.amount),0)
   return(
-    <div className="p-6 space-y-4">
+    <div className="p-3 md:p-6 space-y-4">
       <h1 className="text-2xl font-semibold">Expenses</h1>
       <div className="grid md:grid-cols-3 gap-4">
         <div className="md:col-span-2 bg-white rounded-xl shadow p-4 space-y-2">

@@ -37,7 +37,7 @@ export default function Tickets(){
     toast.success(s); load()
   }
   return(
-    <div className="p-6 space-y-4">
+    <div className="p-3 md:p-6 space-y-4">
       <h1 className="text-2xl font-semibold">Support Tickets</h1>
       <div className="grid md:grid-cols-3 gap-4">
         <div className="bg-white rounded-xl shadow divide-y max-h-[70vh] overflow-y-auto">
@@ -48,7 +48,7 @@ export default function Tickets(){
               <div className="text-xs text-slate-500">{t.user_name||'-'} · {sections.find(s=>s.id===t.section_id)?.name||'-'}</div>
             </button>
           ))}
-          {tickets.length===0&&<div className="p-6 text-sm text-slate-500">No tickets.</div>}
+          {tickets.length===0&&<div className="p-3 md:p-6 text-sm text-slate-500">No tickets.</div>}
         </div>
         <div className="md:col-span-2 bg-white rounded-xl shadow flex flex-col max-h-[70vh]">
           {!active?<div className="p-10 text-center text-slate-500 text-sm">Select a ticket to view conversation.</div>:<>

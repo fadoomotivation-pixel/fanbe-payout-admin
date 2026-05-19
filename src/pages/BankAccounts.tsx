@@ -20,7 +20,7 @@ export default function BankAccounts(){
     load()
   }
   return(
-    <div className="p-6 space-y-4">
+    <div className="p-3 md:p-6 space-y-4">
       <div className="flex justify-between items-center"><h1 className="text-2xl font-semibold">Company Bank Accounts</h1><button onClick={()=>setShow(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm">+ Add</button></div>
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
         {rows.map(r=>(
