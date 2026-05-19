@@ -569,7 +569,15 @@ export default function Bookings() {
   const paidToday = tokenAmt + bookingAmt + fullAmt
   const balanceDue = Math.max(0, totalNet - paidToday)
   const principalPreview = balanceDue
-  const emiAmtPreview = principalPreview > 0 && num(form.emi_n) > 0 ? Math.round(principalPreview / num(form.emi_n)) : 0
+  const emiCount = Math.max(1, num(form.emi_n) || 12)
+  const emiAmtPreview = principalPreview > 0 ? Math.round(principalPreview / emiCount) : 0
+  // Inline breakdowns for Token / Booking sections
+  const balanceAfterToken     = Math.max(0, totalNet - tokenAmt)
+  const balanceAfterBooking   = Math.max(0, totalNet - tokenAmt - bookingAmt)
+  const suggestedDeposit10pct = totalNet > 0 ? Math.round(totalNet * 0.10) : 0
+  const perEmiAfterToken      = balanceAfterToken   > 0 ? Math.round(balanceAfterToken   / emiCount) : 0
+  const perEmiAfterBooking    = balanceAfterBooking > 0 ? Math.round(balanceAfterBooking / emiCount) : 0
+  const freqLabel             = form.emi_freq === 'monthly' ? '/mo' : form.emi_freq === 'quarterly' ? '/qtr' : form.emi_freq === 'half_yearly' ? '/6mo' : '/yr'
 
   const paidMap = paidByBooking as Record<string, number>
   const emiMap = emiByBooking as Record<string, boolean>
@@ -1026,6 +1034,27 @@ export default function Bookings() {
               warning={form.token_enabled && !num(form.token_amount) ? 'Enter the token amount or uncheck this section' : undefined}>
               <PayFields prefix="token" form={form} set={set}
                 amountError={form.token_enabled && !num(form.token_amount) ? 'Required' : undefined} />
+              {tokenAmt > 0 && totalNet > 0 && (
+                <InlineBreakdown
+                  rows={[
+                    { label: 'Balance after token', value: formatINR(balanceAfterToken), accent: 'text-orange-700' },
+                    { label: '10% booking deposit (suggested)', value: formatINR(suggestedDeposit10pct), accent: 'text-blue-700' },
+                    { label: `${emiCount} ${form.emi_freq.replace(/_/g, ' ')} EMIs on balance`, value: `${formatINR(perEmiAfterToken)}${freqLabel}`, accent: 'text-emerald-700' },
+                  ]}
+                  emiN={form.emi_n}
+                  emiFreq={form.emi_freq}
+                  onN={(v: any) => set('emi_n', v)}
+                  onFreq={(v: any) => set('emi_freq', v)}
+                  actions={
+                    !form.booking_enabled && balanceAfterToken > 0 ? (
+                      <button type="button" onClick={() => { set('booking_enabled', true); set('booking_amount', String(suggestedDeposit10pct)) }}
+                        className="text-[11px] px-2 py-1 rounded-md bg-blue-600 text-white hover:bg-blue-700 whitespace-nowrap">
+                        Use 10% as booking
+                      </button>
+                    ) : null
+                  }
+                />
+              )}
             </PayBlock>
 
             <PayBlock checked={form.booking_enabled} onCheck={v => set('booking_enabled', v)} label="Booking amount (deposit)" subtitle={
@@ -1040,6 +1069,27 @@ export default function Bookings() {
               warning={form.booking_enabled && !num(form.booking_amount) ? 'Enter the booking deposit amount, or uncheck if the customer has not paid it yet.' : undefined}>
               <PayFields prefix="booking" form={form} set={set}
                 amountError={form.booking_enabled && !num(form.booking_amount) ? 'Required when this section is enabled' : undefined} />
+              {bookingAmt > 0 && totalNet > 0 && (
+                <InlineBreakdown
+                  rows={[
+                    { label: 'Balance after booking deposit', value: formatINR(balanceAfterBooking), accent: 'text-orange-700' },
+                    { label: `${emiCount} ${form.emi_freq.replace(/_/g, ' ')} EMIs on balance`, value: `${formatINR(perEmiAfterBooking)}${freqLabel}`, accent: 'text-emerald-700' },
+                    { label: 'Total payable across EMIs', value: formatINR(perEmiAfterBooking * emiCount), accent: 'text-gray-700' },
+                  ]}
+                  emiN={form.emi_n}
+                  emiFreq={form.emi_freq}
+                  onN={(v: any) => set('emi_n', v)}
+                  onFreq={(v: any) => set('emi_freq', v)}
+                  actions={
+                    !form.emi_enabled && balanceAfterBooking > 0 ? (
+                      <button type="button" onClick={() => set('emi_enabled', true)}
+                        className="text-[11px] px-2 py-1 rounded-md bg-emerald-600 text-white hover:bg-emerald-700 whitespace-nowrap">
+                        Auto-create EMI schedule
+                      </button>
+                    ) : null
+                  }
+                />
+              )}
             </PayBlock>
 
             <PayBlock checked={form.emi_enabled} onCheck={v => set('emi_enabled', v)} label="EMI plan for the balance" subtitle={`Principal: ${formatINR(principalPreview)} · Per instalment: ${formatINR(emiAmtPreview)}`} color="emerald">
@@ -1254,6 +1304,37 @@ function RecordBookingPaymentModal({ booking, paid, onClose, onSubmit, submittin
         </Button>
       </div>
     </Modal>
+  )
+}
+
+function InlineBreakdown({ rows, emiN, emiFreq, onN, onFreq, actions }: any) {
+  return (
+    <div className="mt-3 rounded-lg border border-white/60 bg-white/70 backdrop-blur-sm shadow-inner p-2.5 text-xs">
+      <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+        <span className="text-[10px] font-semibold tracking-wider text-gray-500 uppercase">Live breakdown</span>
+        <div className="flex items-center gap-1.5">
+          <input type="number" value={emiN} onChange={(e: any) => onN(e.target.value)}
+            className="w-12 border border-gray-200 rounded px-1.5 py-0.5 text-xs text-right focus:outline-none focus:ring-1 focus:ring-emerald-300"
+            aria-label="Number of EMI instalments"/>
+          <select value={emiFreq} onChange={e => onFreq(e.target.value)}
+            className="border border-gray-200 rounded px-1 py-0.5 text-xs focus:outline-none">
+            <option value="monthly">monthly</option>
+            <option value="quarterly">quarterly</option>
+            <option value="half_yearly">half-yearly</option>
+            <option value="annual">annual</option>
+          </select>
+          {actions}
+        </div>
+      </div>
+      <div className="space-y-1">
+        {rows.map((r: any, i: number) => (
+          <div key={i} className="flex items-center justify-between">
+            <span className="text-gray-600">{r.label}</span>
+            <span className={`font-semibold ${r.accent || 'text-gray-900'}`}>{r.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 
