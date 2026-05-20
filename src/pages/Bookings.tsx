@@ -982,7 +982,7 @@ export default function Bookings() {
           </Select>
         </div>
 
-        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Pricing Breakdown</div>
+        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Pricing Inputs</div>
         <div className="grid grid-cols-2 gap-3">
           <Input label="आकार / Size (वर्ग गज / sq.yd)" type="number" value={form.size_sqyd} onChange={(e:any) => set('size_sqyd', e.target.value)} />
           <Input label="प्रति गज दर / Rate per sq.yd (₹)" type="number" value={form.rate_per_sqyd} onChange={(e:any) => set('rate_per_sqyd', e.target.value)} />
@@ -991,35 +991,12 @@ export default function Bookings() {
           <Input label="Discount (₹)" type="number" value={form.discount_amount} onChange={(e:any) => set('discount_amount', e.target.value)} />
         </div>
 
-        <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg text-sm">
-          <div className="grid grid-cols-2 gap-y-1.5 gap-x-4">
-            <div className="text-gray-600">Base price <span className="text-[10px] text-gray-400">({size || 0} × ₹{rate || 0})</span></div>
-            <div className="text-right font-semibold">{formatINR(basePrice)}</div>
-            <div className="text-gray-600">+ Development charges</div>
-            <div className="text-right font-semibold">{formatINR(dev)}</div>
-            <div className="text-gray-600">+ PLC charges</div>
-            <div className="text-right font-semibold">{formatINR(plc)}</div>
-            <div className="text-gray-600">− Discount</div>
-            <div className="text-right font-semibold text-red-700">{disc > 0 ? '−' : ''}{formatINR(disc)}</div>
-            <div className="text-gray-900 font-semibold border-t border-gray-300 pt-1.5">कुल नेट / Total net value</div>
-            <div className="text-right text-green-700 font-bold text-base border-t border-gray-300 pt-1.5">{formatINR(totalNet)}</div>
-            {!editing && paidToday > 0 && (
-              <>
-                {tokenAmt > 0 && (<><div className="text-gray-600">− Token paid today</div><div className="text-right font-semibold text-red-700">−{formatINR(tokenAmt)}</div></>)}
-                {bookingAmt > 0 && (<><div className="text-gray-600">− Booking amount paid today</div><div className="text-right font-semibold text-red-700">−{formatINR(bookingAmt)}</div></>)}
-                {fullAmt > 0 && (<><div className="text-gray-600">− Full payment today</div><div className="text-right font-semibold text-red-700">−{formatINR(fullAmt)}</div></>)}
-                <div className="text-gray-900 font-semibold border-t border-gray-300 pt-1.5">शेष / Balance due</div>
-                <div className={`text-right font-bold text-base border-t border-gray-300 pt-1.5 ${balanceDue > 0 ? 'text-orange-700' : 'text-green-700'}`}>{formatINR(balanceDue)}</div>
-              </>
-            )}
+        {totalNet > 0 && (
+          <div className="mt-3 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-lg text-sm flex items-center justify-between">
+            <span className="text-emerald-900">कुल नेट / Total net value</span>
+            <span className="text-emerald-700 font-bold">{formatINR(totalNet)}</span>
           </div>
-          {selectedBroker && brokerRankPct > 0 && (
-            <div className="mt-3 pt-3 border-t border-gray-200 flex items-start gap-2 text-xs text-blue-900 bg-blue-50 -mx-3 -mb-3 px-3 py-2 rounded-b-lg">
-              <Info size={13} className="mt-0.5 shrink-0"/>
-              <div><b>{selectedBroker.name}</b>'s commission ({brokerRankPct}% of base price): <b>{formatINR(commissionAmt)}</b>. Development & PLC charges are excluded from commission.</div>
-            </div>
-          )}
-        </div>
+        )}
 
         {!editing && (
           <>
@@ -1034,6 +1011,32 @@ export default function Bookings() {
               warning={form.token_enabled && !num(form.token_amount) ? 'Enter the token amount or uncheck this section' : undefined}>
               <PayFields prefix="token" form={form} set={set}
                 amountError={form.token_enabled && !num(form.token_amount) ? 'Required' : undefined} />
+
+              {/* Explicit "What about the booking deposit?" decision panel — appears whenever token is being received but booking is not yet decided */}
+              {form.token_enabled && num(form.token_amount) > 0 && !form.booking_enabled && (
+                <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50/60 p-3">
+                  <div className="text-[11px] font-semibold text-blue-900 mb-2 uppercase tracking-wider">Booking deposit — what now?</div>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button"
+                      onClick={() => { set('booking_enabled', true); set('booking_amount', String(suggestedDeposit10pct)); set('booking_date', form.token_date) }}
+                      className="flex-1 min-w-[140px] text-left px-3 py-2 text-xs rounded-md bg-blue-600 text-white hover:bg-blue-700">
+                      <div className="font-semibold">Receiving today (10% suggested)</div>
+                      <div className="opacity-80 text-[11px]">{formatINR(suggestedDeposit10pct)} — tick Booking section</div>
+                    </button>
+                    <button type="button"
+                      onClick={() => { set('booking_enabled', true); set('booking_amount', '') }}
+                      className="flex-1 min-w-[140px] text-left px-3 py-2 text-xs rounded-md bg-white border border-blue-300 text-blue-800 hover:bg-blue-50">
+                      <div className="font-semibold">Receiving today — custom amount</div>
+                      <div className="opacity-80 text-[11px]">opens Booking section blank</div>
+                    </button>
+                    <div className="flex-1 min-w-[140px] px-3 py-2 text-xs rounded-md bg-amber-50 border border-amber-200 text-amber-900">
+                      <div className="font-semibold">⏳ Pending — record later</div>
+                      <div className="opacity-80 text-[11px]">leave both unticked, list will flag it</div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {form.token_enabled && (
                 <InlineBreakdown
                   hint={totalNet <= 0 ? 'Enter Size + Rate per sq.yd above to see live balance & EMI numbers.' : undefined}
@@ -1047,14 +1050,6 @@ export default function Bookings() {
                   emiFreq={form.emi_freq}
                   onN={(v: any) => set('emi_n', v)}
                   onFreq={(v: any) => set('emi_freq', v)}
-                  actions={
-                    !form.booking_enabled && balanceAfterToken > 0 && totalNet > 0 ? (
-                      <button type="button" onClick={() => { set('booking_enabled', true); set('booking_amount', String(suggestedDeposit10pct)) }}
-                        className="text-[11px] px-2 py-1 rounded-md bg-blue-600 text-white hover:bg-blue-700 whitespace-nowrap">
-                        Use 10% as booking
-                      </button>
-                    ) : null
-                  }
                 />
               )}
             </PayBlock>
@@ -1112,7 +1107,64 @@ export default function Bookings() {
             <PayBlock checked={form.full_enabled} onCheck={v => set('full_enabled', v)} label="Full payment today" subtitle="Customer settles the entire net total in one shot" color="violet">
               <PayFields prefix="full" form={form} set={set} amountPlaceholder={totalNet ? `Defaults to total ${formatINR(totalNet)}` : ''} hideBranch />
             </PayBlock>
+
+            {/* Pricing summary moved here — appears below payment plan so admin sees a final commit summary */}
+            <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Final Summary</div>
+            <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg text-sm">
+              <div className="grid grid-cols-2 gap-y-1.5 gap-x-4">
+                <div className="text-gray-600">Base price <span className="text-[10px] text-gray-400">({size || 0} × ₹{rate || 0})</span></div>
+                <div className="text-right font-semibold">{formatINR(basePrice)}</div>
+                <div className="text-gray-600">+ Development charges</div>
+                <div className="text-right font-semibold">{formatINR(dev)}</div>
+                <div className="text-gray-600">+ PLC charges</div>
+                <div className="text-right font-semibold">{formatINR(plc)}</div>
+                <div className="text-gray-600">− Discount</div>
+                <div className="text-right font-semibold text-red-700">{disc > 0 ? '−' : ''}{formatINR(disc)}</div>
+                <div className="text-gray-900 font-semibold border-t border-gray-300 pt-1.5">कुल नेट / Total net value</div>
+                <div className="text-right text-green-700 font-bold text-base border-t border-gray-300 pt-1.5">{formatINR(totalNet)}</div>
+                {paidToday > 0 && (
+                  <>
+                    {tokenAmt   > 0 && (<><div className="text-gray-600">− Token paid today</div><div className="text-right font-semibold text-red-700">−{formatINR(tokenAmt)}</div></>)}
+                    {bookingAmt > 0 && (<><div className="text-gray-600">− Booking amount paid today</div><div className="text-right font-semibold text-red-700">−{formatINR(bookingAmt)}</div></>)}
+                    {fullAmt    > 0 && (<><div className="text-gray-600">− Full payment today</div><div className="text-right font-semibold text-red-700">−{formatINR(fullAmt)}</div></>)}
+                    <div className="text-gray-900 font-semibold border-t border-gray-300 pt-1.5">शेष / Balance due</div>
+                    <div className={`text-right font-bold text-base border-t border-gray-300 pt-1.5 ${balanceDue > 0 ? 'text-orange-700' : 'text-green-700'}`}>{formatINR(balanceDue)}</div>
+                  </>
+                )}
+                {form.token_enabled && num(form.token_amount) > 0 && !form.booking_enabled && (
+                  <>
+                    <div className="text-amber-800 col-span-2 pt-2 mt-1 border-t border-amber-200 bg-amber-50 -mx-3 -mb-3 px-3 py-2 rounded-b-lg text-xs flex items-center gap-1.5">
+                      ⏳ <span><b>Booking deposit pending</b> — record from the Bookings list when received.</span>
+                    </div>
+                  </>
+                )}
+              </div>
+              {selectedBroker && brokerRankPct > 0 && (
+                <div className="mt-3 pt-3 border-t border-gray-200 flex items-start gap-2 text-xs text-blue-900 bg-blue-50 -mx-3 -mb-3 px-3 py-2 rounded-b-lg">
+                  <Info size={13} className="mt-0.5 shrink-0"/>
+                  <div><b>{selectedBroker.name}</b>'s commission ({brokerRankPct}% of base price): <b>{formatINR(commissionAmt)}</b>. Distributed per-payment as the customer pays.</div>
+                </div>
+              )}
+            </div>
           </>
+        )}
+
+        {/* Edit mode: show simplified totals (no payment plan exists in edit) */}
+        {editing && (
+          <div className="mt-4 p-3 bg-gray-50 border border-gray-200 rounded-lg text-sm">
+            <div className="grid grid-cols-2 gap-y-1.5 gap-x-4">
+              <div className="text-gray-600">Base price <span className="text-[10px] text-gray-400">({size || 0} × ₹{rate || 0})</span></div>
+              <div className="text-right font-semibold">{formatINR(basePrice)}</div>
+              <div className="text-gray-600">+ Development charges</div>
+              <div className="text-right font-semibold">{formatINR(dev)}</div>
+              <div className="text-gray-600">+ PLC charges</div>
+              <div className="text-right font-semibold">{formatINR(plc)}</div>
+              <div className="text-gray-600">− Discount</div>
+              <div className="text-right font-semibold text-red-700">{disc > 0 ? '−' : ''}{formatINR(disc)}</div>
+              <div className="text-gray-900 font-semibold border-t border-gray-300 pt-1.5">कुल नेट / Total net value</div>
+              <div className="text-right text-green-700 font-bold text-base border-t border-gray-300 pt-1.5">{formatINR(totalNet)}</div>
+            </div>
+          </div>
         )}
 
         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100 flex items-center justify-between">
