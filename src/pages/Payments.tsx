@@ -8,6 +8,7 @@ import { Input, Select, Textarea } from '@/components/ui/Input.tsx'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import { printPaymentReceipt } from '@/lib/printTemplates'
+import { distributePaymentCommission, reversePaymentCommission } from '@/lib/payoutEngine'
 import { Plus, CheckCircle, XCircle, Printer, Clock } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -91,9 +92,23 @@ export default function Payments() {
       }
       const { data, error } = await supabase.from('bp_payments').insert(p).select().single()
       if (error) throw error
-      return data
+      // Per-payment MLM distribution — only fire when the payment is created already verified.
+      // Otherwise wait for updateStatus → verified.
+      let distributed = 0
+      if (data?.verification_status === 'verified' && data.booking_id && Number(data.amount) > 0) {
+        const rows = await distributePaymentCommission({ bookingId: data.booking_id, paymentId: data.id, amount: Number(data.amount) })
+        distributed = rows.length
+      }
+      return { ...data, _distributed: distributed }
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['payments'] }); toast.success('Payment recorded') },
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ['payments'] })
+      qc.invalidateQueries({ queryKey: ['payments_by_booking'] })
+      qc.invalidateQueries({ queryKey: ['payouts'] })
+      qc.invalidateQueries({ queryKey: ['commission_ledger'] })
+      qc.invalidateQueries({ queryKey: ['bookings'] })
+      toast.success(`Payment recorded${res?._distributed ? ` · MLM × ${res._distributed}` : ''}`)
+    },
     onError: (e: any) => toast.error(e.message),
   })
 
@@ -107,13 +122,33 @@ export default function Payments() {
         .update(payload)
         .eq('id', id)
       if (error) throw error
+
+      // Wire MLM to verification:
+      // - verified → distribute commission for this payment (idempotent on payment_id)
+      // - rejected → reverse any commission previously distributed for this payment
+      const row = payments.find((p: any) => p.id === id)
+      let distributed = 0
+      if (status === 'verified' && row?.booking_id && Number(row.amount) > 0) {
+        const rows = await distributePaymentCommission({ bookingId: row.booking_id, paymentId: id, amount: Number(row.amount) })
+        distributed = rows.length
+      } else if (status === 'rejected') {
+        await reversePaymentCommission(id)
+      }
+      return distributed
     },
-    onSuccess: (_d, vars) => {
+    onSuccess: (distributed, vars) => {
       qc.invalidateQueries({ queryKey: ['payments'] })
       qc.invalidateQueries({ queryKey: ['payments_by_booking'] })
+      qc.invalidateQueries({ queryKey: ['payouts'] })
+      qc.invalidateQueries({ queryKey: ['commission_ledger'] })
+      qc.invalidateQueries({ queryKey: ['bookings'] })
       const updated = payments.find((p: any) => p.id === vars.id)
       if (vars.status === 'verified' && updated) printPaymentReceipt({ ...updated, verification_status: 'verified', verified_at: new Date().toISOString() })
-      toast.success(vars.status === 'verified' ? 'Payment verified — receipt printed' : 'Payment rejected')
+      toast.success(
+        vars.status === 'verified'
+          ? `Payment verified${distributed ? ` · MLM × ${distributed}` : ''} — receipt printed`
+          : 'Payment rejected — commissions reversed'
+      )
     },
     onError: (e: any) => toast.error(e.message),
   })

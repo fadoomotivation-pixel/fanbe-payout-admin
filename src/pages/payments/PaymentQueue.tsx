@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { formatINR, formatDate } from '@/lib/utils'
+import { distributePaymentCommission } from '@/lib/payoutEngine'
 import { Modal } from '@/components/ui/Modal.tsx'
 import toast from 'react-hot-toast'
 import {
@@ -131,34 +132,79 @@ export default function PaymentQueue() {
       })
       if (rErr) throw rErr
 
-      // 3. Update booking totals
+      // 3. Update booking totals + sync plot status if a deposit-style payment closes the deal
       const { data: bk } = await supabase
         .from('bp_bookings')
-        .select('total_collected, plot_total_price, full_payment_amount')
+        .select('id, total_collected, plot_total_price, full_payment_amount, plot_id, stage, total_amount')
         .eq('id', item.booking_id).single()
+      let stageAdvanced = false
       if (bk) {
         const newTotal = (bk.total_collected || 0) + Number(item.amount)
-        const plotTotal = bk.plot_total_price || bk.full_payment_amount || 0
-        await supabase.from('bp_bookings').update({
+        const plotTotal = bk.plot_total_price || bk.full_payment_amount || bk.total_amount || 0
+        // Auto-advance to booking_done when this payment is the booking deposit / full payment
+        // or when accumulated collection matches the plot total.
+        const promoteToBookingDone = (
+          (item.payment_type === 'booking' || item.payment_type === 'full_payment')
+          && bk.stage === 'token_received'
+        ) || (plotTotal > 0 && newTotal >= plotTotal && bk.stage === 'token_received')
+        const patch: any = {
           total_collected: newTotal,
-          balance_due: plotTotal - newTotal,
+          balance_due: Math.max(0, plotTotal - newTotal),
           updated_at: now,
-        }).eq('id', item.booking_id)
+        }
+        if (promoteToBookingDone) { patch.stage = 'booking_done'; stageAdvanced = true }
+        await supabase.from('bp_bookings').update(patch).eq('id', item.booking_id)
+        // Plot status sync: tokenAdvance / bookingDone → booked. Hold for sold until manual close.
+        if (bk.plot_id) {
+          const newStage = stageAdvanced ? 'booking_done' : bk.stage
+          const plotStatus = newStage === 'booking_done' ? 'booked' : newStage === 'token_received' ? 'token' : 'available'
+          await supabase.from('bp_plots').update({ status: plotStatus }).eq('id', bk.plot_id)
+        }
       }
 
-      // 4. Log activity
+      // 4. Mirror to bp_payments so it shows in the unified ledger + triggers MLM
+      const { data: payment } = await supabase.from('bp_payments').insert({
+        booking_id: item.booking_id,
+        payment_type: item.payment_type,
+        amount: item.amount,
+        payment_mode: item.payment_mode,
+        utr_ref: item.utr_ref,
+        payment_date: item.payment_date || now.split('T')[0],
+        receipt_no: receiptNo,
+        verification_status: 'verified',
+        verified_at: now,
+        notes: `Approved via Payment Queue. ${item.notes || ''}`.trim(),
+      }).select('id').single()
+
+      // 5. Per-payment MLM distribution (deferred-commission model)
+      let distributed = 0
+      if (payment?.id && Number(item.amount) > 0) {
+        const rows = await distributePaymentCommission({
+          bookingId: item.booking_id, paymentId: payment.id, amount: Number(item.amount),
+        })
+        distributed = rows.length
+      }
+
+      // 6. Log activity
       await supabase.from('bp_booking_activity').insert({
         booking_id: item.booking_id,
         action: 'payment_approved',
-        description: `Payment of ${formatINR(item.amount)} approved via queue. Receipt ${receiptNo} generated.`,
+        description: `Payment of ${formatINR(item.amount)} approved via queue. Receipt ${receiptNo}${stageAdvanced ? ' · stage → Booking Done' : ''}${distributed ? ` · MLM × ${distributed}` : ''}.`,
       })
-      return receiptNo
+      return { receiptNo, distributed, stageAdvanced }
     },
-    onSuccess: (receiptNo: string) => {
+    onSuccess: ({ receiptNo, distributed, stageAdvanced }: any) => {
       qc.invalidateQueries({ queryKey: ['payment-queue'] })
       qc.invalidateQueries({ queryKey: ['payment-queue-stats'] })
       qc.invalidateQueries({ queryKey: ['booking-receipts'] })
-      toast.success(`✓ Approved — Receipt ${receiptNo} generated`)
+      qc.invalidateQueries({ queryKey: ['payments'] })
+      qc.invalidateQueries({ queryKey: ['payments_by_booking'] })
+      qc.invalidateQueries({ queryKey: ['bookings'] })
+      qc.invalidateQueries({ queryKey: ['plots'] })
+      qc.invalidateQueries({ queryKey: ['plots_avail'] })
+      qc.invalidateQueries({ queryKey: ['payouts'] })
+      qc.invalidateQueries({ queryKey: ['commission_ledger'] })
+      toast.success(`Receipt ${receiptNo}${stageAdvanced ? ' · stage advanced' : ''}${distributed ? ` · MLM × ${distributed}` : ''}`)
       setApproveOpen(false)
       setSelected(null)
     },

@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { formatINR } from '@/lib/utils'
 import { Modal } from '@/components/ui/Modal.tsx'
@@ -21,6 +22,7 @@ function defaultRange() {
 }
 
 export default function Reports() {
+  const qc = useQueryClient()
   const [rows, setRows] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<Tab>('payments')
@@ -117,6 +119,10 @@ export default function Reports() {
     const amt  = Math.round(Number(total_amount || 0) * rate / 100)
     const { error } = await supabase.from('bp_bookings').update({ commission_rate: rate, commission_amount: amt }).eq('id', id)
     if (error) { toast.error(error.message); return }
+    // Propagate to react-query consumers (Payouts, Commission Ledger, BrokerDashboard, etc.)
+    qc.invalidateQueries({ queryKey: ['bookings'] })
+    qc.invalidateQueries({ queryKey: ['payouts'] })
+    qc.invalidateQueries({ queryKey: ['commission_ledger'] })
     toast.success('Commission updated'); setEditCommission(null); refresh()
   }
 
