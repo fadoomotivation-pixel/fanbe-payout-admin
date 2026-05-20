@@ -8,11 +8,13 @@ import { Badge } from '@/components/ui/Badge.tsx'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import { generateEmiSchedule, type EmiFrequency, type InterestMethod } from '@/lib/emiEngine'
-import { Plus, CheckCircle, CalendarDays, TrendingUp, Clock, Info, Trash2, Pencil } from 'lucide-react'
+import { distributePaymentCommission } from '@/lib/payoutEngine'
+import { Plus, CheckCircle, CalendarDays, TrendingUp, Clock, Info, Trash2, Pencil, IndianRupee, ArrowUpRight, ArrowDownRight, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const INSTALLMENT_STATUS_COLORS: Record<string,string> = {
   pending: 'bg-yellow-50 text-yellow-700 border border-yellow-200',
+  partial: 'bg-blue-50 text-blue-700 border border-blue-200',
   paid:    'bg-green-50 text-green-700 border border-green-200',
   overdue: 'bg-red-50 text-red-700 border border-red-200',
   waived:  'bg-gray-100 text-gray-500 border border-gray-200',
@@ -27,6 +29,9 @@ export default function EMI() {
   const [selectedSched, setSelectedSched] = useState<string | null>(null)
   const [editInst, setEditInst] = useState<any | null>(null)
   const [editSched, setEditSched] = useState<any | null>(null)
+  // Flexible "Record Payment" modal
+  const [payOpen, setPayOpen] = useState(false)
+  const [payForm, setPayForm] = useState<any>({ amount: '', mode: 'cash', date: new Date().toISOString().slice(0,10), utr: '', drawn_on: '', branch: '', notes: '' })
   const setC = (k: string, v: any) => setCalc((p: any) => ({ ...p, [k]: v }))
 
   const preview = calc.principal && Number(calc.principal) > 0
@@ -82,7 +87,11 @@ export default function EMI() {
       if (error) throw error
       return data.map((i: any) => ({
         ...i,
-        computed_status: i.status === 'paid' ? 'paid' : (new Date(i.due_date) < new Date() ? 'overdue' : 'pending'),
+        computed_status:
+          i.status === 'paid'    ? 'paid'
+        : i.status === 'partial' ? 'partial'
+        : new Date(i.due_date) < new Date() ? 'overdue'
+        : 'pending',
       }))
     },
   })
@@ -123,6 +132,95 @@ export default function EMI() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['emi_installments', selectedSched] }); qc.invalidateQueries({ queryKey: ['emi_all_insts'] }); toast.success('Installment updated') },
     onError: (e: any) => toast.error(e.message),
   })
+
+  /**
+   * Flexible EMI payment — same engine as EmiPanel.applyPayment.
+   * Customer can pay any amount; walks pending+partial instalments in order, applying:
+   *   covers fully → status='paid'
+   *   covers partially → status='partial'
+   *   excess after last → stored as advance on the bp_payments row
+   * Inserts ONE bp_payments row + per-payment MLM distribution.
+   */
+  const applyPayment = useMutation({
+    mutationFn: async (params: { amount: number; mode: string; date: string; utr: string; drawnOn: string; branch: string; notes: string }) => {
+      if (!activeSched) throw new Error('No schedule selected')
+      const bookingId = activeSched.booking_id
+      const incoming = Number(params.amount) || 0
+      if (incoming <= 0) throw new Error('Enter a positive amount')
+
+      const queue = (installments as any[])
+        .filter(i => i.status !== 'paid')
+        .sort((a, b) => (a.seq || 0) - (b.seq || 0))
+      const firstSeq = queue[0]?.seq
+      const allocations: { id: string; seq: number; alreadyPaid: number; apply: number; willClose: boolean }[] = []
+      let remaining = incoming
+      for (const inst of queue) {
+        if (remaining <= 0) break
+        const due = Number(inst.amount) - Number(inst.paid_amount || 0)
+        if (due <= 0) continue
+        const apply = Math.min(remaining, due)
+        allocations.push({ id: inst.id, seq: inst.seq, alreadyPaid: Number(inst.paid_amount || 0), apply, willClose: apply >= due })
+        remaining -= apply
+      }
+      const advance = remaining
+      const closes  = allocations.filter(a => a.willClose).length
+
+      const { data: rn } = await supabase.rpc('next_receipt_no')
+      const receipt_no = rn || ''
+      const { data: payment, error: pErr } = await supabase.from('bp_payments').insert({
+        booking_id: bookingId,
+        payment_type: 'emi',
+        amount: incoming,
+        payment_mode: params.mode,
+        payment_date: params.date,
+        verification_status: 'verified',
+        verified_at: new Date().toISOString(),
+        receipt_no,
+        instalment_no: firstSeq || null,
+        utr_ref: params.utr || null,
+        drawn_on_bank: params.drawnOn || (params.mode === 'cash' ? 'Cash' : null),
+        branch: params.branch || null,
+        notes: params.notes || `EMI payment · ${closes} closed${advance > 0 ? ` · ₹${advance} advance` : ''}`,
+      }).select('id').single()
+      if (pErr) throw pErr
+
+      for (const a of allocations) {
+        const newPaid = a.alreadyPaid + a.apply
+        const newStatus = a.willClose ? 'paid' : 'partial'
+        const patch: any = { status: newStatus, paid_amount: newPaid }
+        if (a.willClose) { patch.paid_at = new Date().toISOString(); patch.payment_id = payment.id }
+        await supabase.from('emi_installments').update(patch).eq('id', a.id)
+      }
+
+      let distributed = 0
+      if (payment?.id && incoming > 0) {
+        const rows = await distributePaymentCommission({ bookingId, paymentId: payment.id, amount: incoming })
+        distributed = rows.length
+      }
+      return { receipt_no, closes, advance, distributed, allocations }
+    },
+    onSuccess: ({ receipt_no, closes, advance, distributed, allocations }) => {
+      qc.invalidateQueries({ queryKey: ['emi_installments', selectedSched] })
+      qc.invalidateQueries({ queryKey: ['emi_all_insts'] })
+      qc.invalidateQueries({ queryKey: ['payments'] })
+      qc.invalidateQueries({ queryKey: ['payouts'] })
+      qc.invalidateQueries({ queryKey: ['commission_ledger'] })
+      qc.invalidateQueries({ queryKey: ['bookings'] })
+      const msg =
+        closes > 0 && advance > 0 ? `Receipt #${receipt_no} · ${closes} closed · ₹${advance.toLocaleString()} advance`
+      : closes > 0                ? `Receipt #${receipt_no} · ${closes} instalment${closes !== 1 ? 's' : ''} closed`
+      : allocations.length > 0    ? `Receipt #${receipt_no} · partial payment recorded`
+                                  : `Receipt #${receipt_no} · ${advance.toLocaleString()} advance`
+      toast.success(`${msg}${distributed ? ` · MLM × ${distributed}` : ''}`)
+      setPayOpen(false)
+    },
+    onError: (e: any) => toast.error(e.message),
+  })
+
+  const openPay = (preset?: number) => {
+    setPayForm({ amount: preset != null ? String(preset) : '', mode: 'cash', date: new Date().toISOString().slice(0,10), utr: '', drawn_on: '', branch: '', notes: '' })
+    setPayOpen(true)
+  }
 
   const markAllPaid = useMutation({
     mutationFn: async () => {
@@ -278,7 +376,12 @@ export default function EMI() {
                 </div>
               )}
 
-              <div className="flex justify-end gap-2">
+              <div className="flex justify-end gap-2 flex-wrap">
+                {activeSched && (
+                  <Button size="sm" onClick={() => openPay()} disabled={pendingCount + overdueCount === 0}>
+                    <IndianRupee size={13}/>Record Payment (any amount)
+                  </Button>
+                )}
                 {activeSched && (
                   <Button size="sm" variant="secondary" onClick={() => setEditSched({ ...activeSched })}>
                     <Pencil size={13} />Edit Schedule
@@ -299,40 +402,47 @@ export default function EMI() {
               <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 border-b border-gray-100">
-                    <tr>{['#','Due Date','EMI Amount','Principal','Interest','Status','Action'].map(h => (<th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500">{h}</th>))}</tr>
+                    <tr>{['#','Due Date','Scheduled','Paid','Status','Action'].map(h => (<th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500">{h}</th>))}</tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {instLoading ? (
-                      <tr><td colSpan={7} className="text-center py-8 text-gray-400 text-sm">Loading…</td></tr>
-                    ) : (installments as any[]).map((i: any) => (
-                      <tr key={i.id} className={i.computed_status === 'paid' ? 'opacity-60' : ''}>
-                        <td className="px-4 py-3 text-gray-500 text-xs">{i.seq}</td>
-                        <td className="px-4 py-3"><span className={`text-sm ${i.computed_status === 'overdue' ? 'text-red-600 font-semibold' : 'text-gray-700'}`}>{formatDate(i.due_date)}</span></td>
-                        <td className="px-4 py-3 font-semibold text-gray-900">{formatINR(i.amount)}</td>
-                        <td className="px-4 py-3 text-gray-600">{formatINR(i.principal_component)}</td>
-                        <td className="px-4 py-3 text-gray-600">{formatINR(i.interest_component)}</td>
-                        <td className="px-4 py-3">
-                          <Badge label={i.computed_status} className={INSTALLMENT_STATUS_COLORS[i.computed_status] || 'bg-gray-100 text-gray-600'} />
-                          {i.paid_at && <div className="text-xs text-gray-400 mt-0.5">{formatDate(i.paid_at)}</div>}
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex gap-1 flex-wrap">
-                            {i.computed_status !== 'paid' && i.computed_status !== 'waived' ? (
-                              <Button size="sm" onClick={() => markInstallment.mutate({ id: i.id, status: 'paid' })} loading={markInstallment.isPending}>
-                                <CheckCircle size={12} />Paid
+                      <tr><td colSpan={6} className="text-center py-8 text-gray-400 text-sm">Loading…</td></tr>
+                    ) : (installments as any[]).map((i: any) => {
+                      const paid = Number(i.paid_amount || 0)
+                      const due  = Number(i.amount) - paid
+                      return (
+                        <tr key={i.id} className={i.computed_status === 'paid' ? 'opacity-60' : ''}>
+                          <td className="px-4 py-3 text-gray-500 text-xs">{i.seq}</td>
+                          <td className="px-4 py-3"><span className={`text-sm ${i.computed_status === 'overdue' ? 'text-red-600 font-semibold' : 'text-gray-700'}`}>{formatDate(i.due_date)}</span></td>
+                          <td className="px-4 py-3 font-semibold text-gray-900">{formatINR(i.amount)}</td>
+                          <td className="px-4 py-3">
+                            {paid > 0
+                              ? <span className="text-blue-700 font-semibold">{formatINR(paid)}{due > 0 && <span className="text-gray-400 font-normal"> / {formatINR(i.amount)}</span>}</span>
+                              : <span className="text-gray-300">—</span>}
+                          </td>
+                          <td className="px-4 py-3">
+                            <Badge label={i.computed_status} className={INSTALLMENT_STATUS_COLORS[i.computed_status] || 'bg-gray-100 text-gray-600'} />
+                            {i.paid_at && <div className="text-xs text-gray-400 mt-0.5">{formatDate(i.paid_at)}</div>}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex gap-1 flex-wrap">
+                              {i.computed_status !== 'paid' && i.computed_status !== 'waived' ? (
+                                <Button size="sm" onClick={() => openPay(due)}>
+                                  <IndianRupee size={12}/>Record
+                                </Button>
+                              ) : i.computed_status === 'paid' ? (
+                                <Button size="sm" variant="ghost" onClick={() => markInstallment.mutate({ id: i.id, status: 'pending' })}>Undo</Button>
+                              ) : null}
+                              <Button size="sm" variant="ghost" onClick={() => setEditInst({ ...i })}><Pencil size={12} />Edit</Button>
+                              <Button size="sm" variant="ghost"
+                                onClick={() => { if (confirm(`Delete instalment #${i.seq}?`)) deleteInst.mutate(i.id) }}>
+                                <Trash2 size={12} />
                               </Button>
-                            ) : i.computed_status === 'paid' ? (
-                              <Button size="sm" variant="ghost" onClick={() => markInstallment.mutate({ id: i.id, status: 'pending' })}>Undo</Button>
-                            ) : null}
-                            <Button size="sm" variant="ghost" onClick={() => setEditInst({ ...i })}><Pencil size={12} />Edit</Button>
-                            <Button size="sm" variant="ghost"
-                              onClick={() => { if (confirm(`Delete instalment #${i.seq}?`)) deleteInst.mutate(i.id) }}>
-                              <Trash2 size={12} />
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -431,6 +541,78 @@ export default function EMI() {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* ── Flexible Record Payment Modal ───────────────────────────── */}
+      <Modal open={payOpen} onClose={() => setPayOpen(false)} title={activeSched ? `Record EMI payment · ${activeSched.bp_bookings?.booking_no || activeSched.booking_id?.slice(0,8)}` : 'Record EMI payment'} size="sm">
+        <div className="space-y-4">
+          <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-xs">
+            <div>Enter the actual amount the customer paid. We'll apply it across due instalments in order.</div>
+            {(installments as any[]).length > 0 && (() => {
+              const next = (installments as any[]).find((i: any) => i.status !== 'paid')
+              if (!next) return null
+              const due = Number(next.amount) - Number(next.paid_amount || 0)
+              return (
+                <div className="mt-2 flex justify-between"><span className="text-gray-600">Next due (#{next.seq})</span><b className="text-blue-800">{formatINR(due)}</b></div>
+              )
+            })()}
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-gray-700 mb-1 block">Amount paid (₹)</label>
+            <input type="number" autoFocus value={payForm.amount} onChange={e => setPayForm((p: any) => ({ ...p, amount: e.target.value }))}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-base focus:outline-none focus:ring-2 focus:ring-blue-400"/>
+            {Number(payForm.amount) > 0 && (() => {
+              const next = (installments as any[]).find((i: any) => i.status !== 'paid')
+              if (!next) return null
+              const due = Number(next.amount) - Number(next.paid_amount || 0)
+              const v = Number(payForm.amount)
+              return (
+                <div className="mt-2 text-[11px] flex items-center gap-1">
+                  {v > due ? <span className="text-emerald-700 inline-flex items-center gap-1"><ArrowUpRight size={11}/>Overpaid — excess will roll forward / be recorded as advance</span>
+                   : v < due ? <span className="text-amber-700 inline-flex items-center gap-1"><ArrowDownRight size={11}/>Underpaid — instalment will be marked partial, balance carries to next</span>
+                   :          <span className="text-blue-700 inline-flex items-center gap-1"><IndianRupee size={11}/>Exact scheduled amount</span>}
+                </div>
+              )
+            })()}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-semibold text-gray-700 mb-1 block">Mode</label>
+              <select value={payForm.mode} onChange={e => setPayForm((p: any) => ({ ...p, mode: e.target.value }))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                {['cash','neft','rtgs','imps','upi','cheque','dd'].map(m => <option key={m} value={m}>{m.toUpperCase()}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-gray-700 mb-1 block">Date</label>
+              <input type="date" value={payForm.date} onChange={e => setPayForm((p: any) => ({ ...p, date: e.target.value }))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/>
+            </div>
+            <div className="col-span-2">
+              <label className="text-xs font-semibold text-gray-700 mb-1 block">UTR / Reference</label>
+              <input value={payForm.utr} onChange={e => setPayForm((p: any) => ({ ...p, utr: e.target.value }))} placeholder="paste from bank receipt" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/>
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-gray-700 mb-1 block">Drawn on (bank)</label>
+              <input value={payForm.drawn_on} onChange={e => setPayForm((p: any) => ({ ...p, drawn_on: e.target.value }))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/>
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-gray-700 mb-1 block">Branch</label>
+              <input value={payForm.branch} onChange={e => setPayForm((p: any) => ({ ...p, branch: e.target.value }))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/>
+            </div>
+            <div className="col-span-2">
+              <label className="text-xs font-semibold text-gray-700 mb-1 block">Notes</label>
+              <input value={payForm.notes} onChange={e => setPayForm((p: any) => ({ ...p, notes: e.target.value }))} placeholder="e.g. partial due to cash flow" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setPayOpen(false)}>Cancel</Button>
+            <Button onClick={() => applyPayment.mutate({ amount: Number(payForm.amount), mode: payForm.mode, date: payForm.date, utr: payForm.utr, drawnOn: payForm.drawn_on, branch: payForm.branch, notes: payForm.notes })} loading={applyPayment.isPending} disabled={!Number(payForm.amount)}>
+              Record &amp; distribute MLM
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   )
