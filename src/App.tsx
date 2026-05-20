@@ -34,7 +34,6 @@ import AchieversClub from '@/pages/AchieversClub'
 import TeamRewards from '@/pages/TeamRewards'
 import PayoutTerms from '@/pages/PayoutTerms'
 import PayoutCycles from '@/pages/PayoutCycles'
-import CallCenter from '@/pages/CallCenter'
 
 function Guard({children}:{children:any}){
   const[session,setSession]=useState<any>(undefined)
@@ -54,7 +53,6 @@ export default function App(){
         <Route path="/" element={<Dashboard/>}/>
         <Route path="/analytics" element={<Analytics/>}/>
         <Route path="/inquiries" element={<Inquiries/>}/>
-        <Route path="/call-center" element={<CallCenter/>}/>
         <Route path="/projects" element={<Projects/>}/>
         <Route path="/plots" element={<Plots/>}/>
         <Route path="/members" element={<Members/>}/>
