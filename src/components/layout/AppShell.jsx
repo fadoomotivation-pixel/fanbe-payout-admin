@@ -4,7 +4,7 @@ import {
   Settings, LogOut, ChevronLeft, ChevronRight, BarChart2, FileText,
   UserCheck, Layers, MessageSquare, Megaphone, ShieldCheck, Receipt,
   Wallet, Calculator, TrendingUp, Landmark, Trophy, Star, Gift,
-  ScrollText, CalendarRange, Inbox, UserPlus, History,
+  ScrollText, CalendarRange, Inbox, UserPlus, History, PhoneCall,
   Bell, Menu, X, ChevronRight as Chevron
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
@@ -21,9 +21,10 @@ const NAV = [
     { to: '/balance-sheet',  icon: TrendingUp,       label: 'Balance Sheet' },
   ]},
   { group: 'Sales Pipeline', items: [
-    { to: '/inquiries',       icon: Inbox,    label: 'Inquiries' },
-    { to: '/members',         icon: UserPlus, label: 'Members & Customers' },
-    { to: '/customer-history',icon: History,  label: 'Customer History' },
+    { to: '/inquiries',       icon: Inbox,     label: 'Inquiries' },
+    { to: '/call-center',     icon: PhoneCall, label: 'Call Center' },
+    { to: '/members',         icon: UserPlus,  label: 'Members & Customers' },
+    { to: '/customer-history',icon: History,   label: 'Customer History' },
   ]},
   { group: 'Real Estate', items: [
     { to: '/projects',  icon: Building2,  label: 'Projects' },
