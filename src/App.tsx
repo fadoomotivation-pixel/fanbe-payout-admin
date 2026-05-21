@@ -34,6 +34,7 @@ import AchieversClub from '@/pages/AchieversClub'
 import TeamRewards from '@/pages/TeamRewards'
 import PayoutTerms from '@/pages/PayoutTerms'
 import PayoutCycles from '@/pages/PayoutCycles'
+import CustomerPipeline from '@/pages/CustomerPipeline'
 
 function Guard({children}:{children:any}){
   const[session,setSession]=useState<any>(undefined)
@@ -58,6 +59,7 @@ export default function App(){
         <Route path="/members" element={<Members/>}/>
         <Route path="/customer-history" element={<CustomerHistory/>}/>
         <Route path="/bookings" element={<Bookings/>}/>
+        <Route path="/customer-pipeline" element={<CustomerPipeline/>}/>
         <Route path="/payments" element={<Payments/>}/>
         <Route path="/emi" element={<EMI/>}/>
         <Route path="/brokers" element={<Brokers/>}/>
