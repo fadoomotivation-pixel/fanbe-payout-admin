@@ -60,6 +60,7 @@ const EMPTY: any = {
   new_customer: { ...NEW_CUST_EMPTY },
   token_enabled: false,
   token_amount: '', token_date: today(), token_mode: 'cash', token_utr: '', token_drawn_on: '', token_branch: '',
+  expected_booking_amount: '',
   booking_enabled: false,
   booking_amount: '', booking_date: today(), booking_mode: 'cash', booking_utr: '', booking_drawn_on: '', booking_branch: '',
   emi_enabled: false,
@@ -289,6 +290,7 @@ export default function Bookings() {
         dev_charges: d, plc_charges: pl, discount_amount: dsc,
         plot_total_price: total, total_amount: total,
         token_amount: tokenAmt || null, token_date: rest.token_enabled ? rest.token_date : null,
+        expected_booking_amount: num(rest.expected_booking_amount) || null,
         booking_amount: bookingAmt || null, booking_date: rest.booking_enabled ? rest.booking_date : null,
         full_payment_amount: fullAmt || null, full_payment_date: rest.full_enabled ? rest.full_date : null,
         commission_rate: brokerPct || null,
@@ -358,6 +360,7 @@ export default function Bookings() {
         plot_total_price: total, total_amount: total,
         commission_rate: brokerPct || null,
         commission_amount: brokerPct > 0 ? Math.round(base * brokerPct / 100) : null,
+        expected_booking_amount: num(data.expected_booking_amount) || null,
         notes: data.notes || null,
         scheme_name: project?.name || null,
         application_date: data.application_date || null,
@@ -519,6 +522,7 @@ export default function Bookings() {
       upline_broker_code: b.upline_broker_code || '', manager_signature_by: b.manager_signature_by || '',
       affidavit_accepted: b.affidavit_accepted !== false,
       cust_mode: 'existing',
+      expected_booking_amount: b.expected_booking_amount ?? '',
       token_enabled: false, booking_enabled: false, emi_enabled: false, full_enabled: false,
     } : EMPTY)
     setModal(true)
@@ -790,7 +794,7 @@ export default function Bookings() {
             <Badge label={meta.label} className={meta.color} />
             {bookingPending && (
               <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
-                ⏳ Booking deposit pending
+                ⏳ Booking deposit pending{r.expected_booking_amount ? ` · expects ${formatINR(r.expected_booking_amount)}` : ''}
               </span>
             )}
             {bookingReceived && (
@@ -1011,6 +1015,31 @@ export default function Bookings() {
               warning={form.token_enabled && !num(form.token_amount) ? 'Enter the token amount or uncheck this section' : undefined}>
               <PayFields prefix="token" form={form} set={set}
                 amountError={form.token_enabled && !num(form.token_amount) ? 'Required' : undefined} />
+
+              {/* Expected (unpaid) booking deposit — purely informational, does NOT trigger MLM */}
+              {form.token_enabled && !form.booking_enabled && (
+                <div className="mt-3 rounded-lg border border-dashed border-blue-300 bg-blue-50/30 p-3">
+                  <label className="flex items-start gap-2">
+                    <div className="flex-1">
+                      <div className="text-sm font-semibold text-blue-900">Expected booking deposit (unpaid)</div>
+                      <div className="text-[11px] text-blue-700/80">
+                        Planned amount the customer will pay later. Tracked on the booking — <b>MLM commission does NOT distribute on this amount</b> until it's actually received.
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 mt-2">
+                        <Input label="Expected amount (₹)" type="number" value={form.expected_booking_amount}
+                          onChange={(e: any) => set('expected_booking_amount', e.target.value)}
+                          placeholder={`e.g. ${suggestedDeposit10pct ? formatINR(suggestedDeposit10pct).replace('₹','') : '1,00,000'}`} />
+                        {num(form.expected_booking_amount) > 0 && (
+                          <div className="bg-white border border-blue-200 rounded-lg px-3 py-2 text-xs flex flex-col justify-center">
+                            <span className="text-blue-700">Balance after booking deposit</span>
+                            <span className="font-semibold text-orange-700">{formatINR(Math.max(0, totalNet - tokenAmt - num(form.expected_booking_amount)))}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </label>
+                </div>
+              )}
 
               {/* Explicit "What about the booking deposit?" decision panel — appears whenever token is being received but booking is not yet decided */}
               {form.token_enabled && num(form.token_amount) > 0 && !form.booking_enabled && (

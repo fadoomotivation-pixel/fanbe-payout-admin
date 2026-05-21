@@ -55,6 +55,7 @@ export default function BrokerDashboard() {
   const [expandedTeam, setExpandedTeam] = useState<Set<string>>(new Set())
   const [subTeams, setSubTeams]         = useState<Record<string, any[]>>({})
   const [activity, setActivity]         = useState<any[]>([])
+  const [payoutOpen, setPayoutOpen]     = useState<Record<string, boolean>>({})
 
   useEffect(() => { (async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -81,7 +82,7 @@ export default function BrokerDashboard() {
     const [rk, dl, po, wd, bk] = await Promise.all([
       supabase.from('commission_ranks').select('*').eq('active', true).order('level', { ascending: true }),
       supabase.from('brokers').select('id, name, broker_id, rank, phone, status').eq('sponsor_id', b.id),
-      supabase.from('payout_distributions').select('*').eq('beneficiary_broker_id', b.id).order('created_at', { ascending: false }).limit(30),
+      supabase.from('payout_distributions').select('*, bp_bookings(booking_no, bp_customers(name), bp_plots(plot_no))').eq('beneficiary_broker_id', b.id).order('created_at', { ascending: false }).limit(200),
       supabase.from('withdrawal_requests').select('*').eq('broker_id', b.id).order('created_at', { ascending: false }).limit(20),
       supabase
         .from('bp_bookings')
@@ -699,23 +700,83 @@ export default function BrokerDashboard() {
         )}
 
         {tab === 'payouts' && (
-          <Section title="Payout history">
-            {payouts.length === 0 ? <p className="text-sm text-gray-500">No payouts yet.</p> : (
-              <table className="w-full text-sm">
-                <thead className="text-xs text-gray-500 uppercase"><tr><th className="text-left py-2">Date</th><th className="text-left">Type</th><th className="text-left">Level</th><th className="text-right">Gross</th><th className="text-right">Net</th></tr></thead>
-                <tbody className="divide-y divide-gray-100">
-                  {payouts.map(p => (
-                    <tr key={p.id}>
-                      <td className="py-2 text-xs">{formatDate(p.created_at)}</td>
-                      <td className="text-xs capitalize">{p.income_type}</td>
-                      <td className="text-xs">L{p.level}</td>
-                      <td className="text-right text-xs">{formatINR(p.gross_payout)}</td>
-                      <td className="text-right font-semibold text-emerald-700">{formatINR(p.net_payout)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+          <Section title="Payout history" right={
+            payouts.length > 0 ? (
+              <div className="text-xs text-gray-500">
+                <b className="text-emerald-700">{formatINR(payouts.reduce((s: number, p: any) => s + Number(p.net_payout || 0), 0))}</b> net across {payouts.length} entries
+              </div>
+            ) : null
+          }>
+            {payouts.length === 0 ? <p className="text-sm text-gray-500">No payouts yet.</p> : (() => {
+              // Group by booking_id so the admin sees per-deal totals (direct + each upline level), not a confusing fragment list.
+              const groups: Record<string, any[]> = {}
+              for (const p of payouts as any[]) {
+                const k = p.booking_id || 'no-booking'
+                if (!groups[k]) groups[k] = []
+                groups[k].push(p)
+              }
+              const orderedKeys = Object.keys(groups).sort((a, b) => {
+                const da = Math.max(...groups[a].map((r: any) => new Date(r.created_at).getTime()))
+                const db = Math.max(...groups[b].map((r: any) => new Date(r.created_at).getTime()))
+                return db - da
+              })
+              return (
+                <div className="space-y-3">
+                  {orderedKeys.map(k => {
+                    const rows = groups[k]
+                    const first = rows[0]
+                    const bk = first.bp_bookings
+                    const sumGross = rows.reduce((s, r) => s + Number(r.gross_payout || 0), 0)
+                    const sumNet   = rows.reduce((s, r) => s + Number(r.net_payout || 0), 0)
+                    const sumTds   = rows.reduce((s, r) => s + Number(r.tds_amount || 0), 0)
+                    const sumAdmin = rows.reduce((s, r) => s + Number(r.admin_charge || 0), 0)
+                    const open = !!(payoutOpen[k])
+                    return (
+                      <div key={k} className="rounded-xl border border-gray-200 bg-white">
+                        <button onClick={() => setPayoutOpen((s: any) => ({ ...s, [k]: !s[k] }))}
+                          className="w-full text-left px-4 py-3 flex items-center justify-between hover:bg-gray-50">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <ChevronRight size={14} className={`text-gray-400 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`}/>
+                            <div className="min-w-0">
+                              <div className="font-mono text-sm font-semibold text-blue-700 truncate">{bk?.booking_no || 'Other'}</div>
+                              <div className="text-xs text-gray-500 truncate">
+                                {bk?.bp_customers?.name || 'No customer'}{bk?.bp_plots?.plot_no ? ` · Plot ${bk.bp_plots.plot_no}` : ''} · {rows.length} payment{rows.length !== 1 ? 's' : ''}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <div className="text-sm font-bold text-emerald-700">{formatINR(sumNet)}</div>
+                            <div className="text-[10px] text-gray-400">gross {formatINR(sumGross)} · −TDS {formatINR(sumTds)} · −adm {formatINR(sumAdmin)}</div>
+                          </div>
+                        </button>
+                        {open && (
+                          <div className="border-t border-gray-100 overflow-x-auto">
+                            <table className="w-full text-xs">
+                              <thead className="bg-gray-50 text-gray-500"><tr>{['Date','Type','Level','Rate','Base','Gross','TDS','Admin','Net'].map(h => <th key={h} className="px-3 py-2 text-left">{h}</th>)}</tr></thead>
+                              <tbody className="divide-y divide-gray-50">
+                                {rows.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).map(p => (
+                                  <tr key={p.id}>
+                                    <td className="px-3 py-1.5 whitespace-nowrap">{formatDate(p.created_at)}</td>
+                                    <td className="px-3 py-1.5 capitalize">{p.income_type}</td>
+                                    <td className="px-3 py-1.5">{p.level === 0 ? 'Self' : `L${p.level} upline`}</td>
+                                    <td className="px-3 py-1.5">{p.differential_pct || p.rate_pct || 0}%</td>
+                                    <td className="px-3 py-1.5">{formatINR(p.base_amount)}</td>
+                                    <td className="px-3 py-1.5">{formatINR(p.gross_payout)}</td>
+                                    <td className="px-3 py-1.5 text-rose-600">−{formatINR(p.tds_amount || 0)}</td>
+                                    <td className="px-3 py-1.5 text-amber-700">−{formatINR(p.admin_charge || 0)}</td>
+                                    <td className="px-3 py-1.5 font-semibold text-emerald-700">{formatINR(p.net_payout)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })()}
           </Section>
         )}
 
