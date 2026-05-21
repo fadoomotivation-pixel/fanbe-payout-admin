@@ -26,11 +26,12 @@ const NAV = [
     { to: '/customer-history',icon: History,  label: 'Customer History' },
   ]},
   { group: 'Real Estate', items: [
-    { to: '/projects',  icon: Building2,  label: 'Projects' },
-    { to: '/plots',     icon: Map,        label: 'Plots' },
-    { to: '/bookings',  icon: BookOpen,   label: 'Bookings' },
-    { to: '/payments',  icon: CreditCard, label: 'Payments' },
-    { to: '/emi',       icon: Calculator, label: 'EMI Schedule' },
+    { to: '/projects',          icon: Building2,  label: 'Projects' },
+    { to: '/plots',             icon: Map,        label: 'Plots' },
+    { to: '/bookings',          icon: BookOpen,   label: 'Bookings' },
+    { to: '/customer-pipeline', icon: Users,      label: 'Customer Pipeline' },
+    { to: '/payments',          icon: CreditCard, label: 'Payments' },
+    { to: '/emi',               icon: Calculator, label: 'EMI Schedule' },
   ]},
   { group: 'Broker Network', items: [
     { to: '/brokers',          icon: Users,    label: 'Brokers' },
