@@ -382,144 +382,113 @@ export default function CustomerPipeline() {
           const cust = r.bp_customers
           return (
             <div key={r.id}>
-              <div className="px-3 md:px-4 py-3 hover:bg-gray-50/60">
-                <div className="flex items-start gap-3 flex-wrap md:flex-nowrap">
-                  <button onClick={() => toggleExpand(r.id)} className="shrink-0 mt-1"><ChevronRight size={14} className={`text-gray-400 transition-transform ${open ? 'rotate-90' : ''}`}/></button>
+              <div className="px-3 md:px-4 py-3 hover:bg-gray-50/40">
+                {/* Card layout — actions always visible regardless of viewport width */}
 
-                  {/* Customer + plot */}
-                  <div className="flex-1 min-w-[200px]">
+                {/* Header bar: identity + stage + balance */}
+                <div className="flex items-start gap-2 flex-wrap">
+                  <button onClick={() => toggleExpand(r.id)} className="shrink-0 mt-0.5">
+                    <ChevronRight size={14} className={`text-gray-400 transition-transform ${open ? 'rotate-90' : ''}`}/>
+                  </button>
+                  <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <Link to={`/customer-history?customer=${r.customer_id}`} className="font-semibold text-sm text-gray-900 hover:text-blue-700 hover:underline">{cust?.name || '—'}</Link>
                       <span className="text-[10px] font-mono text-gray-400">{cust?.customer_code || ''}</span>
+                      <span className="font-mono text-blue-700 text-xs">{r.booking_no}</span>
+                      <Badge label={r.stage?.replace(/_/g, ' ')} className={`text-[10px] border ${STAGE_COLORS[r.stage] || 'bg-gray-100 text-gray-700'}`}/>
+                    </div>
+                    <div className="text-xs text-gray-500 mt-0.5 truncate">
                       {cust?.phone && (
                         <>
-                          <a href={`tel:${cust.phone}`} className="text-[10px] text-blue-700 hover:underline inline-flex items-center gap-0.5"><Phone size={9}/>{cust.phone}</a>
-                          <a href={`https://wa.me/${String(cust.phone).replace(/[^\d]/g,'')}`} target="_blank" rel="noreferrer" className="text-[10px] text-emerald-700 hover:underline inline-flex items-center gap-0.5"><MessageCircle size={9}/>WA</a>
+                          <a href={`tel:${cust.phone}`} className="text-blue-700 hover:underline inline-flex items-center gap-0.5 mr-2"><Phone size={9}/>{cust.phone}</a>
+                          <a href={`https://wa.me/${String(cust.phone).replace(/[^\d]/g,'')}`} target="_blank" rel="noreferrer" className="text-emerald-700 hover:underline inline-flex items-center gap-0.5 mr-2"><MessageCircle size={9}/>WA</a>
                         </>
                       )}
-                    </div>
-                    <div className="text-xs text-gray-500 mt-0.5">
-                      <span className="font-mono text-blue-700">{r.booking_no}</span>
-                      {r.bp_plots?.plot_no && <span> · Plot {r.bp_plots.plot_no}</span>}
-                      {r.bp_plots?.size_sqyd && <span> · {r.bp_plots.size_sqyd} sqyd</span>}
-                      {(r.bp_projects?.name || r.scheme_name) && <span> · {r.bp_projects?.name || r.scheme_name}</span>}
+                      {r.bp_plots?.plot_no && <span>Plot {r.bp_plots.plot_no} · </span>}
+                      {r.bp_plots?.size_sqyd && <span>{r.bp_plots.size_sqyd} sqyd · </span>}
+                      {(r.bp_projects?.name || r.scheme_name)}
                     </div>
                   </div>
-
-                  {/* Token */}
-                  <Col label="Token">
-                    {r.pm.token > 0 ? (
-                      <div>
-                        <div className="text-sm font-semibold text-emerald-700">{formatINR(r.pm.token)}</div>
-                        <div className="text-[10px] text-gray-400">received</div>
-                      </div>
-                    ) : (
-                      <div className="text-xs text-gray-400">—</div>
-                    )}
-                  </Col>
-
-                  {/* Booking deposit */}
-                  <Col label="Booking deposit">
-                    {r.pm.booking > 0 ? (
-                      <div>
-                        <div className="text-sm font-semibold text-blue-700">{formatINR(r.pm.booking)}</div>
-                        {r.bookingShortfall > 0
-                          ? <div className="text-[10px] text-amber-700">partial · short {formatINR(r.bookingShortfall)}</div>
-                          : <div className="text-[10px] text-gray-400">paid</div>}
-                      </div>
-                    ) : r.expected > 0 ? (
-                      <div>
-                        <div className="text-sm font-semibold text-amber-700">⏳ {formatINR(r.expected)}</div>
-                        <div className="text-[10px] text-amber-600">expected (unpaid)</div>
-                      </div>
-                    ) : r.hasToken ? (
-                      <div className="text-xs text-amber-700">⏳ pending</div>
-                    ) : (
-                      <div className="text-xs text-gray-400">—</div>
-                    )}
-                  </Col>
-
-                  {/* EMI */}
-                  <Col label="EMI">
-                    {r.emi ? (
-                      <div>
-                        <div className="text-sm font-semibold text-gray-900">{r.emi.paid + r.emi.partial}/{r.emi.n}</div>
-                        <div className="text-[10px] text-gray-500">{r.emi.per_inst ? `${formatINR(r.emi.per_inst)} ea` : ''}</div>
-                        {r.emi.overdue > 0 && <div className="text-[10px] font-semibold text-rose-700">{r.emi.overdue} overdue</div>}
-                        {r.emi.next_due && r.emi.overdue === 0 && <div className="text-[10px] text-amber-700">next {formatDate(r.emi.next_due)}</div>}
-                      </div>
-                    ) : r.hasBooking ? (
-                      <div className="text-xs text-gray-400">no schedule</div>
-                    ) : (
-                      <div className="text-xs text-gray-300">—</div>
-                    )}
-                  </Col>
-
-                  {/* Broker chain */}
-                  <Col label="Broker · upline">
-                    {r.brokers ? (
-                      <div className="text-xs">
-                        <Link to={`/broker/dashboard?broker_id=${r.broker_id}`} className="font-medium text-blue-700 hover:underline">{r.brokers.name}</Link>
-                        {r.chain.length > 1 && (
-                          <div className="text-[10px] text-gray-500 truncate max-w-[180px]" title={r.chain.slice(1).map((c: any) => c.name).join(' → ')}>
-                            ↑ {r.chain.slice(1, 4).map((c: any) => c.name).join(' → ')}{r.chain.length > 4 ? ` …+${r.chain.length - 4}` : ''}
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="text-xs text-gray-400">no broker</div>
-                    )}
-                  </Col>
-
-                  {/* MLM earned */}
-                  <Col label="MLM net">
-                    <div>
-                      <div className="text-sm font-bold text-emerald-700">{formatINR(r.mlm.net)}</div>
-                      <div className="text-[10px] text-gray-400">{r.mlm.rows} {r.mlm.rows === 1 ? 'row' : 'rows'}</div>
-                    </div>
-                  </Col>
-
-                  {/* Balance */}
-                  <Col label="Balance">
-                    <div>
-                      <div className={`text-sm font-bold ${r.balance > 0 ? 'text-orange-700' : 'text-emerald-700'}`}>{formatINR(r.balance)}</div>
-                      <div className="text-[10px] text-gray-400">of {formatINR(r.total)}</div>
-                    </div>
-                  </Col>
-
-                  {/* Quick actions */}
-                  <div className="shrink-0 flex flex-col gap-1 items-end min-w-[150px]">
-                    <Badge label={r.stage?.replace(/_/g, ' ')} className={`text-[10px] border ${STAGE_COLORS[r.stage] || 'bg-gray-100 text-gray-700'}`}/>
-                    {!r.hasToken && r.balance > 0 && (
-                      <Button size="sm" variant="secondary" onClick={() => setPayFor({ booking: r, type: 'token' })}><Banknote size={11}/>Record token</Button>
-                    )}
-                    {r.hasToken && r.balance > 0 && (
-                      <Button size="sm" onClick={() => setPayFor({ booking: r, type: 'booking' })}>
-                        <Banknote size={11}/>{r.hasBooking ? 'Add booking payment' : 'Record booking'}
-                      </Button>
-                    )}
-                    {r.balance > 0 && (
-                      <Button size="sm" variant={r.emi ? 'ghost' : 'secondary'} onClick={() => setEmiBooking(r)}>
-                        <Calculator size={11}/>{r.emi ? 'EMI' : 'Start EMI'}
-                      </Button>
-                    )}
-                    <div className="flex gap-1">
-                      <button onClick={() => navigate(`/bookings?edit=${r.id}`)}
-                        className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border border-gray-200 hover:bg-gray-50 text-gray-700">
-                        <FileText size={11}/>Edit
-                      </button>
-                      <button onClick={() => printApplicationForm(r)}
-                        className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border border-gray-200 hover:bg-gray-50 text-gray-700">
-                        <Printer size={11}/>Form
-                      </button>
-                    </div>
+                  <div className="text-right shrink-0">
+                    <div className={`text-base font-bold ${r.balance > 0 ? 'text-orange-700' : 'text-emerald-700'}`}>{formatINR(r.balance)}</div>
+                    <div className="text-[10px] text-gray-400">balance of {formatINR(r.total)}</div>
                   </div>
+                </div>
+
+                {/* Action bar — ALWAYS VISIBLE — the whole point of this page */}
+                <div className="mt-2.5 flex flex-wrap gap-1.5 ml-6">
+                  {!r.hasToken && r.balance > 0 && (
+                    <Button size="sm" variant="secondary" onClick={() => setPayFor({ booking: r, type: 'token' })}><Banknote size={12}/>Record token</Button>
+                  )}
+                  {r.hasToken && r.balance > 0 && (
+                    <Button size="sm" onClick={() => setPayFor({ booking: r, type: 'booking' })}>
+                      <Banknote size={12}/>{r.hasBooking ? 'Add booking payment' : 'Record booking'}
+                    </Button>
+                  )}
+                  {r.balance > 0 && (
+                    <Button size="sm" variant={r.emi ? 'ghost' : 'secondary'} onClick={() => setEmiBooking(r)}>
+                      <Calculator size={12}/>{r.emi ? 'EMI' : 'Start EMI'}
+                    </Button>
+                  )}
+                  <Button size="sm" variant="ghost" onClick={() => navigate(`/bookings?edit=${r.id}`)}>
+                    <FileText size={12}/>Edit
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => printApplicationForm(r)}>
+                    <Printer size={12}/>Form
+                  </Button>
+                </div>
+
+                {/* Stats row — pill-style chips, wraps cleanly */}
+                <div className="mt-2.5 ml-6 grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+                  <StatPill label="Token"
+                    value={r.pm.token > 0 ? formatINR(r.pm.token) : '—'}
+                    sub={r.pm.token > 0 ? 'received' : ''}
+                    accent={r.pm.token > 0 ? 'text-emerald-700' : 'text-gray-300'}/>
+
+                  <StatPill label="Booking deposit"
+                    value={
+                      r.pm.booking > 0 ? formatINR(r.pm.booking)
+                    : r.expected > 0 ? `⏳ ${formatINR(r.expected)}`
+                    : r.hasToken ? '⏳ pending'
+                    : '—'
+                    }
+                    sub={
+                      r.pm.booking > 0 ? (r.bookingShortfall > 0 ? `partial · short ${formatINR(r.bookingShortfall)}` : 'paid')
+                    : r.expected > 0 ? 'expected (unpaid)'
+                    : ''
+                    }
+                    accent={
+                      r.pm.booking > 0 ? (r.bookingShortfall > 0 ? 'text-amber-700' : 'text-blue-700')
+                    : r.expected > 0 || r.hasToken ? 'text-amber-700'
+                    : 'text-gray-300'
+                    }/>
+
+                  <StatPill label="EMI"
+                    value={r.emi ? `${r.emi.paid + r.emi.partial}/${r.emi.n}` : r.hasBooking ? 'no schedule' : '—'}
+                    sub={
+                      r.emi ? (r.emi.overdue > 0 ? `${r.emi.overdue} overdue`
+                            : r.emi.next_due ? `next ${formatDate(r.emi.next_due)}`
+                            : r.emi.per_inst ? `${formatINR(r.emi.per_inst)} ea` : '')
+                    : ''
+                    }
+                    accent={r.emi ? (r.emi.overdue > 0 ? 'text-rose-700' : 'text-gray-900') : 'text-gray-400'}/>
+
+                  <StatPill label="Broker · upline"
+                    value={r.brokers ? r.brokers.name : 'no broker'}
+                    sub={r.chain.length > 1 ? `↑ ${r.chain.slice(1, 3).map((c: any) => c.name).join(' → ')}${r.chain.length > 3 ? ` …+${r.chain.length - 3}` : ''}` : ''}
+                    accent="text-blue-700"
+                    onClick={r.brokers ? () => navigate(`/broker/dashboard?broker_id=${r.broker_id}`) : undefined}/>
+
+                  <StatPill label="MLM net"
+                    value={formatINR(r.mlm.net)}
+                    sub={`${r.mlm.rows} row${r.mlm.rows === 1 ? '' : 's'}`}
+                    accent="text-emerald-700"/>
                 </div>
               </div>
 
               {/* Expanded payment ledger */}
               {open && (
-                <div className="bg-gray-50/60 px-12 py-3 border-t border-gray-100">
+                <div className="bg-gray-50/60 px-3 md:px-12 py-3 border-t border-gray-100">
                   <ExpandedDetail row={r}/>
                 </div>
               )}
@@ -564,13 +533,18 @@ function TabTile({ active, onClick, icon, label, value, sub, tint }: any) {
   )
 }
 
-function Col({ label, children }: any) {
-  return (
-    <div className="min-w-[100px] shrink-0">
-      <div className="text-[10px] uppercase tracking-wider text-gray-400 mb-0.5">{label}</div>
-      {children}
+function StatPill({ label, value, sub, accent, onClick }: any) {
+  const inner = (
+    <div className="rounded-md bg-gray-50 border border-gray-200 px-2.5 py-1.5 min-w-0">
+      <div className="text-[10px] uppercase tracking-wider text-gray-400 truncate">{label}</div>
+      <div className={`text-sm font-semibold truncate ${accent || 'text-gray-900'}`}>{value}</div>
+      {sub && <div className="text-[10px] text-gray-500 truncate">{sub}</div>}
     </div>
   )
+  if (onClick) {
+    return <button type="button" onClick={onClick} className="text-left w-full hover:opacity-80">{inner}</button>
+  }
+  return inner
 }
 
 function ExpandedDetail({ row }: { row: any }) {
