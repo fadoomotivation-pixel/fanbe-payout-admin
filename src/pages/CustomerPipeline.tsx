@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { Button } from '@/components/ui/Button.tsx'
 import { Input, Select } from '@/components/ui/Input.tsx'
@@ -8,10 +8,12 @@ import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import { distributePaymentCommission } from '@/lib/payoutEngine'
+import { printApplicationForm } from '@/lib/printTemplates'
 import EmiPanel from '@/components/EmiPanel'
 import {
   Users, Search, Filter, ChevronRight, Banknote, Calculator, ArrowUpRight,
   CheckCircle2, AlertTriangle, Coins, Phone, MessageCircle, IndianRupee, X, ExternalLink,
+  FileText, Printer,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -29,6 +31,7 @@ const today = () => new Date().toISOString().slice(0, 10)
 
 export default function CustomerPipeline() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const [tab, setTab] = useState<Tab>('all')
   const [search, setSearch] = useState('')
   const [filterBroker, setFilterBroker] = useState('')
@@ -485,17 +488,31 @@ export default function CustomerPipeline() {
                   </Col>
 
                   {/* Quick actions */}
-                  <div className="shrink-0 flex flex-col gap-1 items-end">
+                  <div className="shrink-0 flex flex-col gap-1 items-end min-w-[150px]">
+                    <Badge label={r.stage?.replace(/_/g, ' ')} className={`text-[10px] border ${STAGE_COLORS[r.stage] || 'bg-gray-100 text-gray-700'}`}/>
                     {!r.hasToken && r.balance > 0 && (
                       <Button size="sm" variant="secondary" onClick={() => setPayFor({ booking: r, type: 'token' })}><Banknote size={11}/>Record token</Button>
                     )}
-                    {r.hasToken && !r.hasBooking && r.balance > 0 && (
-                      <Button size="sm" onClick={() => setPayFor({ booking: r, type: 'booking' })}><Banknote size={11}/>Record booking</Button>
+                    {r.hasToken && r.balance > 0 && (
+                      <Button size="sm" onClick={() => setPayFor({ booking: r, type: 'booking' })}>
+                        <Banknote size={11}/>{r.hasBooking ? 'Add booking payment' : 'Record booking'}
+                      </Button>
                     )}
-                    {(r.hasBooking || r.emi) && r.balance > 0 && (
-                      <Button size="sm" variant="ghost" onClick={() => setEmiBooking(r)}><Calculator size={11}/>EMI</Button>
+                    {r.balance > 0 && (
+                      <Button size="sm" variant={r.emi ? 'ghost' : 'secondary'} onClick={() => setEmiBooking(r)}>
+                        <Calculator size={11}/>{r.emi ? 'EMI' : 'Start EMI'}
+                      </Button>
                     )}
-                    <Badge label={r.stage?.replace(/_/g, ' ')} className={`text-[10px] border ${STAGE_COLORS[r.stage] || 'bg-gray-100 text-gray-700'}`}/>
+                    <div className="flex gap-1">
+                      <button onClick={() => navigate(`/bookings?edit=${r.id}`)}
+                        className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border border-gray-200 hover:bg-gray-50 text-gray-700">
+                        <FileText size={11}/>Edit
+                      </button>
+                      <button onClick={() => printApplicationForm(r)}
+                        className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border border-gray-200 hover:bg-gray-50 text-gray-700">
+                        <Printer size={11}/>Form
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -616,45 +633,91 @@ function Row({ k, v, accent }: any) {
 
 function RecordPaymentModal({ open, booking, type, onClose, onSubmit, submitting }: any) {
   const [form, setForm] = useState<any>({ amount: '', mode: 'cash', date: today(), utr: '', drawn_on: '', branch: '' })
-  // Reset when (re)opened
+  // Reset when (re)opened — leave Amount blank so admin types intentionally
   useMemo(() => {
-    if (open && booking) {
-      const preset = type === 'booking' && booking.expected > 0 && booking.pm.booking === 0
-        ? String(booking.expected - booking.pm.booking)
-        : ''
-      setForm({ amount: preset, mode: 'cash', date: today(), utr: '', drawn_on: '', branch: '' })
-    }
+    if (open && booking) setForm({ amount: '', mode: 'cash', date: today(), utr: '', drawn_on: '', branch: '' })
   }, [open, booking?.id, type])
+  const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }))
 
-  const title = type === 'token' ? `Record token · ${booking?.bp_customers?.name || ''}` : `Record booking deposit · ${booking?.bp_customers?.name || ''}`
-  const subtitle = type === 'booking' && booking?.expected > 0 ? `Expected ${formatINR(booking.expected)}` : `Balance ${formatINR(booking?.balance || 0)}`
+  if (!booking) return null
+
+  const amt = Number(form.amount) || 0
+  const expectedRemaining = type === 'booking' ? Math.max(0, Number(booking.expected || 0) - Number(booking.pm?.booking || 0)) : 0
+  const balanceAfter = Math.max(0, Number(booking.balance) - amt)
+
+  // Quick-amount presets
+  const presets: { label: string; value: number; tone: string }[] = []
+  if (type === 'booking' && expectedRemaining > 0) {
+    presets.push({ label: `Expected · ${formatINR(expectedRemaining)}`, value: expectedRemaining, tone: 'bg-blue-50 text-blue-800 border-blue-200' })
+    presets.push({ label: `Half · ${formatINR(Math.round(expectedRemaining / 2))}`, value: Math.round(expectedRemaining / 2), tone: 'bg-amber-50 text-amber-800 border-amber-200' })
+  }
+  presets.push({ label: `Full balance · ${formatINR(booking.balance)}`, value: booking.balance, tone: 'bg-emerald-50 text-emerald-800 border-emerald-200' })
 
   return (
-    <Modal open={open} onClose={onClose} title={title} size="sm">
-      {booking && (
-        <div className="space-y-3">
-          <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-xs">{subtitle}</div>
-
-          <Input label={`Amount (₹) — ${type === 'token' ? 'token' : 'booking deposit'}`} type="number" autoFocus value={form.amount}
-            onChange={(e: any) => setForm((p: any) => ({ ...p, amount: e.target.value }))}/>
-          <div className="grid grid-cols-2 gap-3">
-            <Select label="Mode" value={form.mode} onChange={(e: any) => setForm((p: any) => ({ ...p, mode: e.target.value }))}>
-              {PAYMENT_MODES.map(m => <option key={m} value={m}>{m.toUpperCase()}</option>)}
-            </Select>
-            <Input label="Date" type="date" value={form.date} onChange={(e: any) => setForm((p: any) => ({ ...p, date: e.target.value }))}/>
-            <Input label="UTR / Reference" value={form.utr} onChange={(e: any) => setForm((p: any) => ({ ...p, utr: e.target.value }))} className="col-span-2"/>
-            <Input label="Drawn on (bank)" value={form.drawn_on} onChange={(e: any) => setForm((p: any) => ({ ...p, drawn_on: e.target.value }))}/>
-            <Input label="Branch" value={form.branch} onChange={(e: any) => setForm((p: any) => ({ ...p, branch: e.target.value }))}/>
-          </div>
-
-          <div className="text-[11px] text-gray-500">
-            Per-payment MLM commission will be distributed to the broker chain.
-          </div>
+    <Modal open={open} onClose={onClose} title={type === 'token' ? `Record token · ${booking.bp_customers?.name || ''}` : `Record booking deposit · ${booking.bp_customers?.name || ''}`} size="sm">
+      <div className="space-y-3">
+        {/* Context strip */}
+        <div className="bg-blue-50/60 border border-blue-100 rounded-lg p-3 text-xs grid grid-cols-2 gap-1">
+          <span className="text-gray-600">Total plot value</span><b className="text-right">{formatINR(booking.total)}</b>
+          <span className="text-gray-600">Already paid</span><b className="text-right text-emerald-700">{formatINR(booking.paid)}</b>
+          {type === 'booking' && booking.expected > 0 && (
+            <>
+              <span className="text-gray-600">Expected booking deposit</span><b className="text-right text-blue-800">{formatINR(booking.expected)}</b>
+              <span className="text-gray-600">Already paid against it</span><b className="text-right">{formatINR(booking.pm.booking || 0)}</b>
+            </>
+          )}
+          <span className="text-gray-600">Balance remaining</span><b className="text-right text-orange-700">{formatINR(booking.balance)}</b>
         </div>
-      )}
+
+        {/* Custom amount field */}
+        <div>
+          <label className="text-xs font-semibold text-gray-700 mb-1 block">Amount received today (₹)</label>
+          <input type="number" autoFocus value={form.amount} onChange={e => set('amount', e.target.value)}
+            placeholder="any amount the customer is paying"
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-base focus:outline-none focus:ring-2 focus:ring-indigo-300"/>
+
+          {/* Quick presets */}
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {presets.map(p => (
+              <button key={p.label} type="button" onClick={() => set('amount', String(p.value))}
+                className={`text-[11px] px-2 py-1 rounded-md border ${p.tone} hover:opacity-80`}>{p.label}</button>
+            ))}
+          </div>
+
+          {/* Live feedback */}
+          {amt > 0 && (
+            <div className="mt-2 text-[11px]">
+              {type === 'booking' && booking.expected > 0 && amt < expectedRemaining && (
+                <span className="text-amber-700">⏳ Partial booking deposit · shortfall {formatINR(expectedRemaining - amt)} (carries forward, can be collected later)</span>
+              )}
+              {type === 'booking' && booking.expected > 0 && amt >= expectedRemaining && (
+                <span className="text-emerald-700">✓ Booking deposit fully covered{amt > expectedRemaining ? ` · ${formatINR(amt - expectedRemaining)} extra towards balance` : ''}</span>
+              )}
+              {amt > booking.balance && (
+                <span className="text-rose-700 block mt-0.5">⚠ Amount exceeds balance ({formatINR(booking.balance)}). Excess will be recorded but not applied to outstanding.</span>
+              )}
+              {amt <= booking.balance && <span className="text-gray-500 block mt-0.5">Balance after this payment: <b className="text-orange-700">{formatINR(balanceAfter)}</b></span>}
+            </div>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Select label="Mode" value={form.mode} onChange={(e: any) => set('mode', e.target.value)}>
+            {PAYMENT_MODES.map(m => <option key={m} value={m}>{m.toUpperCase()}</option>)}
+          </Select>
+          <Input label="Date" type="date" value={form.date} onChange={(e: any) => set('date', e.target.value)}/>
+          <Input label="UTR / Reference" value={form.utr} onChange={(e: any) => set('utr', e.target.value)} className="col-span-2"/>
+          <Input label="Drawn on (bank)" value={form.drawn_on} onChange={(e: any) => set('drawn_on', e.target.value)}/>
+          <Input label="Branch" value={form.branch} onChange={(e: any) => set('branch', e.target.value)}/>
+        </div>
+
+        <div className="text-[11px] text-gray-500">
+          Per-payment MLM commission will be distributed to the broker chain.
+        </div>
+      </div>
       <div className="flex justify-end gap-2 mt-5">
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
-        <Button onClick={() => onSubmit({ amount: Number(form.amount), mode: form.mode, date: form.date, utr: form.utr, drawn_on: form.drawn_on, branch: form.branch })} loading={submitting} disabled={!Number(form.amount)}>
+        <Button onClick={() => onSubmit({ amount: amt, mode: form.mode, date: form.date, utr: form.utr, drawn_on: form.drawn_on, branch: form.branch })} loading={submitting} disabled={!amt}>
           <IndianRupee size={14}/>Record &amp; distribute MLM
         </Button>
       </div>

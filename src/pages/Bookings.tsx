@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { Table } from '@/components/ui/Table.tsx'
 import { Button } from '@/components/ui/Button.tsx'
@@ -13,7 +13,7 @@ import { logClosure, getCurrentUserId } from '@/lib/closure'
 import { ClosureDialog } from '@/components/ClosureDialog'
 import { distributePaymentCommission, reverseBookingCommission } from '@/lib/payoutEngine'
 import EmiPanel from '@/components/EmiPanel'
-import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info, Banknote, IndianRupee, Lock, Unlock, Search, Download, X, Filter, ChevronDown } from 'lucide-react'
+import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info, Banknote, IndianRupee, Lock, Unlock, Search, Download, X, Filter, ChevronDown, Users } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const STAGES = ['token_received','booking_done','cancelled'] as const
@@ -71,6 +71,7 @@ const EMPTY: any = {
 
 export default function Bookings() {
   const qc = useQueryClient()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [modal, setModal]     = useState(false)
   const [editing, setEditing] = useState<any>(null)
   const [form, setForm]       = useState<any>(EMPTY)
@@ -814,41 +815,23 @@ export default function Bookings() {
     { header: 'Date', render: (r: any) => <span className="text-xs text-gray-500">{formatDate(r.application_date || r.created_at)}</span> },
     {
       header: 'Actions',
+      // Slim action set — Bookings is the create/edit page; Customer Pipeline does day-to-day payments.
       render: (r: any) => {
-        const cat = categorize(r)
-        const hasEmi = !!emiMap[r.id]
-        const ns = nextStage(r.stage as Stage)
         const locked = isClosed(r)
-        if (locked) {
-          return (
-            <div className="flex gap-1 flex-wrap">
-              <Button size="sm" variant="ghost" onClick={() => setEmiBooking(r)}><Calculator size={12} />EMI</Button>
-              <Button size="sm" variant="ghost" onClick={() => printApplicationForm(r)}><Printer size={12} />Form</Button>
+        return (
+          <div className="flex gap-1 flex-wrap">
+            <Link to={`/customer-pipeline?booking=${r.id}`}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100">
+              <Users size={11}/>Pipeline
+            </Link>
+            {!locked && <Button size="sm" variant="ghost" onClick={() => open(r)}><FileText size={12} />Edit</Button>}
+            <Button size="sm" variant="ghost" onClick={() => printApplicationForm(r)}><Printer size={12} />Form</Button>
+            {locked && (
               <Button size="sm" variant="secondary" onClick={() => setClosureFor({ booking: r, action: 'reopen' })}>
                 <Unlock size={12}/>Reopen
               </Button>
-            </div>
-          )
-        }
-        return (
-          <div className="flex gap-1 flex-wrap">
-            {cat === 'token' && (
-              <Button size="sm" onClick={() => setRecordBookingFor(r)}><Banknote size={12} />Record Booking</Button>
             )}
-            {(cat === 'token' || cat === 'advance') && (
-              <Button size="sm" variant={hasEmi ? 'ghost' : 'secondary'} onClick={() => setEmiBooking(r)}>
-                <Calculator size={12} />{hasEmi ? 'EMI' : 'Start EMI'}
-              </Button>
-            )}
-            {cat === 'full' && (
-              <Button size="sm" variant="ghost" onClick={() => setEmiBooking(r)}><Calculator size={12} />EMI</Button>
-            )}
-            <Button size="sm" variant="ghost" onClick={() => open(r)}><FileText size={12} />Edit</Button>
-            <Button size="sm" variant="ghost" onClick={() => printApplicationForm(r)}><Printer size={12} />Form</Button>
-            {cat === 'token' && ns && (
-              <Button size="sm" variant="ghost" onClick={() => advanceStage.mutate({ id: r.id, stage: ns })}><ArrowRight size={12} />Mark {STAGE_META[ns].label}</Button>
-            )}
-            {canClose(r) && (
+            {!locked && canClose(r) && (
               <Button size="sm" variant="secondary" onClick={() => setClosureFor({ booking: r, action: 'close' })}>
                 <Lock size={12}/>Close
               </Button>
@@ -858,6 +841,21 @@ export default function Bookings() {
       },
     },
   ]
+
+  // Auto-open edit modal when arriving from /customer-pipeline?edit=<id> or /bookings?edit=<id>
+  useEffect(() => {
+    const editId = searchParams.get('edit')
+    if (editId && all.length > 0 && !modal) {
+      const target = all.find((b: any) => b.id === editId)
+      if (target) {
+        open(target)
+        // Clear the param so the modal doesn't keep re-opening
+        const next = new URLSearchParams(searchParams)
+        next.delete('edit')
+        setSearchParams(next, { replace: true })
+      }
+    }
+  }, [searchParams, all.length])
 
   return (
     <div>
