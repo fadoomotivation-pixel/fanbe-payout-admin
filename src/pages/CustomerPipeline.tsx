@@ -323,15 +323,10 @@ export default function CustomerPipeline() {
   const toggleExpand = (id: string) => setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
 
   return (
-    <div className="p-3 md:p-6 space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-indigo-50 rounded-lg"><Users size={20} className="text-indigo-600"/></div>
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">Customer Pipeline</h1>
-            <p className="text-sm text-gray-500">Every deal at a glance — customer, plot, what's been paid, what's pending, the broker chain &amp; MLM earned.</p>
-          </div>
-        </div>
+    <div className="p-4 md:p-8 space-y-6 max-w-6xl mx-auto">
+      <div>
+        <h1 className="text-2xl md:text-3xl font-bold text-gray-900 tracking-tight">Customer Pipeline</h1>
+        <p className="text-sm text-gray-500 mt-1">Every deal · clean. One tap to do the next thing.</p>
       </div>
 
       {/* KPI tiles + tabs combined */}
@@ -346,26 +341,26 @@ export default function CustomerPipeline() {
           icon={<CheckCircle2 size={16}/>}       label="Fully settled"      value={String(stats.settled)} sub="zero balance"                              tint="emerald"/>
       </div>
 
-      {/* Filters */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-3 flex flex-wrap gap-2 items-center">
-        <div className="relative flex-1 min-w-[200px]">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search customer, phone, code, booking, plot, broker..."
-            className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-300"/>
+      {/* Calm search bar */}
+      <div className="flex flex-wrap gap-2 items-center">
+        <div className="relative flex-1 min-w-[240px]">
+          <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400"/>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search customer, phone, booking, plot, broker"
+            className="w-full pl-10 pr-3 py-2.5 text-sm bg-white border border-gray-200 rounded-full focus:outline-none focus:border-gray-900 transition"/>
         </div>
-        <select value={filterBroker} onChange={e => setFilterBroker(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none">
+        <select value={filterBroker} onChange={e => setFilterBroker(e.target.value)} className="bg-white border border-gray-200 rounded-full px-3 py-2.5 text-sm focus:outline-none focus:border-gray-900">
           <option value="">All brokers</option>
           {(brokers as any[]).map((b: any) => <option key={b.id} value={b.id}>{b.name} [{b.broker_id}]</option>)}
         </select>
-        <select value={filterProject} onChange={e => setFilterProject(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none">
+        <select value={filterProject} onChange={e => setFilterProject(e.target.value)} className="bg-white border border-gray-200 rounded-full px-3 py-2.5 text-sm focus:outline-none focus:border-gray-900">
           <option value="">All projects</option>
           {(projects as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
-        <div className="text-xs text-gray-500 ml-auto">{filtered.length} of {rows.length}</div>
+        <span className="text-[12px] text-gray-400 tabular-nums ml-auto">{filtered.length} · {rows.length}</span>
       </div>
 
       {/* Deals list */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm divide-y divide-gray-100">
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-[0_1px_2px_rgba(0,0,0,0.02)] divide-y divide-gray-100 overflow-hidden">
         {isLoading && <div className="py-10 text-center text-sm text-gray-400">Loading…</div>}
         {!isLoading && filtered.length === 0 && (
           <div className="py-12 text-center">
@@ -380,116 +375,173 @@ export default function CustomerPipeline() {
         {filtered.map((r: any) => {
           const open = expanded.has(r.id)
           const cust = r.bp_customers
+          // Progress = 4 milestones: token, booking deposit, EMI started, fully settled
+          const m1 = r.hasToken
+          const m2 = r.hasBooking && r.bookingShortfall <= 0
+          const m3 = !!r.emi
+          const m4 = r.balance <= 0 && r.total > 0
+          const pct = r.total > 0 ? Math.min(100, Math.round((r.paid / r.total) * 100)) : 0
+          // ONE primary, contextual call-to-action
+          const primary = !r.hasToken && r.balance > 0
+              ? { label: 'Record token',          onClick: () => setPayFor({ booking: r, type: 'token' }) }
+            : r.hasToken && !r.hasBooking && r.balance > 0
+              ? { label: 'Record booking',        onClick: () => setPayFor({ booking: r, type: 'booking' }) }
+            : r.hasBooking && r.bookingShortfall > 0
+              ? { label: 'Top up booking',        onClick: () => setPayFor({ booking: r, type: 'booking' }) }
+            : !r.emi && r.balance > 0
+              ? { label: 'Start EMI',             onClick: () => setEmiBooking(r) }
+            : r.emi && r.balance > 0
+              ? { label: 'Collect EMI payment',   onClick: () => setEmiBooking(r) }
+            : null  // settled
+
+          // Next-step subtitle that explains the primary action
+          const nextHint = !r.hasToken
+              ? 'Customer hasn\'t paid yet.'
+            : !r.hasBooking
+              ? r.expected > 0 ? `Booking deposit expected: ${formatINR(r.expected)}.` : 'Awaiting booking deposit.'
+            : r.bookingShortfall > 0
+              ? `Booking deposit short by ${formatINR(r.bookingShortfall)}.`
+            : !r.emi && r.balance > 0
+              ? `Balance ${formatINR(r.balance)} — set up the EMI plan.`
+            : r.emi && r.balance > 0
+              ? r.emi.overdue > 0
+                  ? `${r.emi.overdue} EMI overdue · ${formatINR(r.balance)} balance.`
+                  : `Next EMI ${formatDate(r.emi.next_due || '')} · ${r.emi.per_inst ? `${formatINR(r.emi.per_inst)} ea` : ''}`
+            : 'Settled — no further action needed.'
+
           return (
-            <div key={r.id}>
-              <div className="px-3 md:px-4 py-3 hover:bg-gray-50/40">
-                {/* Card layout — actions always visible regardless of viewport width */}
-
-                {/* Header bar: identity + stage + balance */}
-                <div className="flex items-start gap-2 flex-wrap">
-                  <button onClick={() => toggleExpand(r.id)} className="shrink-0 mt-0.5">
-                    <ChevronRight size={14} className={`text-gray-400 transition-transform ${open ? 'rotate-90' : ''}`}/>
-                  </button>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <Link to={`/customer-history?customer=${r.customer_id}`} className="font-semibold text-sm text-gray-900 hover:text-blue-700 hover:underline">{cust?.name || '—'}</Link>
-                      <span className="text-[10px] font-mono text-gray-400">{cust?.customer_code || ''}</span>
-                      <span className="font-mono text-blue-700 text-xs">{r.booking_no}</span>
-                      <Badge label={r.stage?.replace(/_/g, ' ')} className={`text-[10px] border ${STAGE_COLORS[r.stage] || 'bg-gray-100 text-gray-700'}`}/>
-                    </div>
-                    <div className="text-xs text-gray-500 mt-0.5 truncate">
-                      {cust?.phone && (
-                        <>
-                          <a href={`tel:${cust.phone}`} className="text-blue-700 hover:underline inline-flex items-center gap-0.5 mr-2"><Phone size={9}/>{cust.phone}</a>
-                          <a href={`https://wa.me/${String(cust.phone).replace(/[^\d]/g,'')}`} target="_blank" rel="noreferrer" className="text-emerald-700 hover:underline inline-flex items-center gap-0.5 mr-2"><MessageCircle size={9}/>WA</a>
-                        </>
-                      )}
-                      {r.bp_plots?.plot_no && <span>Plot {r.bp_plots.plot_no} · </span>}
-                      {r.bp_plots?.size_sqyd && <span>{r.bp_plots.size_sqyd} sqyd · </span>}
-                      {(r.bp_projects?.name || r.scheme_name)}
-                    </div>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <div className={`text-base font-bold ${r.balance > 0 ? 'text-orange-700' : 'text-emerald-700'}`}>{formatINR(r.balance)}</div>
-                    <div className="text-[10px] text-gray-400">balance of {formatINR(r.total)}</div>
+            <div key={r.id} className="px-4 md:px-6 py-5 hover:bg-gray-50/40 transition-colors">
+              {/* Header: name + balance */}
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <Link to={`/customer-history?customer=${r.customer_id}`} className="text-[17px] font-semibold text-gray-900 hover:text-blue-700 truncate block">
+                    {cust?.name || '—'}
+                  </Link>
+                  <div className="text-[13px] text-gray-500 mt-0.5 truncate">
+                    <span className="font-mono">{r.booking_no}</span>
+                    {r.bp_plots?.plot_no && <> · Plot {r.bp_plots.plot_no}</>}
+                    {r.bp_plots?.size_sqyd && <> · {r.bp_plots.size_sqyd} sqyd</>}
+                    {(r.bp_projects?.name || r.scheme_name) && <> · {r.bp_projects?.name || r.scheme_name}</>}
                   </div>
                 </div>
-
-                {/* Action bar — ALWAYS VISIBLE — the whole point of this page */}
-                <div className="mt-2.5 flex flex-wrap gap-1.5 ml-6">
-                  {!r.hasToken && r.balance > 0 && (
-                    <Button size="sm" variant="secondary" onClick={() => setPayFor({ booking: r, type: 'token' })}><Banknote size={12}/>Record token</Button>
-                  )}
-                  {r.hasToken && r.balance > 0 && (
-                    <Button size="sm" onClick={() => setPayFor({ booking: r, type: 'booking' })}>
-                      <Banknote size={12}/>{r.hasBooking ? 'Add booking payment' : 'Record booking'}
-                    </Button>
-                  )}
-                  {r.balance > 0 && (
-                    <Button size="sm" variant={r.emi ? 'ghost' : 'secondary'} onClick={() => setEmiBooking(r)}>
-                      <Calculator size={12}/>{r.emi ? 'EMI' : 'Start EMI'}
-                    </Button>
-                  )}
-                  <Button size="sm" variant="ghost" onClick={() => navigate(`/bookings?edit=${r.id}`)}>
-                    <FileText size={12}/>Edit
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => printApplicationForm(r)}>
-                    <Printer size={12}/>Form
-                  </Button>
-                </div>
-
-                {/* Stats row — pill-style chips, wraps cleanly */}
-                <div className="mt-2.5 ml-6 grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
-                  <StatPill label="Token"
-                    value={r.pm.token > 0 ? formatINR(r.pm.token) : '—'}
-                    sub={r.pm.token > 0 ? 'received' : ''}
-                    accent={r.pm.token > 0 ? 'text-emerald-700' : 'text-gray-300'}/>
-
-                  <StatPill label="Booking deposit"
-                    value={
-                      r.pm.booking > 0 ? formatINR(r.pm.booking)
-                    : r.expected > 0 ? `⏳ ${formatINR(r.expected)}`
-                    : r.hasToken ? '⏳ pending'
-                    : '—'
-                    }
-                    sub={
-                      r.pm.booking > 0 ? (r.bookingShortfall > 0 ? `partial · short ${formatINR(r.bookingShortfall)}` : 'paid')
-                    : r.expected > 0 ? 'expected (unpaid)'
-                    : ''
-                    }
-                    accent={
-                      r.pm.booking > 0 ? (r.bookingShortfall > 0 ? 'text-amber-700' : 'text-blue-700')
-                    : r.expected > 0 || r.hasToken ? 'text-amber-700'
-                    : 'text-gray-300'
-                    }/>
-
-                  <StatPill label="EMI"
-                    value={r.emi ? `${r.emi.paid + r.emi.partial}/${r.emi.n}` : r.hasBooking ? 'no schedule' : '—'}
-                    sub={
-                      r.emi ? (r.emi.overdue > 0 ? `${r.emi.overdue} overdue`
-                            : r.emi.next_due ? `next ${formatDate(r.emi.next_due)}`
-                            : r.emi.per_inst ? `${formatINR(r.emi.per_inst)} ea` : '')
-                    : ''
-                    }
-                    accent={r.emi ? (r.emi.overdue > 0 ? 'text-rose-700' : 'text-gray-900') : 'text-gray-400'}/>
-
-                  <StatPill label="Broker · upline"
-                    value={r.brokers ? r.brokers.name : 'no broker'}
-                    sub={r.chain.length > 1 ? `↑ ${r.chain.slice(1, 3).map((c: any) => c.name).join(' → ')}${r.chain.length > 3 ? ` …+${r.chain.length - 3}` : ''}` : ''}
-                    accent="text-blue-700"
-                    onClick={r.brokers ? () => navigate(`/broker/dashboard?broker_id=${r.broker_id}`) : undefined}/>
-
-                  <StatPill label="MLM net"
-                    value={formatINR(r.mlm.net)}
-                    sub={`${r.mlm.rows} row${r.mlm.rows === 1 ? '' : 's'}`}
-                    accent="text-emerald-700"/>
+                <div className="text-right shrink-0">
+                  <div className={`text-[18px] font-bold tabular-nums ${r.balance > 0 ? 'text-gray-900' : 'text-emerald-700'}`}>{formatINR(r.balance)}</div>
+                  <div className="text-[11px] text-gray-400">{r.balance > 0 ? `balance of ${formatINR(r.total)}` : 'settled'}</div>
                 </div>
               </div>
 
-              {/* Expanded payment ledger */}
+              {/* Calm progress strip + next-step hint */}
+              <div className="mt-4 flex items-center gap-3">
+                <Milestone done={m1} label="Token"/>
+                <Connector done={m2}/>
+                <Milestone done={m2}   partial={r.hasBooking && r.bookingShortfall > 0} label="Booking"/>
+                <Connector done={m3}/>
+                <Milestone done={m3}   partial={r.emi && r.emi.overdue > 0} label="EMI"/>
+                <Connector done={m4}/>
+                <Milestone done={m4}   label="Settled"/>
+                <div className="ml-auto text-[12px] text-gray-400 tabular-nums shrink-0">{pct}%</div>
+              </div>
+              <div className="mt-2 text-[12px] text-gray-500">{nextHint}</div>
+
+              {/* Single primary CTA + minimal secondary affordances */}
+              <div className="mt-4 flex items-center gap-3 flex-wrap">
+                {primary ? (
+                  <button onClick={primary.onClick}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-gray-900 text-white text-sm font-semibold hover:bg-black shadow-sm transition">
+                    {primary.label} <ArrowUpRight size={14}/>
+                  </button>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-emerald-50 text-emerald-700 text-sm font-semibold">
+                    <CheckCircle2 size={14}/>Settled
+                  </span>
+                )}
+                <button onClick={() => toggleExpand(r.id)}
+                  className="ml-auto text-[13px] text-gray-500 hover:text-gray-900 inline-flex items-center gap-1">
+                  {open ? 'Hide details' : 'Details'}<ChevronRight size={14} className={`transition-transform ${open ? 'rotate-90' : ''}`}/>
+                </button>
+              </div>
+
+              {/* Expanded — full data + secondary actions */}
               {open && (
-                <div className="bg-gray-50/60 px-3 md:px-12 py-3 border-t border-gray-100">
-                  <ExpandedDetail row={r}/>
+                <div className="mt-5 pt-5 border-t border-gray-100 space-y-5">
+                  {/* Status list */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-1.5 text-[13px]">
+                    <DetailRow icon={r.pm.token > 0 ? '✓' : '○'} label="Token"
+                      value={r.pm.token > 0 ? `${formatINR(r.pm.token)} received` : 'not received'}
+                      tone={r.pm.token > 0 ? 'emerald' : 'gray'}/>
+
+                    <DetailRow
+                      icon={r.pm.booking > 0 ? (r.bookingShortfall > 0 ? '◴' : '✓') : '○'}
+                      label="Booking deposit"
+                      value={
+                        r.pm.booking > 0
+                          ? r.bookingShortfall > 0
+                            ? `${formatINR(r.pm.booking)} of ${formatINR(r.pm.booking + r.bookingShortfall)} (partial)`
+                            : `${formatINR(r.pm.booking)} paid`
+                          : r.expected > 0 ? `${formatINR(r.expected)} expected (unpaid)` : 'pending'
+                      }
+                      tone={r.pm.booking > 0 ? (r.bookingShortfall > 0 ? 'amber' : 'blue') : 'amber'}/>
+
+                    <DetailRow
+                      icon={r.emi ? (r.emi.overdue > 0 ? '◴' : '✓') : '○'}
+                      label="EMI"
+                      value={
+                        r.emi
+                          ? `${r.emi.paid + r.emi.partial}/${r.emi.n}${r.emi.overdue > 0 ? ` · ${r.emi.overdue} overdue` : r.emi.next_due ? ` · next ${formatDate(r.emi.next_due)}` : ''}`
+                          : r.hasBooking ? 'no schedule yet' : '—'
+                      }
+                      tone={r.emi ? (r.emi.overdue > 0 ? 'rose' : 'blue') : 'gray'}/>
+
+                    <DetailRow icon={r.brokers ? '●' : '○'} label="Broker"
+                      value={r.brokers ? r.brokers.name : 'no broker assigned'}
+                      tone="blue"
+                      onClick={r.brokers ? () => navigate(`/broker/dashboard?broker_id=${r.broker_id}`) : undefined}
+                      sub={r.chain.length > 1 ? `↑ ${r.chain.slice(1, 4).map((c: any) => c.name).join(' → ')}${r.chain.length > 4 ? ` …+${r.chain.length - 4}` : ''}` : undefined}/>
+
+                    <DetailRow icon="✓" label="MLM net distributed"
+                      value={`${formatINR(r.mlm.net)} · ${r.mlm.rows} row${r.mlm.rows === 1 ? '' : 's'}`}
+                      tone="emerald"/>
+
+                    <DetailRow icon="₹" label="Total paid / net"
+                      value={`${formatINR(r.paid)} / ${formatINR(r.total)}`}
+                      tone="gray"/>
+                  </div>
+
+                  {/* Customer contact + secondary actions */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {cust?.phone && (
+                      <>
+                        <a href={`tel:${cust.phone}`} className="inline-flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-full border border-gray-200 text-gray-700 hover:bg-gray-50">
+                          <Phone size={12}/>{cust.phone}
+                        </a>
+                        <a href={`https://wa.me/${String(cust.phone).replace(/[^\d]/g,'')}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-full border border-gray-200 text-gray-700 hover:bg-gray-50">
+                          <MessageCircle size={12}/>WhatsApp
+                        </a>
+                      </>
+                    )}
+                    <div className="ml-auto flex flex-wrap gap-1.5">
+                      {r.hasToken && r.balance > 0 && r.hasBooking && (
+                        <button onClick={() => setPayFor({ booking: r, type: 'booking' })}
+                          className="inline-flex items-center gap-1 text-[12px] px-3 py-1.5 rounded-full border border-gray-200 text-gray-700 hover:bg-gray-50">
+                          <Banknote size={12}/>Add booking payment
+                        </button>
+                      )}
+                      {r.balance > 0 && (
+                        <button onClick={() => setEmiBooking(r)}
+                          className="inline-flex items-center gap-1 text-[12px] px-3 py-1.5 rounded-full border border-gray-200 text-gray-700 hover:bg-gray-50">
+                          <Calculator size={12}/>{r.emi ? 'EMI schedule' : 'Start EMI'}
+                        </button>
+                      )}
+                      <button onClick={() => navigate(`/bookings?edit=${r.id}`)}
+                        className="inline-flex items-center gap-1 text-[12px] px-3 py-1.5 rounded-full border border-gray-200 text-gray-700 hover:bg-gray-50">
+                        <FileText size={12}/>Edit
+                      </button>
+                      <button onClick={() => printApplicationForm(r)}
+                        className="inline-flex items-center gap-1 text-[12px] px-3 py-1.5 rounded-full border border-gray-200 text-gray-700 hover:bg-gray-50">
+                        <Printer size={12}/>Form
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -513,37 +565,61 @@ export default function CustomerPipeline() {
   )
 }
 
-function TabTile({ active, onClick, icon, label, value, sub, tint }: any) {
-  const palettes: Record<string, { bg: string; active: string; text: string }> = {
-    indigo:  { bg: 'bg-white border-gray-200',           active: 'bg-gray-900 border-gray-900 text-white',       text: 'text-gray-900' },
-    amber:   { bg: 'bg-amber-50 border-amber-200',       active: 'bg-amber-600 border-amber-600 text-white',     text: 'text-amber-800' },
-    blue:    { bg: 'bg-blue-50 border-blue-200',         active: 'bg-blue-600 border-blue-600 text-white',       text: 'text-blue-800' },
-    emerald: { bg: 'bg-emerald-50 border-emerald-200',   active: 'bg-emerald-600 border-emerald-600 text-white', text: 'text-emerald-800' },
+function TabTile({ active, onClick, label, value, sub, tint }: any) {
+  const dotColor: Record<string, string> = {
+    indigo:  'bg-gray-900',
+    amber:   'bg-amber-400',
+    blue:    'bg-blue-500',
+    emerald: 'bg-emerald-500',
   }
-  const p = palettes[tint] || palettes.indigo
   return (
-    <button onClick={onClick} className={`text-left rounded-xl border p-3 transition ${active ? p.active : p.bg}`}>
-      <div className="flex items-center justify-between mb-1">
-        <span className={active ? 'opacity-90' : p.text}>{icon}</span>
-        <span className={`text-2xl font-bold ${active ? '' : p.text}`}>{value}</span>
+    <button onClick={onClick}
+      className={`text-left rounded-2xl border px-4 py-3.5 transition bg-white ${active ? 'border-gray-900 ring-1 ring-gray-900/5' : 'border-gray-200 hover:border-gray-300'}`}>
+      <div className="flex items-center gap-1.5 mb-1">
+        <span className={`w-1.5 h-1.5 rounded-full ${dotColor[tint] || 'bg-gray-400'}`}/>
+        <span className="text-[11px] uppercase tracking-wider text-gray-500">{label}</span>
       </div>
-      <div className={`text-xs ${active ? 'opacity-80' : 'text-gray-500'}`}>{label}</div>
-      {sub && <div className={`text-[10px] mt-0.5 ${active ? 'opacity-70' : 'text-gray-400'}`}>{sub}</div>}
+      <div className="text-2xl font-bold text-gray-900 tabular-nums">{value}</div>
+      {sub && <div className="text-[11px] text-gray-400 mt-0.5">{sub}</div>}
     </button>
   )
 }
 
-function StatPill({ label, value, sub, accent, onClick }: any) {
-  const inner = (
-    <div className="rounded-md bg-gray-50 border border-gray-200 px-2.5 py-1.5 min-w-0">
-      <div className="text-[10px] uppercase tracking-wider text-gray-400 truncate">{label}</div>
-      <div className={`text-sm font-semibold truncate ${accent || 'text-gray-900'}`}>{value}</div>
-      {sub && <div className="text-[10px] text-gray-500 truncate">{sub}</div>}
+function Milestone({ done, partial, label }: { done?: boolean; partial?: boolean; label: string }) {
+  const dotCls = done ? 'bg-gray-900' : partial ? 'bg-amber-400 ring-2 ring-amber-200' : 'bg-gray-200'
+  return (
+    <div className="flex flex-col items-center gap-1 shrink-0">
+      <div className={`w-2.5 h-2.5 rounded-full ${dotCls}`}/>
+      <span className="text-[10px] text-gray-400 hidden sm:block">{label}</span>
     </div>
   )
-  if (onClick) {
-    return <button type="button" onClick={onClick} className="text-left w-full hover:opacity-80">{inner}</button>
-  }
+}
+
+function Connector({ done }: { done?: boolean }) {
+  return <div className={`h-px flex-1 ${done ? 'bg-gray-900' : 'bg-gray-200'}`}/>
+}
+
+const TONE: Record<string, string> = {
+  emerald: 'text-emerald-700',
+  blue:    'text-blue-700',
+  amber:   'text-amber-700',
+  rose:    'text-rose-700',
+  gray:    'text-gray-900',
+}
+
+function DetailRow({ icon, label, value, sub, tone = 'gray', onClick }: any) {
+  const inner = (
+    <div className="flex items-baseline gap-2 py-1">
+      <span className={`w-4 text-center shrink-0 text-[13px] ${TONE[tone] || 'text-gray-600'}`}>{icon}</span>
+      <span className="text-gray-500 shrink-0">{label}</span>
+      <span className="mx-1 flex-1 border-b border-dotted border-gray-200 self-end mb-1"/>
+      <div className="text-right shrink-0">
+        <div className={`font-medium ${TONE[tone] || 'text-gray-900'}`}>{value}</div>
+        {sub && <div className="text-[11px] text-gray-400">{sub}</div>}
+      </div>
+    </div>
+  )
+  if (onClick) return <button type="button" onClick={onClick} className="text-left w-full hover:opacity-80 cursor-pointer">{inner}</button>
   return inner
 }
 
