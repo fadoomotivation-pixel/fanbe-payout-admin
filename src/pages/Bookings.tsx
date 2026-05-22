@@ -857,118 +857,61 @@ export default function Bookings() {
     }
   }, [searchParams, all.length])
 
+  // Recent bookings — just the last 10 for verification; full management is in Customer Pipeline
+  const recent = (all as any[]).slice(0, 10)
+
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">Bookings</h1>
-          <p className="text-sm text-gray-500">{all.length} total · Confirmed value: {formatINR(totalValue)} · pipeline: Token Received → Booking Done</p>
-        </div>
-        <Button onClick={() => open()}><Plus size={14} />New Booking</Button>
+    <div className="p-4 md:p-8 space-y-6 max-w-4xl mx-auto">
+      <div>
+        <h1 className="text-2xl md:text-3xl font-bold text-gray-900 tracking-tight">Create a booking</h1>
+        <p className="text-sm text-gray-500 mt-1">{all.length} bookings · Confirmed value {formatINR(totalValue)}. Manage payments &amp; EMIs in <Link to="/customer-pipeline" className="text-blue-700 hover:underline">Customer Pipeline →</Link></p>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 mb-5">
-        {(['all','token','advance','full','cancelled','closed'] as Category[]).map(c => {
-          const meta = CATEGORY_META[c]
-          const active = category === c
-          return (
-            <button
-              key={c}
-              onClick={() => setCategory(c)}
-              className={`text-left px-4 py-3 rounded-xl text-sm font-medium border transition-all ${active ? meta.activeClass : meta.idleClass}`}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-semibold">{meta.label}</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full ${active ? 'bg-white/20' : 'bg-gray-100 text-gray-700'}`}>{categoryCounts[c] || 0}</span>
+      <div className="flex flex-wrap gap-3 items-center">
+        <button onClick={() => open()}
+          className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-full bg-gray-900 text-white text-sm font-semibold hover:bg-black shadow-sm transition">
+          <Plus size={14}/>New Booking
+        </button>
+        <Link to="/customer-pipeline"
+          className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-full bg-white border border-gray-200 text-gray-700 text-sm hover:border-gray-300 transition">
+          <Users size={14}/>Open Customer Pipeline
+        </Link>
+      </div>
+
+      {/* Minimal recent list — read-only, just for verification. */}
+      <div>
+        <div className="text-[11px] uppercase tracking-wider text-gray-500 mb-2 px-1">Recent bookings</div>
+        <div className="bg-white border border-gray-200 rounded-2xl divide-y divide-gray-100 overflow-hidden">
+          {isLoading && <div className="py-10 text-center text-sm text-gray-400">Loading…</div>}
+          {!isLoading && recent.length === 0 && (
+            <div className="py-12 text-center text-sm text-gray-400">
+              No bookings yet. <button onClick={() => open()} className="text-blue-700 hover:underline">Create the first one →</button>
+            </div>
+          )}
+          {recent.map((r: any) => (
+            <div key={r.id} className="px-4 py-3 hover:bg-gray-50/40 flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-semibold text-gray-900 truncate">{r.bp_customers?.name || '—'}</div>
+                <div className="text-[12px] text-gray-500 truncate">
+                  <span className="font-mono">{r.booking_no}</span>
+                  {r.bp_plots?.plot_no && <> · Plot {r.bp_plots.plot_no}</>}
+                  {(r.bp_projects?.name || r.scheme_name) && <> · {r.bp_projects?.name || r.scheme_name}</>}
+                  {r.brokers?.name && <> · {r.brokers.name}</>}
+                </div>
               </div>
-              <div className={`text-[11px] mt-0.5 ${active ? 'text-white/80' : 'text-gray-500'}`}>{meta.sub}</div>
-            </button>
-          )
-        })}
-      </div>
-
-      {category !== 'all' && (
-        <div className="mb-4 px-3 py-2 rounded-lg bg-gray-50 border border-gray-100 text-xs text-gray-600 flex items-start gap-2">
-          <Info size={13} className="mt-0.5 shrink-0 text-gray-400"/>
-          <span>
-            {category === 'token'     && 'These customers have paid the token only. Use "Record Booking" to capture the booking deposit and optionally start the EMI plan in one step.'}
-            {category === 'advance'   && 'Booking deposit received. Start an EMI plan for the remaining balance, or record further payments from the EMI panel.'}
-            {category === 'full'      && 'Fully settled bookings — total collected matches the net value. Use "Close" to lock the booking once the registry is complete.'}
-            {category === 'cancelled' && 'Cancelled bookings. Plot has been released back to inventory. Close to archive permanently.'}
-            {category === 'closed'    && 'Closed bookings are locked and read-only. Reopening requires a written reason and is logged in the audit trail.'}
-          </span>
+              <div className="text-right shrink-0">
+                <div className="text-sm font-semibold text-gray-900 tabular-nums">{formatINR(r.total_amount || r.plot_total_price || 0)}</div>
+                <div className="text-[11px] text-gray-400">{formatDate(r.application_date || r.created_at)}</div>
+              </div>
+              <Link to={`/customer-pipeline?booking=${r.id}`} className="text-[12px] text-blue-700 hover:underline whitespace-nowrap">Manage →</Link>
+            </div>
+          ))}
         </div>
-      )}
-
-      {/* ── Admin filter toolbar ───────────────────────────────── */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm mb-3">
-        <div className="p-3 flex flex-wrap items-center gap-2">
-          <div className="relative flex-1 min-w-[240px]">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
-            <input
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Search booking no, customer, phone, plot, broker, project..."
-              className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-300"
-            />
-            {search && (
-              <button onClick={() => setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700"><X size={14}/></button>
-            )}
-          </div>
-          <button onClick={() => setShowFilters(s => !s)} className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border transition ${filtersActive ? 'border-indigo-300 bg-indigo-50 text-indigo-700' : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'}`}>
-            <Filter size={13}/>Filters{filtersActive ? ` · ${[filterProject,filterBroker,filterStage,dateFrom,dateTo].filter(Boolean).length}` : ''}<ChevronDown size={13} className={`transition-transform ${showFilters ? 'rotate-180' : ''}`}/>
-          </button>
-          <button onClick={exportCSV} className="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white text-gray-600 hover:border-gray-300">
-            <Download size={13}/>Export CSV
-          </button>
-          <div className="text-xs text-gray-500 ml-auto">
-            {filtered.length} of {inCategory.length}
-          </div>
-        </div>
-        {showFilters && (
-          <div className="px-3 pb-3 border-t border-gray-100 pt-3 grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
-            <select value={filterProject} onChange={e => setFilterProject(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none">
-              <option value="">All Projects</option>
-              {(projects as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-            <select value={filterBroker} onChange={e => setFilterBroker(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none">
-              <option value="">All Brokers</option>
-              {(brokers as any[]).map((b: any) => <option key={b.id} value={b.id}>{b.name} [{b.broker_id}]</option>)}
-            </select>
-            <select value={filterStage} onChange={e => setFilterStage(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none">
-              <option value="">All Stages</option>
-              {STAGES.map(s => <option key={s} value={s}>{STAGE_META[s].label}</option>)}
-            </select>
-            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} placeholder="From" className="border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none"/>
-            <input type="date" value={dateTo}   onChange={e => setDateTo(e.target.value)}   placeholder="To"   className="border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none"/>
-            {filtersActive && (
-              <button onClick={clearFilters} className="col-span-full text-left text-gray-500 hover:text-gray-800 underline">Clear all filters</button>
-            )}
+        {all.length > recent.length && (
+          <div className="text-center mt-3">
+            <Link to="/customer-pipeline" className="text-sm text-blue-700 hover:underline">See all {all.length} in Customer Pipeline →</Link>
           </div>
         )}
-      </div>
-
-      {/* ── Bulk action bar ────────────────────────────────────── */}
-      {selectedIds.size > 0 && (
-        <div className="mb-3 bg-indigo-600 text-white rounded-xl px-4 py-2.5 flex items-center justify-between text-sm shadow-sm">
-          <div className="flex items-center gap-3">
-            <span className="font-semibold">{selectedIds.size} selected</span>
-            {closeableSelected.length !== selectedIds.size && (
-              <span className="text-xs text-indigo-100">({closeableSelected.length} closeable — fully paid or cancelled)</span>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => setBulkCloseFor(closeableSelected)} disabled={closeableSelected.length === 0}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-white text-indigo-700 rounded hover:bg-indigo-50 disabled:opacity-40 disabled:cursor-not-allowed">
-              <Lock size={12}/>Close {closeableSelected.length || ''}
-            </button>
-            <button onClick={() => setSelectedIds(new Set())} className="text-xs text-white/80 hover:text-white">Clear</button>
-          </div>
-        </div>
-      )}
-
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
-        <Table columns={cols} data={filtered} loading={isLoading} />
       </div>
 
       <Modal open={modal} onClose={() => setModal(false)} title={editing ? 'Edit Booking' : 'New Booking — आवेदन-पत्र'}>
