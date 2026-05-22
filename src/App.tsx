@@ -35,6 +35,7 @@ import TeamRewards from '@/pages/TeamRewards'
 import PayoutTerms from '@/pages/PayoutTerms'
 import PayoutCycles from '@/pages/PayoutCycles'
 import CustomerPipeline from '@/pages/CustomerPipeline'
+import BrokerTree from '@/pages/BrokerTree'
 
 function Guard({children}:{children:any}){
   const[session,setSession]=useState<any>(undefined)
@@ -63,6 +64,7 @@ export default function App(){
         <Route path="/payments" element={<Payments/>}/>
         <Route path="/emi" element={<EMI/>}/>
         <Route path="/brokers" element={<Brokers/>}/>
+        <Route path="/team-tree" element={<BrokerTree/>}/>
         <Route path="/brokers/:id" element={<BrokerProfile/>}/>
         <Route path="/kyc" element={<KYC/>}/>
         <Route path="/payouts" element={<Payouts/>}/>

@@ -4,7 +4,7 @@ import {
   Settings, LogOut, ChevronLeft, ChevronRight, BarChart2, FileText,
   UserCheck, Layers, MessageSquare, Megaphone, ShieldCheck, Receipt,
   Wallet, Calculator, TrendingUp, Landmark, Trophy, Star, Gift,
-  ScrollText, CalendarRange, Inbox, UserPlus, History,
+  ScrollText, CalendarRange, Inbox, UserPlus, History, Network,
   Bell, Menu, X, ChevronRight as Chevron
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
@@ -35,6 +35,7 @@ const NAV = [
   ]},
   { group: 'Broker Network', items: [
     { to: '/brokers',          icon: Users,    label: 'Brokers' },
+    { to: '/team-tree',        icon: Network,  label: 'Team Tree' },
     { to: '/kyc',              icon: UserCheck,label: 'KYC Review' },
     { to: '/commission-ranks', icon: Trophy,   label: 'Rank Slabs' },
   ]},
