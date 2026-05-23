@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { formatINR } from '@/lib/utils'
 import {
@@ -41,10 +41,23 @@ const RANK_COLORS: Record<string, string> = {
 const rankCls = (r: string | null) => (r && RANK_COLORS[r]) || 'bg-slate-100 text-slate-600'
 
 export default function BrokerTree() {
-  const [rootId, setRootId]   = useState<string>('') // empty = show all roots
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [rootId, setRootIdState] = useState<string>(searchParams.get('root') || '')
+  const setRootId = (id: string) => {
+    setRootIdState(id)
+    const next = new URLSearchParams(searchParams)
+    if (id) next.set('root', id); else next.delete('root')
+    setSearchParams(next, { replace: true })
+  }
   const [search, setSearch]   = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [showAll, setShowAll]   = useState(false)
+
+  // Keep state in sync if URL param changes (e.g. arrived from BrokerDashboard team tab)
+  useEffect(() => {
+    const urlRoot = searchParams.get('root') || ''
+    if (urlRoot !== rootId) setRootIdState(urlRoot)
+  }, [searchParams])
 
   const { data: brokers = [], isLoading } = useQuery({
     queryKey: ['team_tree_brokers'],
