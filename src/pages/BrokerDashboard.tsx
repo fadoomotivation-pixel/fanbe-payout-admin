@@ -600,50 +600,78 @@ export default function BrokerDashboard() {
         )}
 
         {tab === 'team' && (
-          <Section title={`My team tree (${downline.length} direct)`}>
-            {downline.length === 0 ? <p className="text-sm text-gray-500">No direct downline yet.</p> : (
-              <div className="divide-y divide-gray-100">
-                {downline.map(d => {
+          <Section
+            title={`Team · ${downline.length} direct`}
+            right={
+              <Link to={`/team-tree?root=${broker?.id || ''}`}
+                className="text-xs px-2.5 py-1 rounded-full bg-gray-900 text-white hover:bg-black inline-flex items-center gap-1">
+                Open full tree <ArrowUpRight size={11}/>
+              </Link>
+            }
+          >
+            {downline.length === 0 ? (
+              <p className="text-sm text-gray-500">No direct downline yet.</p>
+            ) : (
+              <div className="space-y-1">
+                {downline.map((d: any) => {
                   const open = expandedTeam.has(d.id)
                   const subs = subTeams[d.id] || []
+                  const ownEarned = downlineEarnings[d.id] || 0
                   return (
                     <div key={d.id}>
-                      <div className="py-2 flex items-center justify-between gap-2">
-                        <button onClick={() => toggleTeam(d.id)} className="flex-1 flex items-center gap-2 text-left">
-                          <ChevronRight size={14} className={`text-gray-400 transition-transform ${open ? 'rotate-90' : ''}`}/>
-                          <div>
-                            <div className="font-medium text-sm">{d.name}</div>
-                            <div className="text-xs text-gray-500 font-mono">[{d.broker_id}] · {d.rank}</div>
-                          </div>
+                      <div className="flex items-center gap-3 py-3 rounded-xl hover:bg-gray-50/60">
+                        <button onClick={() => toggleTeam(d.id)} className="shrink-0 w-6 h-6 flex items-center justify-center rounded-md text-gray-600 hover:bg-gray-100">
+                          <ChevronRight size={14} className={`transition-transform ${open ? 'rotate-90' : ''}`}/>
                         </button>
-                        <div className="flex items-center gap-1.5">
-                          {d.phone && (
-                            <>
-                              <a href={`tel:${d.phone}`} className="p-1.5 rounded-full bg-blue-50 hover:bg-blue-100 text-blue-700" title="Call"><Phone size={12}/></a>
-                              <a href={`https://wa.me/${String(d.phone).replace(/[^\d]/g,'')}`} target="_blank" rel="noreferrer" className="p-1.5 rounded-full bg-emerald-50 hover:bg-emerald-100 text-emerald-700" title="WhatsApp"><MessageCircle size={12}/></a>
-                            </>
-                          )}
-                          <div className="text-right ml-2">
-                            <div className="text-sm font-semibold text-emerald-700">{formatINR(downlineEarnings[d.id] || 0)}</div>
-                            <div className="text-[10px] text-gray-400">earned</div>
+                        <div className="shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold bg-gray-100 text-gray-900">
+                          {(d.name || '?').charAt(0).toUpperCase()}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <Link to={`/broker/dashboard?broker_id=${d.id}`} className="text-sm font-semibold text-gray-900 hover:text-blue-700 truncate">
+                              {d.name}
+                            </Link>
+                            <span className="text-[10px] font-mono text-gray-400">[{d.broker_id}]</span>
+                            {d.rank && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 font-medium">{d.rank}</span>}
+                          </div>
+                          <div className="text-[11px] text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
+                            {d.phone && (
+                              <>
+                                <a href={`tel:${d.phone}`} className="hover:text-blue-700 inline-flex items-center gap-0.5"><Phone size={9}/>{d.phone}</a>
+                                <a href={`https://wa.me/${String(d.phone).replace(/[^\d]/g,'')}`} target="_blank" rel="noreferrer" className="text-emerald-700 hover:underline inline-flex items-center gap-0.5"><MessageCircle size={9}/>WA</a>
+                              </>
+                            )}
                           </div>
                         </div>
+                        <div className="shrink-0 text-right">
+                          <div className="text-[13px] font-semibold text-emerald-700 tabular-nums">{formatINR(ownEarned)}</div>
+                          <div className="text-[10px] text-gray-400">earned</div>
+                        </div>
                       </div>
+
+                      {/* L2 sub-team — connector line + indented */}
                       {open && (
-                        <div className="ml-6 pb-3 border-l-2 border-emerald-100 pl-3 space-y-1">
+                        <div className="pl-9 md:pl-12 relative">
+                          <div className="absolute left-3 top-0 bottom-2 w-px bg-gray-200"/>
                           {subs.length === 0 ? (
-                            <div className="text-xs text-gray-400 italic py-1">No sub-team under {d.name}.</div>
+                            <div className="text-[12px] text-gray-400 italic py-2">No sub-team under {d.name}.</div>
                           ) : subs.map((s: any) => (
-                            <div key={s.id} className="flex items-center justify-between text-xs py-1">
-                              <div>
-                                <span className="font-medium">{s.name}</span>
-                                <span className="text-gray-400 font-mono ml-2">[{s.broker_id}]</span>
-                                <span className="text-gray-400 ml-2">· {s.rank}</span>
+                            <div key={s.id} className="relative flex items-center gap-3 py-2 rounded-lg hover:bg-gray-50/60">
+                              <div className="absolute -left-9 top-1/2 h-px w-6 bg-gray-200"/>
+                              <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-semibold bg-gray-50 text-gray-700 border border-gray-200">
+                                {(s.name || '?').charAt(0).toUpperCase()}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <Link to={`/broker/dashboard?broker_id=${s.id}`} className="text-[13px] font-medium text-gray-800 hover:text-blue-700 truncate">{s.name}</Link>
+                                  <span className="text-[10px] font-mono text-gray-400">[{s.broker_id}]</span>
+                                  {s.rank && <span className="text-[10px] text-gray-500">{s.rank}</span>}
+                                </div>
                               </div>
                               {s.phone && (
-                                <div className="flex items-center gap-1">
-                                  <a href={`tel:${s.phone}`} className="p-1 rounded-full bg-blue-50 text-blue-700"><Phone size={10}/></a>
-                                  <a href={`https://wa.me/${String(s.phone).replace(/[^\d]/g,'')}`} target="_blank" rel="noreferrer" className="p-1 rounded-full bg-emerald-50 text-emerald-700"><MessageCircle size={10}/></a>
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <a href={`tel:${s.phone}`} className="p-1 rounded-full bg-gray-50 text-gray-600 hover:bg-blue-50 hover:text-blue-700"><Phone size={10}/></a>
+                                  <a href={`https://wa.me/${String(s.phone).replace(/[^\d]/g,'')}`} target="_blank" rel="noreferrer" className="p-1 rounded-full bg-gray-50 text-gray-600 hover:bg-emerald-50 hover:text-emerald-700"><MessageCircle size={10}/></a>
                                 </div>
                               )}
                             </div>
