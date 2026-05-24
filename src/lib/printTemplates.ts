@@ -129,12 +129,53 @@ export function printPaymentReceipt(p: any, ctx: { customer?: any; booking?: any
   if (w) { w.document.write(html); w.document.close() }
 }
 
-export function printApplicationForm(b: any, ctx: { customer?: any; project?: any; plot?: any; broker?: any } = {}) {
+export function printApplicationForm(b: any, ctx: { customer?: any; project?: any; plot?: any; broker?: any; payments?: any[] } = {}) {
   const cust = ctx.customer || b.bp_customers || {}
   const pj   = ctx.project  || b.bp_projects  || {}
   const pl   = ctx.plot     || b.bp_plots     || {}
   const br   = ctx.broker   || b.brokers      || {}
+  const payments = (ctx.payments || []).slice().sort((a, b) => (a.payment_date || a.created_at || '').localeCompare(b.payment_date || b.created_at || ''))
   const fmtDate = (d: any) => d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: '2-digit' }) : ''
+  const totalPaid = payments.reduce((s, p) => s + Number(p.amount || 0), 0)
+  const totalNet  = Number(b.total_amount || b.plot_total_price || 0)
+  const balance   = Math.max(0, totalNet - totalPaid)
+  const typeLabel = (t: string | undefined) => t === 'token' ? 'Token' : t === 'booking' ? 'Booking' : t === 'emi' ? 'EMI' : t === 'full_payment' ? 'Full' : (t || '—')
+
+  const paymentRows = payments.length
+    ? payments.map((p, i) => `<tr>
+        <td class="num">${i + 1}</td>
+        <td>${fmtDate(p.payment_date || p.created_at)}</td>
+        <td>${typeLabel(p.payment_type)}${p.instalment_no ? ' · #' + p.instalment_no : ''}</td>
+        <td>${(p.payment_mode || '—').toUpperCase()}</td>
+        <td class="mono">${p.receipt_no || '—'}</td>
+        <td class="mono">${p.utr_ref || (p.payment_mode === 'cash' ? 'Cash' : '—')}</td>
+        <td class="num">₹${Number(p.amount || 0).toLocaleString('en-IN')}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:12px">No payments recorded yet.</td></tr>'
+
+  const paymentBlock = `
+    <div class="section-title">भुगतान विवरण / Payment History</div>
+    <table class="pay">
+      <thead>
+        <tr><th>#</th><th>Date</th><th>Type</th><th>Mode</th><th>Receipt No</th><th>UTR / Ref</th><th>Amount</th></tr>
+      </thead>
+      <tbody>${paymentRows}</tbody>
+      <tfoot>
+        <tr>
+          <td colspan="6" class="ftr">Total paid · ${payments.length} payment${payments.length !== 1 ? 's' : ''}</td>
+          <td class="num ftr">₹${totalPaid.toLocaleString('en-IN')}</td>
+        </tr>
+        <tr>
+          <td colspan="6" class="ftr">Plot total net</td>
+          <td class="num ftr">₹${totalNet.toLocaleString('en-IN')}</td>
+        </tr>
+        <tr>
+          <td colspan="6" class="ftr"><b>Balance due</b></td>
+          <td class="num ftr" style="color:${balance > 0 ? '#dc2626' : '#16a34a'};font-weight:800">₹${balance.toLocaleString('en-IN')}</td>
+        </tr>
+      </tfoot>
+    </table>
+  `
   const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"/><title>Application Form — ${b.booking_no || ''}</title>
 <style>
@@ -157,6 +198,14 @@ export function printApplicationForm(b: any, ctx: { customer?: any; project?: an
   .accept{margin-top:10px;font-size:11px;font-style:italic}
   .sigrow{display:flex;justify-content:space-between;margin-top:30px}
   .sigbox{flex:1;text-align:center;font-size:10px;color:#64748b;padding-top:4px;border-top:1px solid #0f172a;margin:0 8px}
+  .pay{width:100%;border-collapse:collapse;font-size:10px;margin-top:6px;border:1px solid #cbd5e1}
+  .pay thead th{background:#f1f5f9;color:#475569;text-align:left;padding:5px 6px;font-size:9.5px;letter-spacing:0.4px;border-bottom:1px solid #cbd5e1}
+  .pay tbody td{padding:5px 6px;border-bottom:1px dotted #e2e8f0}
+  .pay tbody tr:last-child td{border-bottom:none}
+  .pay .num{text-align:right;font-variant-numeric:tabular-nums}
+  .pay .mono{font-family:'SFMono-Regular',Consolas,monospace;font-size:9.5px}
+  .pay tfoot td{padding:5px 6px;border-top:1px solid #cbd5e1}
+  .pay .ftr{background:#f8fafc;font-weight:600;color:#0f172a}
   @media print{body{padding:0}}
 </style></head>
 <body>
@@ -179,6 +228,8 @@ export function printApplicationForm(b: any, ctx: { customer?: any; project?: an
   <div class="row"><div class="field"><b>नाम</b><span>${cust.nominee_name || ''}</span></div><div class="field" style="max-width:240px"><b>सम्बन्ध</b><span>${cust.nominee_relation || ''}</span></div></div>
   <div class="row"><div class="field"><b>जन्म तिथि</b><span>${fmtDate(cust.nominee_dob)}</span></div><div class="field"><b>पिता/पति का नाम</b><span>${cust.nominee_father_name || ''}</span></div></div>
   <div class="row"><div class="field"><b>स्थाई पता</b><span>${cust.nominee_address || ''}</span></div><div class="field" style="max-width:240px"><b>पेन कार्ड नं.</b><span>${cust.nominee_pan || ''}</span></div></div>
+
+  ${paymentBlock}
 
   <div class="aff"><h4>हलफनामा / Affidavit</h4><ol>
     <li>मैंने योजना में जमीन की स्थिति देख ली है, जो मुझे स्वीकार है।</li>
