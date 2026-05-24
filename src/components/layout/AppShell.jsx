@@ -31,7 +31,6 @@ const NAV = [
     { to: '/bookings',          icon: BookOpen,   label: 'Bookings' },
     { to: '/customer-pipeline', icon: Users,      label: 'Customer Pipeline' },
     { to: '/payments',          icon: CreditCard, label: 'Payments' },
-    { to: '/emi',               icon: Calculator, label: 'EMI Schedule' },
   ]},
   { group: 'Broker Network', items: [
     { to: '/brokers',          icon: Users,    label: 'Brokers' },

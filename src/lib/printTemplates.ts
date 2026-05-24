@@ -1,64 +1,131 @@
 import { formatINR } from './utils'
 
+function toWordsINR(n: number): string {
+  if (!n || isNaN(n)) return ''
+  const a = ['','One','Two','Three','Four','Five','Six','Seven','Eight','Nine','Ten','Eleven','Twelve','Thirteen','Fourteen','Fifteen','Sixteen','Seventeen','Eighteen','Nineteen']
+  const b = ['','','Twenty','Thirty','Forty','Fifty','Sixty','Seventy','Eighty','Ninety']
+  const num = Math.floor(n); if (num === 0) return 'Zero only'
+  const w = (x: number): string => x < 20 ? a[x] : x < 100 ? b[Math.floor(x/10)] + (x%10?' '+a[x%10]:'') : x < 1000 ? a[Math.floor(x/100)] + ' Hundred' + (x%100?' '+w(x%100):'') : ''
+  let out = ''
+  const cr = Math.floor(num/10000000); const la = Math.floor((num%10000000)/100000); const th = Math.floor((num%100000)/1000); const rest = num%1000
+  if (cr) out += w(cr) + ' Crore '
+  if (la) out += w(la) + ' Lakh '
+  if (th) out += w(th) + ' Thousand '
+  if (rest) out += w(rest)
+  return (out.trim() || 'Zero') + ' only'
+}
+
+function paymentTypeLabel(t: string | undefined): string {
+  switch (t) {
+    case 'token':        return 'TOKEN RECEIPT'
+    case 'booking':      return 'BOOKING DEPOSIT RECEIPT'
+    case 'full_payment': return 'FULL PAYMENT RECEIPT'
+    case 'emi':          return 'EMI INSTALMENT RECEIPT'
+    default:             return 'PAYMENT RECEIPT'
+  }
+}
+
+/**
+ * A4 portrait receipt: SAME information twice on one page.
+ *   Top half  → tear off and hand to customer
+ *   Bottom half → keep in office binder (company copy)
+ * A dashed cut-line and "✂ Cut here" hint sit between the halves.
+ */
 export function printPaymentReceipt(p: any, ctx: { customer?: any; booking?: any; project?: any; plot?: any } = {}) {
   const { customer, booking, project, plot } = ctx
   const cust = customer || p.bp_bookings?.bp_customers || {}
   const bk   = booking || p.bp_bookings || {}
   const pj   = project || bk.bp_projects || {}
   const pl   = plot || bk.bp_plots || {}
-  const date = p.payment_date ? new Date(p.payment_date).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: '2-digit' }) : ''
+  const date = p.payment_date ? new Date(p.payment_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+  const amount = Number(p.amount || 0)
+  const inWords = p.rupees_in_words || toWordsINR(amount)
+  const title = paymentTypeLabel(p.payment_type)
+
+  const half = (copyLabel: string) => `
+    <section class="half">
+      <div class="copy-tag">${copyLabel}</div>
+      <div class="head">
+        <div class="brand">
+          FANBE DEVELOPERS
+          <small>2nd Floor, Balaji Tower, Plot No.35, Nathu Colony, Opp. Agarwal Dharamshala, Ballabgarh, Faridabad</small>
+          <small>www.fanbeindia.com · fanbeindia@gmail.com</small>
+        </div>
+        <div class="meta">
+          <div>Receipt No</div>
+          <div class="rcptno">${p.receipt_no || '—'}</div>
+          <div>Date: <b>${date}</b></div>
+        </div>
+      </div>
+
+      <h2>${title}</h2>
+
+      <div class="grid">
+        <div class="row"><div class="lbl">Received from</div><div class="val">${cust.name || '—'}</div></div>
+        <div class="row"><div class="lbl">S/o, W/o, D/o</div><div class="val">${cust.father_or_husband_name || '—'}</div></div>
+        <div class="row"><div class="lbl">Mobile</div><div class="val">${cust.phone || cust.mobile || '—'}</div></div>
+        <div class="row"><div class="lbl">Customer ID</div><div class="val">${cust.customer_code || cust.member_code || '—'}</div></div>
+        <div class="row"><div class="lbl">Plot &amp; Size</div><div class="val">${pl.plot_no || pl.plot_number || '—'}${pl.size_sqyd ? ' / ' + pl.size_sqyd + ' sq.yd' : ''}</div></div>
+        <div class="row"><div class="lbl">Project</div><div class="val">${pj.name || pj.project_name || '—'}</div></div>
+        <div class="row"><div class="lbl">Booking No</div><div class="val">${bk.booking_no || '—'}</div></div>
+        <div class="row"><div class="lbl">Mode</div><div class="val">${(p.payment_mode || '—').toUpperCase()}${p.instalment_no ? ' · Instalment ' + p.instalment_no : ''}</div></div>
+        <div class="row"><div class="lbl">${p.payment_mode === 'cheque' ? 'Cheque No' : p.payment_mode === 'dd' ? 'Draft No' : 'UTR / Ref'}</div><div class="val">${p.utr_ref || p.reference_no || (p.payment_mode === 'cash' ? 'Cash' : '—')}</div></div>
+        <div class="row"><div class="lbl">Drawn On / Branch</div><div class="val">${(p.drawn_on_bank || (p.payment_mode === 'cash' ? 'Cash' : '—'))}${p.branch ? ' · ' + p.branch : ''}</div></div>
+      </div>
+
+      <div class="amount">
+        <div class="v">${formatINR(amount)}</div>
+        <div class="w">${inWords}</div>
+      </div>
+
+      ${p.subject_to_realisation ? '<div class="terms">Subject to realisation of Cheque / Draft.</div>' : ''}
+
+      <div class="sig">
+        <div class="box">Customer Signature</div>
+        <div class="box">For FANBE DEVELOPERS<br/>Authorised Signatory</div>
+      </div>
+    </section>
+  `
+
   const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"/><title>Receipt #${p.receipt_no || p.id?.slice(0,6).toUpperCase()}</title>
+<html><head><meta charset="utf-8"/><title>Receipt ${p.receipt_no || ''}</title>
 <style>
-  @page{size:A5;margin:8mm}
-  body{font-family:'Helvetica Neue',Arial,sans-serif;background:#fef9c3;color:#0f172a;font-size:12px;padding:18px;max-width:520px;margin:auto}
-  .head{display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #0f172a;padding-bottom:8px;margin-bottom:12px}
-  .brand{font-size:22px;font-weight:900;letter-spacing:1px;color:#0f172a}
-  .brand small{display:block;font-size:9px;font-weight:500;color:#475569;letter-spacing:0.5px}
-  .meta{text-align:right;font-size:10px;color:#475569}
-  .rcptno{font-weight:800;color:#dc2626;font-size:14px}
-  h2{text-align:center;font-size:13px;letter-spacing:3px;text-decoration:underline;margin:10px 0}
-  .row{display:flex;border-bottom:1px dotted #475569;padding:5px 0}
-  .row .lbl{width:38%;color:#475569;font-size:10px}
-  .row .val{flex:1;font-weight:600}
-  .amount{margin:14px 0;padding:12px;background:#fff;border:2px dashed #0f172a;border-radius:8px;text-align:center}
-  .amount .v{font-size:24px;font-weight:900;color:#16a34a}
-  .amount .w{font-size:11px;color:#475569;font-style:italic;margin-top:4px}
-  .terms{font-size:9px;color:#475569;margin-top:14px;border-top:1px solid #cbd5e1;padding-top:8px}
-  .sig{margin-top:20px;display:flex;justify-content:space-between;font-size:10px;color:#475569}
-  .sig .box{border-top:1px solid #0f172a;padding-top:4px;width:42%;text-align:center}
-  @media print{body{padding:8mm}}
+  @page { size: A4 portrait; margin: 0 }
+  * { box-sizing: border-box }
+  body { font-family:'Helvetica Neue',Arial,sans-serif; color:#0f172a; font-size:11px; margin:0; padding:0; background:#fff }
+  .page { width: 210mm; height: 297mm; padding: 12mm; display: flex; flex-direction: column; gap: 8mm }
+  .half { position: relative; flex: 1 1 0; padding: 6mm 8mm; border: 1px solid #cbd5e1; border-radius: 6px; background:#fff }
+  .copy-tag { position:absolute; top:6mm; right:8mm; font-size:9px; font-weight:700; letter-spacing:1px; color:#94a3b8 }
+  .cut { display:flex; align-items:center; gap:6px; color:#94a3b8; font-size:9px; letter-spacing:2px }
+  .cut .line { flex:1; border-top: 1.2px dashed #94a3b8 }
+  .head { display:flex; align-items:flex-start; justify-content:space-between; border-bottom:1.5px solid #0f172a; padding-bottom:5px; margin-bottom:8px }
+  .brand { font-size:14px; font-weight:900; letter-spacing:0.6px; color:#0f172a; line-height:1.15 }
+  .brand small { display:block; font-size:7.5px; font-weight:500; color:#475569; letter-spacing:0.2px; margin-top:2px }
+  .meta { text-align:right; font-size:8.5px; color:#475569; line-height:1.5 }
+  .rcptno { font-weight:800; color:#dc2626; font-size:13px; letter-spacing:0.5px }
+  h2 { text-align:center; font-size:11px; letter-spacing:3px; text-decoration:underline; margin:6px 0 8px }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:0 12px }
+  .row { display:flex; padding:3px 0; border-bottom:1px dotted #cbd5e1; font-size:10px }
+  .row .lbl { width:42%; color:#64748b; font-size:8.5px; padding-top:1px }
+  .row .val { flex:1; font-weight:600 }
+  .amount { margin:8px 0; padding:8px; background:#f8fafc; border:1.5px dashed #0f172a; border-radius:6px; text-align:center }
+  .amount .v { font-size:20px; font-weight:900; color:#16a34a; letter-spacing:0.5px }
+  .amount .w { font-size:9.5px; color:#475569; font-style:italic; margin-top:2px }
+  .terms { font-size:8px; color:#475569; margin-top:6px; border-top:1px solid #e2e8f0; padding-top:4px }
+  .sig { margin-top:10px; display:flex; justify-content:space-between; font-size:8.5px; color:#475569 }
+  .sig .box { border-top:1px solid #0f172a; padding-top:3px; width:44%; text-align:center }
+  @media print { .page { box-shadow:none } }
 </style>
 </head>
 <body>
-  <div class="head">
-    <div class="brand">FANBE DEVELOPERS<small>2nd Floor, Balaji Tower, Plot No.35, Nathu Colony, Opp. Agarwal Dharamshala, Ballabgarh, Faridabad &middot; www.fanbeindia.com &middot; fanbeindia@gmail.com</small></div>
-    <div class="meta">Receipt No: <span class="rcptno">${p.receipt_no || '—'}</span><br/>Date: <b>${date}</b></div>
-  </div>
-  <h2>ADJUSTMENT</h2>
-  <div class="row"><div class="lbl">Received with thanks from</div><div class="val">Mr/Mrs ${cust.name || '—'}</div></div>
-  <div class="row"><div class="lbl">S/o, W/o, D/o</div><div class="val">${cust.father_or_husband_name || '—'}</div></div>
-  <div class="row"><div class="lbl">Mobile</div><div class="val">${cust.phone || cust.mobile || '—'}</div></div>
-  <div class="row"><div class="lbl">Address</div><div class="val">${cust.address || '—'}</div></div>
-  <div class="row"><div class="lbl">I.D. No</div><div class="val">${cust.customer_code || cust.member_code || '—'}</div></div>
-  <div class="row"><div class="lbl">Plot No &amp; Size</div><div class="val">${pl.plot_no || pl.plot_number || '—'} / ${pl.size_sqyd || pl.area || '—'} sq</div></div>
-  <div class="row"><div class="lbl">Product</div><div class="val">${pj.name || pj.project_name || '—'}</div></div>
-  <div class="row"><div class="lbl">Vide cash / Cheque / Draft No</div><div class="val">${p.is_cash_adjustment ? 'Cash adj' : (p.utr_ref || p.reference_no || '—')}${p.instalment_no ? ' · inst ' + p.instalment_no : ''}</div></div>
-  <div class="row"><div class="lbl">Drawn On</div><div class="val">${p.drawn_on_bank || (p.payment_mode==='cash'?'Cash':'—')}</div></div>
-  <div class="row"><div class="lbl">Branch</div><div class="val">${p.branch || '—'}</div></div>
-  <div class="row"><div class="lbl">Sponsor's Name</div><div class="val">${p.sponsor_name || '—'}</div></div>
-  <div class="amount">
-    <div class="v">${formatINR(p.amount)}</div>
-    <div class="w">${p.rupees_in_words || ''}</div>
-  </div>
-  ${p.subject_to_realisation ? '<div class="terms">Subject to realisation of Cheque / Draft.</div>' : ''}
-  <div class="sig">
-    <div class="box">Customer Signature</div>
-    <div class="box">For FANBE DEVELOPERS<br/>Authorised Signatory</div>
+  <div class="page">
+    ${half('CUSTOMER COPY')}
+    <div class="cut"><span class="line"></span>✂ &nbsp; CUT HERE &nbsp; ✂<span class="line"></span></div>
+    ${half('OFFICE COPY')}
   </div>
   <script>window.onload=()=>setTimeout(()=>window.print(),200)</script>
 </body></html>`
-  const w = window.open('', '_blank', 'width=620,height=820')
+  const w = window.open('', '_blank', 'width=820,height=1100')
   if (w) { w.document.write(html); w.document.close() }
 }
 

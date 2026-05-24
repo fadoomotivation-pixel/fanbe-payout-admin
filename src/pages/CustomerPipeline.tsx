@@ -224,7 +224,7 @@ export default function CustomerPipeline() {
         drawn_on_bank: p.drawn_on || (p.mode === 'cash' ? 'Cash' : null),
         branch: p.branch || null,
         sponsor_name: p.booking.brokers?.name || null,
-      }).select('id').single()
+      }).select('*').single()
       if (error) throw error
 
       // Booking-type payment: also update bp_bookings.booking_amount + advance stage if needed
@@ -251,9 +251,9 @@ export default function CustomerPipeline() {
 
       // Per-payment MLM distribution
       const rows = await distributePaymentCommission({ bookingId: p.booking.id, paymentId: payment.id, amount: p.amount })
-      return rows.length
+      return { distributed: rows.length, payment, booking: p.booking }
     },
-    onSuccess: (distributed) => {
+    onSuccess: (res: any) => {
       qc.invalidateQueries({ queryKey: ['cp_bookings'] })
       qc.invalidateQueries({ queryKey: ['cp_payments'] })
       qc.invalidateQueries({ queryKey: ['cp_mlm'] })
@@ -262,8 +262,17 @@ export default function CustomerPipeline() {
       qc.invalidateQueries({ queryKey: ['payouts'] })
       qc.invalidateQueries({ queryKey: ['commission_ledger'] })
       qc.invalidateQueries({ queryKey: ['plots'] })
-      toast.success(`Payment recorded${distributed ? ` · MLM × ${distributed}` : ''}`)
+      toast.success(`Payment recorded${res?.distributed ? ` · MLM × ${res.distributed}` : ''} · printing receipt`)
       setPayFor(null)
+      // Hand admin the A4 receipt (customer + office copies on one sheet)
+      if (res?.payment && res?.booking) {
+        printPaymentReceipt(res.payment, {
+          customer: res.booking.bp_customers,
+          booking:  res.booking,
+          project:  res.booking.bp_projects,
+          plot:     res.booking.bp_plots,
+        })
+      }
     },
     onError: (e: any) => toast.error(e.message),
   })

@@ -21,7 +21,6 @@ import Settings from '@/pages/Settings'
 import Inquiries from '@/pages/Inquiries'
 import Members from '@/pages/Members'
 import CustomerHistory from '@/pages/CustomerHistory'
-import EMI from '@/pages/EMI'
 import Expenses from '@/pages/Expenses'
 import BalanceSheet from '@/pages/BalanceSheet'
 import Withdrawals from '@/pages/Withdrawals'
@@ -62,7 +61,7 @@ export default function App(){
         <Route path="/bookings" element={<Bookings/>}/>
         <Route path="/customer-pipeline" element={<CustomerPipeline/>}/>
         <Route path="/payments" element={<Payments/>}/>
-        <Route path="/emi" element={<EMI/>}/>
+        <Route path="/emi" element={<Navigate to="/customer-pipeline" replace/>}/>
         <Route path="/brokers" element={<Brokers/>}/>
         <Route path="/team-tree" element={<BrokerTree/>}/>
         <Route path="/brokers/:id" element={<BrokerProfile/>}/>

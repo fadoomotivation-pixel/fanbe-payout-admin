@@ -172,20 +172,32 @@ export default function BrokerDashboard() {
   })() }, [navigate, shadowBrokerId])
 
   // ── Derived stats ─────────────────────────────────────────────────
+  // Earnings use the deferred-commission model: only money actually distributed via per-payment MLM
+  // counts as "earned" — NOT the full booking.commission_amount (which is just the promised total).
+  // This makes "Available" reflect what the broker can really withdraw today.
   const stats = useMemo(() => {
     const confirmed = bookings.filter((b: any) => b.stage === 'booking_done')
-    const totalEarned = confirmed.reduce((s: number, b: any) => s + Number(b.commission_amount || 0), 0)
+
+    // Actually-distributed commission for this broker
+    const totalEarned = (payouts || []).reduce((s: number, p: any) => s + Number(p.net_payout || 0), 0)
+
+    // This-month slice of distributed commission
     const year = new Date().getFullYear(); const month = new Date().getMonth()
-    const earnedThisMonth = confirmed
-      .filter((b: any) => b.application_date && new Date(b.application_date).getFullYear() === year && new Date(b.application_date).getMonth() === month)
-      .reduce((s: number, b: any) => s + Number(b.commission_amount || 0), 0)
+    const earnedThisMonth = (payouts || [])
+      .filter((p: any) => p.created_at && new Date(p.created_at).getFullYear() === year && new Date(p.created_at).getMonth() === month)
+      .reduce((s: number, p: any) => s + Number(p.net_payout || 0), 0)
+
+    // Promised lifetime commission (booking.commission_amount) — shown as separate forecast figure, not spendable
+    const promisedTotal = confirmed.reduce((s: number, b: any) => s + Number(b.commission_amount || 0), 0)
+    const promisedPending = Math.max(0, promisedTotal - totalEarned)
+
     const paidOut = withdrawals.filter((w: any) => w.status === 'paid').reduce((s: number, w: any) => s + Number(w.net_amount || w.amount || 0), 0)
     const pendingWithdrawals = withdrawals.filter((w: any) => w.status === 'pending' || w.status === 'approved').reduce((s: number, w: any) => s + Number(w.amount || 0), 0)
     const availableBalance = Math.max(0, totalEarned - paidOut - pendingWithdrawals)
     const totalVolume = confirmed.reduce((s: number, b: any) => s + Number(b.total_amount || b.plot_total_price || 0), 0)
     const teamVolume = Object.values(downlineEarnings).reduce((s, v) => s + v, 0)
-    return { totalEarned, earnedThisMonth, paidOut, availableBalance, totalVolume, teamVolume, confirmedCount: confirmed.length }
-  }, [bookings, withdrawals, downlineEarnings])
+    return { totalEarned, earnedThisMonth, paidOut, availableBalance, totalVolume, teamVolume, confirmedCount: confirmed.length, promisedTotal, promisedPending }
+  }, [bookings, withdrawals, downlineEarnings, payouts])
 
   // Last 6 months earnings bar chart
   const monthlyEarnings = useMemo(() => {
@@ -375,8 +387,8 @@ export default function BrokerDashboard() {
 
           {/* Earnings hero */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
-            <Hero icon={<Coins size={14}/>}     label="Total Earned"     value={formatINR(stats.totalEarned)}     sub={`${stats.confirmedCount} confirmed`}/>
-            <Hero icon={<CalendarDays size={14}/>} label="This Month"     value={formatINR(stats.earnedThisMonth)} sub="commission earned"/>
+            <Hero icon={<Coins size={14}/>}     label="Earned (distributed)" value={formatINR(stats.totalEarned)}    sub={stats.promisedPending > 0 ? `+${formatINR(stats.promisedPending)} promised, awaiting customer payments` : `${stats.confirmedCount} confirmed`}/>
+            <Hero icon={<CalendarDays size={14}/>} label="This Month"     value={formatINR(stats.earnedThisMonth)} sub="distributed this month"/>
             <Hero icon={<Wallet size={14}/>}    label="Available"        value={formatINR(stats.availableBalance)} sub="ready to withdraw" highlight/>
             <Hero icon={<Send size={14}/>}      label="Paid Out"         value={formatINR(stats.paidOut)}         sub="lifetime"/>
           </div>
