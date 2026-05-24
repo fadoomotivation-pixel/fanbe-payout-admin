@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
@@ -8,7 +8,7 @@ import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import { distributePaymentCommission } from '@/lib/payoutEngine'
-import { printApplicationForm } from '@/lib/printTemplates'
+import { printApplicationForm, printPaymentReceipt } from '@/lib/printTemplates'
 import EmiPanel from '@/components/EmiPanel'
 import {
   Users, Search, Filter, ChevronRight, Banknote, Calculator, ArrowUpRight,
@@ -236,7 +236,8 @@ export default function CustomerPipeline() {
           updated_at: new Date().toISOString(),
         }
         // Admin may have set/changed the expected booking amount inline — persist it
-        if (p.expected_booking_amount !== undefined) patch.expected_booking_amount = p.expected_booking_amount || null
+        // Modal sends null to deliberately clear, or a positive number to set; undefined = don't touch
+        if (p.expected_booking_amount !== undefined) patch.expected_booking_amount = p.expected_booking_amount
         if (p.booking.stage === 'token_received') patch.stage = 'booking_done'
         await supabase.from('bp_bookings').update(patch).eq('id', p.booking.id)
         if (p.booking.plot_id) {
@@ -645,71 +646,15 @@ function DetailRow({ icon, label, value, sub, tone = 'gray', onClick }: any) {
   return inner
 }
 
-function ExpandedDetail({ row }: { row: any }) {
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-      <div className="bg-white rounded-lg border border-gray-200 p-3">
-        <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-2 font-semibold">Pricing</div>
-        <Row k="Total net value" v={formatINR(row.total)}/>
-        <Row k="Paid (verified)" v={formatINR(row.paid)} accent="text-emerald-700"/>
-        <Row k="Balance" v={formatINR(row.balance)} accent={row.balance > 0 ? 'text-orange-700' : 'text-emerald-700'}/>
-        {row.commission_rate > 0 && <Row k="Commission rate" v={`${row.commission_rate}%`}/>}
-        {row.commission_amount > 0 && <Row k="Commission promised" v={formatINR(row.commission_amount)} accent="text-blue-700"/>}
-      </div>
-
-      <div className="bg-white rounded-lg border border-gray-200 p-3">
-        <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-2 font-semibold">Payment breakdown</div>
-        <Row k="Token paid"        v={formatINR(row.pm.token)}/>
-        <Row k="Booking deposit"   v={formatINR(row.pm.booking)}/>
-        {row.expected > 0 && row.pm.booking < row.expected && <Row k="Expected (unpaid)" v={formatINR(row.expected)} accent="text-amber-700"/>}
-        <Row k="EMI received"      v={formatINR(row.pm.emi)}/>
-        {row.pm.full > 0 && <Row k="Full payment"  v={formatINR(row.pm.full)}/>}
-        <Row k="Last payment date" v={row.pm.last_date ? formatDate(row.pm.last_date) : '—'}/>
-      </div>
-
-      <div className="bg-white rounded-lg border border-gray-200 p-3">
-        <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-2 font-semibold">MLM chain</div>
-        {row.chain.length === 0 ? (
-          <div className="text-gray-400">No broker assigned</div>
-        ) : (
-          <div className="space-y-1">
-            {row.chain.map((c: any, i: number) => (
-              <div key={c.id} className="flex items-center justify-between">
-                <span className="flex items-center gap-1 truncate">
-                  {i === 0 ? <Coins size={11} className="text-emerald-600 shrink-0"/> : <ArrowUpRight size={11} className="text-gray-400 shrink-0"/>}
-                  <Link to={`/broker/dashboard?broker_id=${c.id}`} className="text-blue-700 hover:underline truncate">{c.name}</Link>
-                  <span className="text-[10px] text-gray-400 font-mono">[{c.broker_id}]</span>
-                </span>
-                <span className="text-[10px] text-gray-500">{i === 0 ? 'direct' : `L${i}`}</span>
-              </div>
-            ))}
-          </div>
-        )}
-        <div className="mt-2 pt-2 border-t border-gray-100">
-          <Row k="MLM net distributed" v={formatINR(row.mlm.net)} accent="text-emerald-700"/>
-          <Row k="Distribution rows"   v={String(row.mlm.rows)}/>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function Row({ k, v, accent }: any) {
-  return (
-    <div className="flex items-center justify-between py-0.5">
-      <span className="text-gray-500">{k}</span>
-      <span className={`font-semibold ${accent || 'text-gray-900'}`}>{v}</span>
-    </div>
-  )
-}
-
 function RecordPaymentModal({ open, booking, type, onClose, onSubmit, submitting }: any) {
   const [form, setForm] = useState<any>({ amount: '', expected: '', mode: 'cash', date: today(), utr: '', drawn_on: '', branch: '' })
-  // Reset when (re)opened — leave Amount blank so admin types intentionally
-  useMemo(() => {
-    if (open && booking) setForm({
+  // Reset form whenever the modal (re)opens for a booking — useEffect is correct here, not useMemo (which is for memoization, not side effects).
+  // Keying on booking.id ensures the form re-initializes if admin closes one row's modal and opens another.
+  useEffect(() => {
+    if (!open || !booking) return
+    setForm({
       amount: '',
-      // Pre-fill with current expected; user can change OR leave blank to skip update
+      // Pre-fill with current expected; admin can change OR clear (clearing = leave the saved value alone on submit)
       expected: booking.expected > 0 ? String(booking.expected) : '',
       mode: 'cash', date: today(), utr: '', drawn_on: '', branch: '',
     })
@@ -807,7 +752,9 @@ function RecordPaymentModal({ open, booking, type, onClose, onSubmit, submitting
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <Button onClick={() => onSubmit({
           amount: amt,
-          expected_booking_amount: type === 'booking' && form.expected !== '' ? Number(form.expected) : undefined,
+          // If field is blank → don't touch existing value (undefined).
+          // If admin typed 0 → explicitly clear it (null), so the row no longer shows a shortfall.
+          expected_booking_amount: type !== 'booking' || form.expected === '' ? undefined : (Number(form.expected) > 0 ? Number(form.expected) : null),
           mode: form.mode, date: form.date, utr: form.utr, drawn_on: form.drawn_on, branch: form.branch,
         })} loading={submitting} disabled={!amt}>
           <IndianRupee size={14}/>Record &amp; distribute MLM
