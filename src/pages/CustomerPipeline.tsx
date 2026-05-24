@@ -559,7 +559,16 @@ export default function CustomerPipeline() {
                         className="inline-flex items-center gap-1 text-[12px] px-3 py-1.5 rounded-full border border-gray-200 text-gray-700 hover:bg-gray-50">
                         <FileText size={12}/>Edit
                       </button>
-                      <button onClick={() => printApplicationForm(r)}
+                      <button onClick={async () => {
+                          // Fetch every verified payment for this booking, oldest first, then print the form with full history
+                          const { data: pays } = await supabase
+                            .from('bp_payments')
+                            .select('id, amount, payment_type, payment_mode, payment_date, receipt_no, utr_ref, instalment_no, created_at')
+                            .eq('booking_id', r.id)
+                            .eq('verification_status', 'verified')
+                            .order('payment_date', { ascending: true })
+                          printApplicationForm(r, { payments: pays || [] })
+                        }}
                         className="inline-flex items-center gap-1 text-[12px] px-3 py-1.5 rounded-full border border-gray-200 text-gray-700 hover:bg-gray-50">
                         <Printer size={12}/>Form
                       </button>
