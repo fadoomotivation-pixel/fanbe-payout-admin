@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/Input.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import { distributePaymentCommission } from '@/lib/payoutEngine'
+import { printPaymentReceipt } from '@/lib/printTemplates'
 import { CheckCircle, Calendar, Wallet, AlertTriangle, Plus, X, IndianRupee, ArrowUpRight, ArrowDownRight } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -164,7 +165,7 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
       is_cash_adjustment: false,
       subject_to_realisation: false,
       notes: notes || `EMI payment · ${closes} closed${advance > 0 ? ` · ₹${advance} advance` : ''}`,
-    }).select('id').single()
+    }).select('*').single()
     if (pErr) { toast.error(pErr.message); return }
 
     // Update each allocated installment
@@ -189,13 +190,23 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
     qc.invalidateQueries({ queryKey: ['payouts'] })
 
     if (closes > 0 && advance > 0) {
-      toast.success(`Receipt #${receipt_no} · ${closes} instalment${closes !== 1 ? 's' : ''} closed · ${formatINR(advance)} advance${rows.length ? ` · MLM × ${rows.length}` : ''}`)
+      toast.success(`Receipt #${receipt_no} · ${closes} instalment${closes !== 1 ? 's' : ''} closed · ${formatINR(advance)} advance${rows.length ? ` · MLM × ${rows.length}` : ''} · printing`)
     } else if (closes > 0) {
-      toast.success(`Receipt #${receipt_no} · ${closes} instalment${closes !== 1 ? 's' : ''} closed${rows.length ? ` · MLM × ${rows.length}` : ''}`)
+      toast.success(`Receipt #${receipt_no} · ${closes} instalment${closes !== 1 ? 's' : ''} closed${rows.length ? ` · MLM × ${rows.length}` : ''} · printing`)
     } else if (allocations.length > 0) {
-      toast.success(`Receipt #${receipt_no} · partial payment recorded${rows.length ? ` · MLM × ${rows.length}` : ''}`)
+      toast.success(`Receipt #${receipt_no} · partial payment recorded${rows.length ? ` · MLM × ${rows.length}` : ''} · printing`)
     } else {
-      toast.success(`Receipt #${receipt_no} · ${formatINR(advance)} advance${rows.length ? ` · MLM × ${rows.length}` : ''}`)
+      toast.success(`Receipt #${receipt_no} · ${formatINR(advance)} advance${rows.length ? ` · MLM × ${rows.length}` : ''} · printing`)
+    }
+
+    // Print A4 customer + office receipt
+    if (payment) {
+      printPaymentReceipt(payment, {
+        customer: booking.bp_customers,
+        booking,
+        project:  booking.bp_projects,
+        plot:     booking.bp_plots,
+      })
     }
   }
 
