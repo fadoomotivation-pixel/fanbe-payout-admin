@@ -7,7 +7,7 @@ import { Input, Select, Textarea } from '@/components/ui/Input.tsx'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate, PAYOUT_STATUS_COLORS } from '@/lib/utils'
-import { Banknote, Coins, Wallet, ChevronRight, Search, Filter, ExternalLink, TrendingUp, AlertCircle } from 'lucide-react'
+import { Banknote, Coins, Wallet, ChevronRight, Search, Filter, ExternalLink, TrendingUp, AlertCircle, RefreshCw } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 /**
@@ -70,6 +70,23 @@ export default function Payouts() {
       qc.invalidateQueries({ queryKey: ['payout_distributions_all'] })
       qc.invalidateQueries({ queryKey: ['payouts'] })
       toast.success('Payout updated')
+    },
+    onError: (e: any) => toast.error(e.message),
+  })
+
+  // Re-runs the differential MLM engine across every verified payment using the
+  // current broker ranks (brokers.rank) + sponsor chain. Use after rank changes.
+  const recompute = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await supabase.rpc('recompute_all_payouts')
+      if (error) throw error
+      return data as number
+    },
+    onSuccess: (rows) => {
+      qc.invalidateQueries({ queryKey: ['payout_distributions_all'] })
+      qc.invalidateQueries({ queryKey: ['bp_payout_transactions_all'] })
+      qc.invalidateQueries({ queryKey: ['commission_ledger'] })
+      toast.success(`MLM recomputed — ${rows} distribution rows`)
     },
     onError: (e: any) => toast.error(e.message),
   })
@@ -166,6 +183,11 @@ export default function Payouts() {
             <p className="text-sm text-gray-500">Earned · Approved · Paid · Owed — per broker. Click any broker to see their commission history and active payout requests.</p>
           </div>
         </div>
+        <button onClick={() => recompute.mutate()} disabled={recompute.isPending}
+          className="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-50"
+          title="Re-run the MLM engine over every verified payment using current ranks + sponsor chain">
+          <RefreshCw size={14} className={recompute.isPending ? 'animate-spin' : ''}/>{recompute.isPending ? 'Recomputing…' : 'Recompute MLM'}
+        </button>
       </div>
 
       {/* KPIs */}
