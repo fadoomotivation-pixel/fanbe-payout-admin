@@ -5,7 +5,7 @@ import {
   LogOut, Users, Wallet, Award, TrendingUp, ArrowUpRight, AlertCircle,
   ChevronRight, EyeOff, BarChart3, Coins, Receipt, CalendarDays, Send,
   ShieldCheck, Crown, Phone, MessageCircle, Edit3, Building, Settings as Cog,
-  Activity, CheckCircle2, XCircle, Lock, Unlock, Banknote, FileText, RotateCcw, Printer,
+  Activity, CheckCircle2, XCircle, Lock, Unlock, Banknote, FileText, Printer,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -56,7 +56,6 @@ export default function BrokerDashboard() {
   const [subTeams, setSubTeams]         = useState<Record<string, any[]>>({})
   const [activity, setActivity]         = useState<any[]>([])
   const [payoutOpen, setPayoutOpen]     = useState<Record<string, boolean>>({})
-  const [recomputing, setRecomputing]   = useState(false)
 
   useEffect(() => { (async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -315,16 +314,6 @@ export default function BrokerDashboard() {
     toast.success(`KYC ${newStatus}`)
   }
 
-  // Re-run the differential MLM engine (server-side RPC) and reload this dashboard's data
-  const recomputeCommissions = async () => {
-    setRecomputing(true)
-    const { data, error } = await supabase.rpc('recompute_all_payouts')
-    setRecomputing(false)
-    if (error) { toast.error(error.message); return }
-    toast.success(`MLM recomputed — ${data} rows. Refreshing…`)
-    setTimeout(() => window.location.reload(), 600)
-  }
-
   // Print an A4 broker earnings statement: profile + per-booking distributions + withdrawals
   const printStatement = () => {
     const fmt = (n: number) => '₹' + Number(n || 0).toLocaleString('en-IN')
@@ -509,12 +498,6 @@ export default function BrokerDashboard() {
                   <ShieldCheck size={13}/>KYC {broker?.kyc_status} {broker?.kyc_reviewed_at && `· ${formatDate(broker.kyc_reviewed_at)}`}
                 </div>
               )}
-              <button onClick={recomputeCommissions} disabled={recomputing}
-                className="px-3 py-2 text-xs rounded-lg border border-gray-200 hover:border-amber-300 hover:bg-amber-50 inline-flex items-center gap-2 disabled:opacity-50"
-                title="Re-run the MLM engine on current ranks + sponsor chain, then refresh this dashboard">
-                <RotateCcw size={13} className={`text-amber-600 ${recomputing ? 'animate-spin' : ''}`}/>
-                <span className="font-medium">{recomputing ? 'Recomputing…' : 'Recompute MLM'}</span>
-              </button>
               <button onClick={printStatement}
                 className="px-3 py-2 text-xs rounded-lg border border-gray-200 hover:border-amber-300 hover:bg-amber-50 inline-flex items-center gap-2">
                 <Printer size={13} className="text-amber-600"/>
