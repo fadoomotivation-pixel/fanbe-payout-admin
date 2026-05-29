@@ -397,12 +397,15 @@ export async function reverseBookingCommission(bookingId: string): Promise<void>
 }
 
 /**
- * Per-payment MLM distribution. Called whenever a verified payment is recorded against
- * a booking (token, booking deposit, full payment, or an EMI installment). Idempotent
- * keyed on payment_id — won't double-distribute for the same payment.
+ * Per-payment MLM distribution.
  *
- * This is the primary MLM trigger in the deferred-commission model: commission is paid
- * to the broker chain only as the customer's money is actually received.
+ * Distribution is now performed by a DATABASE TRIGGER (payment_recompute_payouts on bp_payments)
+ * that auto-recomputes the whole booking's commissions whenever any payment is inserted, has its
+ * amount/verification_status changed, or is deleted — using brokers.rank + the sponsor chain.
+ * That makes commissions ALWAYS correct, for EVERY payment path, with zero manual recompute.
+ *
+ * This function therefore no longer inserts anything — it simply reads back how many distribution
+ * rows the trigger created for the given payment so callers can show a "MLM × N" toast.
  */
 export async function distributePaymentCommission(opts: {
   bookingId: string
@@ -411,36 +414,17 @@ export async function distributePaymentCommission(opts: {
   instalmentDueDate?: Date
   instalmentPaidDate?: Date
 }): Promise<DistributionRow[]> {
-  if (!opts.amount || opts.amount <= 0) return []
-
-  // Idempotency: skip if already distributed for this payment
-  const { data: existing } = await supabase
+  if (!opts.paymentId) return []
+  const { data } = await supabase
     .from('payout_distributions')
-    .select('id')
+    .select('*')
     .eq('payment_id', opts.paymentId)
-    .limit(1)
-  if (existing && existing.length > 0) return []
-
-  // Need broker for this booking
-  const { data: booking } = await supabase
-    .from('bp_bookings')
-    .select('broker_id')
-    .eq('id', opts.bookingId)
-    .single()
-  if (!booking || !booking.broker_id) return []
-
-  return await distributePayment({
-    bookingId: opts.bookingId,
-    paymentId: opts.paymentId,
-    bookingBrokerId: booking.broker_id,
-    approvedAmount: opts.amount,
-    instalmentDueDate: opts.instalmentDueDate,
-    instalmentPaidDate: opts.instalmentPaidDate,
-  })
+  return (data || []) as unknown as DistributionRow[]
 }
 
 /**
- * Reverse a single payment's commissions. Used when a payment is refunded / deleted.
+ * Reverse a single payment's commissions. The DB trigger already clears + rebuilds on payment
+ * delete, but this is kept for explicit callers; safe to call (idempotent delete).
  */
 export async function reversePaymentCommission(paymentId: string): Promise<void> {
   await supabase.from('payout_distributions').delete().eq('payment_id', paymentId)

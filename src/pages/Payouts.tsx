@@ -74,23 +74,6 @@ export default function Payouts() {
     onError: (e: any) => toast.error(e.message),
   })
 
-  // Re-runs the differential MLM engine across every verified payment using the
-  // current broker ranks (brokers.rank) + sponsor chain. Use after rank changes.
-  const recompute = useMutation({
-    mutationFn: async () => {
-      const { data, error } = await supabase.rpc('recompute_all_payouts')
-      if (error) throw error
-      return data as number
-    },
-    onSuccess: (rows) => {
-      qc.invalidateQueries({ queryKey: ['payout_distributions_all'] })
-      qc.invalidateQueries({ queryKey: ['bp_payout_transactions_all'] })
-      qc.invalidateQueries({ queryKey: ['commission_ledger'] })
-      toast.success(`MLM recomputed — ${rows} distribution rows`)
-    },
-    onError: (e: any) => toast.error(e.message),
-  })
-
   // ── Aggregate per broker ────────────────────────────────────────
   const aggregated = useMemo(() => {
     const map = new Map<string, any>()
@@ -183,11 +166,9 @@ export default function Payouts() {
             <p className="text-sm text-gray-500">Earned · Approved · Paid · Owed — per broker. Click any broker to see their commission history and active payout requests.</p>
           </div>
         </div>
-        <button onClick={() => recompute.mutate()} disabled={recompute.isPending}
-          className="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-50"
-          title="Re-run the MLM engine over every verified payment using current ranks + sponsor chain">
-          <RefreshCw size={14} className={recompute.isPending ? 'animate-spin' : ''}/>{recompute.isPending ? 'Recomputing…' : 'Recompute MLM'}
-        </button>
+        <span className="text-[11px] text-gray-400 inline-flex items-center gap-1" title="Commissions auto-recompute whenever a payment changes">
+          <RefreshCw size={12}/>Auto-synced on every payment
+        </span>
       </div>
 
       {/* KPIs */}
