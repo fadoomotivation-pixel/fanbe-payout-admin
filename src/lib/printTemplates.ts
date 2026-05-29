@@ -114,16 +114,27 @@ export function printPaymentReceipt(p: any, ctx: { customer?: any; booking?: any
   .terms { font-size:8px; color:#475569; margin-top:6px; border-top:1px solid #e2e8f0; padding-top:4px }
   .sig { margin-top:10px; display:flex; justify-content:space-between; font-size:8.5px; color:#475569 }
   .sig .box { border-top:1px solid #0f172a; padding-top:3px; width:44%; text-align:center }
-  @media print { .page { box-shadow:none } }
+  @media print { .page { box-shadow:none } .toolbar, .toolbar-spacer { display:none !important } }
+  .toolbar{position:fixed;top:0;left:0;right:0;display:flex;gap:10px;justify-content:center;align-items:center;padding:10px;background:#0f172a;z-index:9999}
+  .toolbar button{font:600 13px/1 'Helvetica Neue',Arial,sans-serif;padding:9px 18px;border-radius:8px;border:0;cursor:pointer}
+  .toolbar .pr{background:#16a34a;color:#fff}
+  .toolbar .cl{background:#334155;color:#e2e8f0}
+  .toolbar span{color:#94a3b8;font:500 11px/1.3 'Helvetica Neue',Arial,sans-serif}
 </style>
 </head>
 <body>
+  <div class="toolbar">
+    <button class="pr" onclick="window.print()">🖨 Print receipt</button>
+    <button class="cl" onclick="window.close()">Close</button>
+    <span>Cancelled the dialog? Tap Print again.</span>
+  </div>
+  <div class="toolbar-spacer" style="height:48px"></div>
   <div class="page">
     ${half('CUSTOMER COPY')}
     <div class="cut"><span class="line"></span>✂ &nbsp; CUT HERE &nbsp; ✂<span class="line"></span></div>
     ${half('OFFICE COPY')}
   </div>
-  <script>window.onload=()=>setTimeout(()=>window.print(),200)</script>
+  <script>window.onload=()=>setTimeout(()=>window.print(),300)</script>
 </body></html>`
   const w = window.open('', '_blank', 'width=820,height=1100')
   if (w) { w.document.write(html); w.document.close() }
@@ -206,9 +217,20 @@ export function printApplicationForm(b: any, ctx: { customer?: any; project?: an
   .pay .mono{font-family:'SFMono-Regular',Consolas,monospace;font-size:9.5px}
   .pay tfoot td{padding:5px 6px;border-top:1px solid #cbd5e1}
   .pay .ftr{background:#f8fafc;font-weight:600;color:#0f172a}
-  @media print{body{padding:0}}
+  .toolbar{position:fixed;top:0;left:0;right:0;display:flex;gap:10px;justify-content:center;align-items:center;padding:10px;background:#0f172a;z-index:9999}
+  .toolbar button{font:600 13px/1 'Helvetica Neue',Arial,sans-serif;padding:9px 18px;border-radius:8px;border:0;cursor:pointer}
+  .toolbar .pr{background:#16a34a;color:#fff}
+  .toolbar .cl{background:#334155;color:#e2e8f0}
+  .toolbar span{color:#94a3b8;font:500 11px/1.3 'Helvetica Neue',Arial,sans-serif}
+  @media print{body{padding:0} .toolbar,.toolbar-spacer{display:none !important}}
 </style></head>
 <body>
+  <div class="toolbar">
+    <button class="pr" onclick="window.print()">🖨 Print form</button>
+    <button class="cl" onclick="window.close()">Close</button>
+    <span>Cancelled the dialog? Tap Print again.</span>
+  </div>
+  <div class="toolbar-spacer" style="height:48px"></div>
   <div class="header">
     <div class="logo">FG</div>
     <div><div class="title">FANBE GROUP</div><div style="font-size:10px;color:#64748b">Success Starts Here</div></div>
