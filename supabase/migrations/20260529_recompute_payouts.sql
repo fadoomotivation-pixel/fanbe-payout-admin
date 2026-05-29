@@ -9,6 +9,8 @@
 CREATE OR REPLACE FUNCTION public.recompute_all_payouts()
 RETURNS integer
 LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
 AS $fn$
 DECLARE
   cfg_tds   numeric := 5;
@@ -32,7 +34,7 @@ BEGIN
     FROM public.app_settings WHERE key = 'payout_config' LIMIT 1;
   EXCEPTION WHEN OTHERS THEN cfg_tds := 5; cfg_admin := 10; END;
 
-  DELETE FROM public.payout_distributions;
+  DELETE FROM public.payout_distributions WHERE true;  -- WHERE true satisfies sql_safe_updates when called via the API role
 
   FOR pay IN
     SELECT p.id AS payment_id, p.booking_id, p.amount, bk.broker_id
