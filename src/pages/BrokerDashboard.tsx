@@ -5,7 +5,7 @@ import {
   LogOut, Users, Wallet, Award, TrendingUp, ArrowUpRight, AlertCircle,
   ChevronRight, EyeOff, BarChart3, Coins, Receipt, CalendarDays, Send,
   ShieldCheck, Crown, Phone, MessageCircle, Edit3, Building, Settings as Cog,
-  Activity, CheckCircle2, XCircle, Lock, Unlock, Banknote, FileText,
+  Activity, CheckCircle2, XCircle, Lock, Unlock, Banknote, FileText, RotateCcw, Printer,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -56,6 +56,7 @@ export default function BrokerDashboard() {
   const [subTeams, setSubTeams]         = useState<Record<string, any[]>>({})
   const [activity, setActivity]         = useState<any[]>([])
   const [payoutOpen, setPayoutOpen]     = useState<Record<string, boolean>>({})
+  const [recomputing, setRecomputing]   = useState(false)
 
   useEffect(() => { (async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -314,6 +315,64 @@ export default function BrokerDashboard() {
     toast.success(`KYC ${newStatus}`)
   }
 
+  // Re-run the differential MLM engine (server-side RPC) and reload this dashboard's data
+  const recomputeCommissions = async () => {
+    setRecomputing(true)
+    const { data, error } = await supabase.rpc('recompute_all_payouts')
+    setRecomputing(false)
+    if (error) { toast.error(error.message); return }
+    toast.success(`MLM recomputed — ${data} rows. Refreshing…`)
+    setTimeout(() => window.location.reload(), 600)
+  }
+
+  // Print an A4 broker earnings statement: profile + per-booking distributions + withdrawals
+  const printStatement = () => {
+    const fmt = (n: number) => '₹' + Number(n || 0).toLocaleString('en-IN')
+    const rows = (payouts as any[]).map((p: any) => `<tr>
+      <td>${p.created_at ? new Date(p.created_at).toLocaleDateString('en-IN') : '—'}</td>
+      <td>${p.bp_bookings?.booking_no || '—'}</td>
+      <td>${p.income_type || '—'}</td>
+      <td>${p.level === 0 ? 'Self' : 'L' + p.level}</td>
+      <td style="text-align:right">${fmt(p.gross_payout)}</td>
+      <td style="text-align:right">${fmt(p.net_payout)}</td>
+    </tr>`).join('')
+    const wdRows = (withdrawals as any[]).map((w: any) => `<tr>
+      <td>${w.created_at ? new Date(w.created_at).toLocaleDateString('en-IN') : '—'}</td>
+      <td>${(w.status || '').toUpperCase()}</td>
+      <td>${w.utr || '—'}</td>
+      <td style="text-align:right">${fmt(w.net_amount || w.amount)}</td>
+    </tr>`).join('')
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Statement — ${broker?.name}</title>
+    <style>@page{size:A4 portrait;margin:14mm}*{box-sizing:border-box}body{font-family:'Helvetica Neue',Arial,sans-serif;color:#0f172a;font-size:12px}
+    .toolbar{position:fixed;top:0;left:0;right:0;display:flex;gap:10px;justify-content:center;padding:10px;background:#0f172a;z-index:9}
+    .toolbar button{font:600 13px 'Helvetica Neue';padding:9px 18px;border-radius:8px;border:0;cursor:pointer}.toolbar .pr{background:#16a34a;color:#fff}.toolbar .cl{background:#334155;color:#e2e8f0}
+    h1{font-size:18px;margin:0}.muted{color:#64748b;font-size:11px}.kpis{display:flex;gap:16px;margin:14px 0;flex-wrap:wrap}
+    .kpi{border:1px solid #cbd5e1;border-radius:8px;padding:8px 14px}.kpi b{display:block;font-size:16px}
+    table{width:100%;border-collapse:collapse;margin-top:8px;font-size:11px}th{background:#f1f5f9;text-align:left;padding:5px 6px;border-bottom:1px solid #cbd5e1}td{padding:5px 6px;border-bottom:1px dotted #e2e8f0}
+    h3{margin:16px 0 4px;font-size:13px}@media print{.toolbar,.sp{display:none!important}}</style></head>
+    <body>
+    <div class="toolbar"><button class="pr" onclick="window.print()">🖨 Print statement</button><button class="cl" onclick="window.close()">Close</button></div>
+    <div class="sp" style="height:46px"></div>
+    <h1>FANBE GROUP — Broker Statement</h1>
+    <div class="muted">${broker?.name} · [${broker?.broker_id}] · ${broker?.rank || ''} · KYC ${broker?.kyc_status || 'pending'} · Generated ${new Date().toLocaleString('en-IN')}</div>
+    <div class="kpis">
+      <div class="kpi"><span class="muted">Earned (distributed)</span><b>${fmt(stats.totalEarned)}</b></div>
+      <div class="kpi"><span class="muted">Promised pending</span><b>${fmt(stats.promisedPending)}</b></div>
+      <div class="kpi"><span class="muted">Paid out</span><b>${fmt(stats.paidOut)}</b></div>
+      <div class="kpi"><span class="muted">Available</span><b>${fmt(stats.availableBalance)}</b></div>
+    </div>
+    <h3>Commission distributions (${payouts.length})</h3>
+    <table><thead><tr><th>Date</th><th>Booking</th><th>Type</th><th>Level</th><th style="text-align:right">Gross</th><th style="text-align:right">Net</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan=6 style="text-align:center;color:#94a3b8">No commissions yet</td></tr>'}</tbody></table>
+    <h3>Withdrawals (${withdrawals.length})</h3>
+    <table><thead><tr><th>Date</th><th>Status</th><th>UTR</th><th style="text-align:right">Net</th></tr></thead>
+    <tbody>${wdRows || '<tr><td colspan=4 style="text-align:center;color:#94a3b8">No withdrawals yet</td></tr>'}</tbody></table>
+    <script>window.onload=()=>setTimeout(()=>window.print(),300)</script>
+    </body></html>`
+    const w = window.open('', '_blank', 'width=820,height=1100')
+    if (w) { w.document.write(html); w.document.close() }
+  }
+
   // ── L2 team expansion ────────────────────────────────────────────
   const toggleTeam = async (id: string) => {
     const next = new Set(expandedTeam)
@@ -446,10 +505,21 @@ export default function BrokerDashboard() {
                   </button>
                 </>
               ) : (
-                <div className={`col-span-2 px-3 py-2 text-xs rounded-lg inline-flex items-center gap-2 ${broker?.kyc_status === 'approved' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-rose-50 text-rose-800 border border-rose-200'}`}>
+                <div className={`px-3 py-2 text-xs rounded-lg inline-flex items-center gap-2 ${broker?.kyc_status === 'approved' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-rose-50 text-rose-800 border border-rose-200'}`}>
                   <ShieldCheck size={13}/>KYC {broker?.kyc_status} {broker?.kyc_reviewed_at && `· ${formatDate(broker.kyc_reviewed_at)}`}
                 </div>
               )}
+              <button onClick={recomputeCommissions} disabled={recomputing}
+                className="px-3 py-2 text-xs rounded-lg border border-gray-200 hover:border-amber-300 hover:bg-amber-50 inline-flex items-center gap-2 disabled:opacity-50"
+                title="Re-run the MLM engine on current ranks + sponsor chain, then refresh this dashboard">
+                <RotateCcw size={13} className={`text-amber-600 ${recomputing ? 'animate-spin' : ''}`}/>
+                <span className="font-medium">{recomputing ? 'Recomputing…' : 'Recompute MLM'}</span>
+              </button>
+              <button onClick={printStatement}
+                className="px-3 py-2 text-xs rounded-lg border border-gray-200 hover:border-amber-300 hover:bg-amber-50 inline-flex items-center gap-2">
+                <Printer size={13} className="text-amber-600"/>
+                <span className="font-medium">Print statement</span>
+              </button>
             </div>
           </div>
         )}

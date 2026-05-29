@@ -102,21 +102,42 @@ export async function loadRankSlabs(): Promise<RankSlab[]> {
 }
 
 /**
- * Returns the rank slab for a specific broker by looking up broker_rank_stats.
- * Falls back to Rank 1 (Executive) if no stats exist yet.
+ * Returns the rank slab for a specific broker.
+ * PRIMARY source is brokers.rank (the rank name the admin assigns on the broker record),
+ * matched to commission_ranks.rank_name. This is what actually drives commission %.
+ * Falls back to broker_rank_stats.current_rank_level (auto-rank engine, if in use),
+ * then to the lowest slab as a last resort.
  */
 export async function getBrokerRank(
   brokerId: string,
   slabs: RankSlab[],
 ): Promise<RankSlab> {
-  const { data } = await supabase
+  // 1) brokers.rank (text) → match by rank_name
+  const { data: broker } = await supabase
+    .from('brokers')
+    .select('rank')
+    .eq('id', brokerId)
+    .maybeSingle()
+  const rankName = (broker as { rank: string | null } | null)?.rank
+  if (rankName) {
+    const byName = slabs.find(s => s.rank_name === rankName)
+    if (byName) return byName
+  }
+
+  // 2) broker_rank_stats.current_rank_level → match by level
+  const { data: stats } = await supabase
     .from('broker_rank_stats')
     .select('current_rank_level')
     .eq('broker_id', brokerId)
     .maybeSingle()
+  const level = (stats as { current_rank_level: number } | null)?.current_rank_level
+  if (level) {
+    const byLevel = slabs.find(s => s.level === level)
+    if (byLevel) return byLevel
+  }
 
-  const level: number = (data as { current_rank_level: number } | null)?.current_rank_level ?? 1
-  return slabs.find(s => s.level === level) ?? slabs[0]
+  // 3) lowest slab
+  return slabs[0]
 }
 
 // ── Upline Chain ──────────────────────────────────────────────────────────────

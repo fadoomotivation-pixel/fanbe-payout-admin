@@ -51,19 +51,27 @@ export default function Brokers() {
   const { data: earningsByBroker = {} } = useQuery({
     queryKey: ['broker_earnings'],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from('bp_bookings')
-        .select('broker_id, commission_amount, application_date, stage')
-        .eq('stage', 'booking_done')
-      if (error) throw error
-      const out: Record<string, { total: number; ytd: number; count: number }> = {}
+      // EARNED = actually-distributed MLM commission (direct + upline differential), per payout_distributions.
+      // This is the single source of truth used across the app — NOT bookings.commission_amount (which is only
+      // the promised direct commission and ignores both collection progress and upline income).
+      const [{ data: dist }, { data: promised }] = await Promise.all([
+        supabase.from('payout_distributions').select('beneficiary_broker_id, net_payout, created_at'),
+        supabase.from('bp_bookings').select('broker_id, commission_amount, stage').eq('stage', 'booking_done'),
+      ])
+      const out: Record<string, { total: number; ytd: number; count: number; promised: number }> = {}
       const year = new Date().getFullYear()
-      for (const b of data || []) {
-        if (!b.broker_id) continue
-        const o = out[b.broker_id] ??= { total: 0, ytd: 0, count: 0 }
-        const c = Number(b.commission_amount || 0)
-        o.total += c; o.count += 1
-        if (b.application_date && new Date(b.application_date).getFullYear() === year) o.ytd += c
+      for (const d of dist || []) {
+        const k = (d as any).beneficiary_broker_id; if (!k) continue
+        const o = out[k] ??= { total: 0, ytd: 0, count: 0, promised: 0 }
+        const n = Number((d as any).net_payout || 0)
+        o.total += n
+        if ((d as any).created_at && new Date((d as any).created_at).getFullYear() === year) o.ytd += n
+      }
+      for (const b of promised || []) {
+        const k = (b as any).broker_id; if (!k) continue
+        const o = out[k] ??= { total: 0, ytd: 0, count: 0, promised: 0 }
+        o.promised += Number((b as any).commission_amount || 0)
+        o.count += 1
       }
       return out
     },
@@ -189,13 +197,17 @@ export default function Brokers() {
       const pct = rankPctFor(r.rank)
       return <div><span className="text-sm">{r.rank || '—'}</span>{pct != null && <div className="text-[10px] text-gray-400">{pct}% commission</div>}</div>
     }},
-    { header: 'Earned (YTD)', render: (r: any) => {
+    { header: 'Earned (distributed)', render: (r: any) => {
       const e = earnings[r.id]
-      if (!e) return <span className="text-xs text-gray-300">—</span>
+      if (!e || (e.total === 0 && e.promised === 0)) return <span className="text-xs text-gray-300">—</span>
+      const pending = Math.max(0, (e.promised || 0) - (e.total || 0))
       return (
         <div>
-          <div className="font-semibold text-green-700 text-sm">{formatINR(e.ytd)}</div>
-          <div className="text-[10px] text-gray-400">Total {formatINR(e.total)} · {e.count} bk</div>
+          <div className="font-semibold text-green-700 text-sm">{formatINR(e.total)}</div>
+          <div className="text-[10px] text-gray-400">
+            {e.ytd ? `YTD ${formatINR(e.ytd)} · ` : ''}{e.count} bk
+            {pending > 0 ? ` · +${formatINR(pending)} promised` : ''}
+          </div>
         </div>
       )
     }},
