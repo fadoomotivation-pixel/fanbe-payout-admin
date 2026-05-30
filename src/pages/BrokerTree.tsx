@@ -4,8 +4,8 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { formatINR } from '@/lib/utils'
 import {
-  Network, ChevronRight, ChevronDown, Search, Users, TrendingUp, Crown,
-  ShieldCheck, AlertCircle, Phone, MessageCircle, Layers, GitBranch,
+  ChevronRight, ChevronDown, Search, Users, TrendingUp,
+  ShieldCheck, AlertCircle, Phone, MessageCircle, Layers, GitBranch, User,
 } from 'lucide-react'
 
 type Broker = {
@@ -24,19 +24,19 @@ type Broker = {
 type Stat = { earned: number; rows: number }
 
 const RANK_COLORS: Record<string, string> = {
-  // common ranks; gracefully falls back for anything not listed
-  'Associate':           'bg-slate-100 text-slate-700',
-  'Sales Executive':     'bg-blue-50 text-blue-700',
-  'Sales Officer':       'bg-blue-100 text-blue-800',
-  'Assistant Manager':   'bg-indigo-100 text-indigo-700',
-  'Assistant Gen Manager':'bg-indigo-200 text-indigo-800',
-  'Manager':             'bg-purple-100 text-purple-700',
-  'Senior Manager':      'bg-purple-200 text-purple-800',
-  'Gen Manager':         'bg-pink-100 text-pink-700',
-  'Area Manager':        'bg-orange-100 text-orange-700',
-  'Regional Manager':    'bg-amber-100 text-amber-700',
-  'Zonal Manager':       'bg-yellow-100 text-yellow-800',
-  'Director':            'bg-emerald-100 text-emerald-800',
+  'Associate':              'bg-slate-100 text-slate-700',
+  'Sales Executive':        'bg-blue-50 text-blue-700',
+  'Sales Officer':          'bg-blue-100 text-blue-800',
+  'Assistant Manager':      'bg-indigo-100 text-indigo-700',
+  'Assistant Gen Manager':  'bg-indigo-200 text-indigo-800',
+  'Manager':                'bg-purple-100 text-purple-700',
+  'Senior Manager':         'bg-purple-200 text-purple-800',
+  'Gen Manager':            'bg-pink-100 text-pink-700',
+  'Area Manager':           'bg-orange-100 text-orange-700',
+  'Regional Manager':       'bg-amber-100 text-amber-700',
+  'Zonal Manager':          'bg-yellow-100 text-yellow-800',
+  'Director':               'bg-emerald-100 text-emerald-800',
+  'President':              'bg-emerald-200 text-emerald-900',
 }
 const rankCls = (r: string | null) => (r && RANK_COLORS[r]) || 'bg-slate-100 text-slate-600'
 
@@ -49,11 +49,9 @@ export default function BrokerTree() {
     if (id) next.set('root', id); else next.delete('root')
     setSearchParams(next, { replace: true })
   }
-  const [search, setSearch]   = useState('')
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  const [showAll, setShowAll]   = useState(false)
+  const [search, setSearch] = useState('')
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
 
-  // Keep state in sync if URL param changes (e.g. arrived from BrokerDashboard team tab)
   useEffect(() => {
     const urlRoot = searchParams.get('root') || ''
     if (urlRoot !== rootId) setRootIdState(urlRoot)
@@ -71,7 +69,6 @@ export default function BrokerTree() {
     },
   })
 
-  // Earnings per broker — sum of net_payout from payout_distributions
   const { data: earningsByBroker = {} } = useQuery<Record<string, Stat>>({
     queryKey: ['team_tree_earnings'],
     queryFn: async () => {
@@ -90,7 +87,6 @@ export default function BrokerTree() {
     },
   })
 
-  // Build parent → children map + subtree size
   const tree = useMemo(() => {
     const byId = new Map<string, Broker>()
     const childrenOf = new Map<string, Broker[]>()
@@ -100,10 +96,8 @@ export default function BrokerTree() {
       arr.push(b)
       childrenOf.set(b.sponsor_id || '__root__', arr)
     }
-    // sort children by name
     for (const arr of childrenOf.values()) arr.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
 
-    // subtree size (BFS)
     const subtreeSize: Record<string, number> = {}
     function size(id: string): number {
       if (subtreeSize[id] != null) return subtreeSize[id]
@@ -117,7 +111,6 @@ export default function BrokerTree() {
     return { byId, childrenOf, subtreeSize }
   }, [brokers])
 
-  // Aggregate earnings recursively for each broker (own + subtree)
   const aggregateEarnings = useMemo(() => {
     const cache: Record<string, number> = {}
     const compute = (id: string): number => {
@@ -132,7 +125,6 @@ export default function BrokerTree() {
     return cache
   }, [brokers, tree, earningsByBroker])
 
-  // Filter: when rootId set, only that subtree; else show all real roots
   const visibleRoots = useMemo(() => {
     if (rootId) {
       const b = tree.byId.get(rootId)
@@ -141,7 +133,6 @@ export default function BrokerTree() {
     return tree.childrenOf.get('__root__') || []
   }, [rootId, tree])
 
-  // KPIs
   const kpi = useMemo(() => {
     const inScope = (() => {
       if (!rootId) return brokers
@@ -164,7 +155,6 @@ export default function BrokerTree() {
     return { total: inScope.length, active, verified, totalEarned, directOfRoot }
   }, [rootId, tree, brokers, earningsByBroker])
 
-  // Search: auto-expand path to matches
   const matchedIds = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return new Set<string>()
@@ -176,10 +166,10 @@ export default function BrokerTree() {
     return found
   }, [search, brokers])
 
-  // When search matches, expand ancestors of every match
-  const effectiveExpanded = useMemo(() => {
-    if (matchedIds.size === 0) return expanded
-    const out = new Set(expanded)
+  // When searching, force-expand the ancestor path of every match so it stays visible.
+  const forceOpenIds = useMemo(() => {
+    if (matchedIds.size === 0) return new Set<string>()
+    const out = new Set<string>()
     for (const id of matchedIds) {
       let cur = tree.byId.get(id)?.sponsor_id
       let safety = 30
@@ -189,23 +179,29 @@ export default function BrokerTree() {
       }
     }
     return out
-  }, [matchedIds, expanded, tree])
+  }, [matchedIds, tree])
 
-  const toggleNode = (id: string) => setExpanded(prev => {
+  const toggleNode = (id: string) => setCollapsed(prev => {
     const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n
   })
-
-  const expandAll = () => setExpanded(new Set(brokers.map(b => b.id)))
-  const collapseAll = () => setExpanded(new Set())
+  const expandAll = () => setCollapsed(new Set())
+  const collapseAll = () => {
+    // Collapse every node that has children, leaving only the root visible.
+    const out = new Set<string>()
+    for (const b of brokers) {
+      const ch = tree.childrenOf.get(b.id) || []
+      if (ch.length > 0) out.add(b.id)
+    }
+    setCollapsed(out)
+  }
 
   return (
-    <div className="p-4 md:p-8 space-y-6 max-w-6xl mx-auto">
+    <div className="p-4 md:p-8 space-y-6 max-w-7xl mx-auto">
       <div>
         <h1 className="text-2xl md:text-3xl font-bold text-gray-900 tracking-tight">Team Network</h1>
-        <p className="text-sm text-gray-500 mt-1">Your MLM downline · {brokers.length} brokers · pick a root or browse all.</p>
+        <p className="text-sm text-gray-500 mt-1">Your MLM downline · {brokers.length} brokers · top-down org chart.</p>
       </div>
 
-      {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Kpi icon={<Users size={16}/>}        label="Brokers in scope" value={String(kpi.total)}/>
         <Kpi icon={<GitBranch size={16}/>}    label="Direct under root" value={String(kpi.directOfRoot)}/>
@@ -213,7 +209,6 @@ export default function BrokerTree() {
         <Kpi icon={<TrendingUp size={16}/>}   label="Total earned"     value={formatINR(kpi.totalEarned)}/>
       </div>
 
-      {/* Controls */}
       <div className="flex flex-wrap gap-2 items-center">
         <div className="relative flex-1 min-w-[220px]">
           <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400"/>
@@ -242,124 +237,170 @@ export default function BrokerTree() {
         </button>
       </div>
 
-      {/* Tree */}
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-[0_1px_2px_rgba(0,0,0,0.02)] p-4 md:p-6">
-        {isLoading && <div className="py-12 text-center text-sm text-gray-400">Loading network…</div>}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+        {isLoading && <div className="py-16 text-center text-sm text-gray-400">Loading network…</div>}
         {!isLoading && visibleRoots.length === 0 && (
-          <div className="py-12 text-center text-sm text-gray-400">
+          <div className="py-16 text-center text-sm text-gray-400">
             {rootId ? 'Broker not found in tree.' : 'No brokers yet — add some to see the network.'}
           </div>
         )}
-        <div className="space-y-1">
-          {visibleRoots.map(b => (
-            <Node
-              key={b.id} broker={b} depth={0} isRoot
-              tree={tree}
-              expanded={effectiveExpanded}
-              earnings={earningsByBroker}
-              aggregateEarnings={aggregateEarnings}
-              matchedIds={matchedIds}
-              onToggle={toggleNode}
-              showAll={showAll}
-            />
-          ))}
-        </div>
-
-        {!showAll && brokers.length > 30 && (
-          <div className="mt-4 text-center">
-            <button onClick={() => setShowAll(true)} className="text-sm text-blue-700 hover:underline">Render deeper branches…</button>
+        {!isLoading && visibleRoots.length > 0 && (
+          // Horizontal scroll so wide trees don't break the layout on mobile.
+          <div className="overflow-x-auto p-6">
+            <div className="inline-flex gap-8 mx-auto min-w-full justify-center">
+              {visibleRoots.map(b => (
+                <OrgNode
+                  key={b.id} broker={b} isRoot
+                  tree={tree}
+                  collapsed={collapsed}
+                  forceOpenIds={forceOpenIds}
+                  earnings={earningsByBroker}
+                  aggregateEarnings={aggregateEarnings}
+                  matchedIds={matchedIds}
+                  onToggle={toggleNode}
+                />
+              ))}
+            </div>
           </div>
         )}
       </div>
 
       <div className="text-[11px] text-gray-400">
-        Tip: pick any broker as the "root" to see only their subtree. Search auto-expands the path to every match.
+        Tip: tap any node to collapse its children. Pick a broker as the "root" above to focus on a single subtree. Search auto-expands the path to every match.
       </div>
     </div>
   )
 }
 
-// ── Node ────────────────────────────────────────────────────────────────────
-function Node({ broker, depth, isRoot, tree, expanded, earnings, aggregateEarnings, matchedIds, onToggle, showAll }: any) {
+// ── Org-chart node ─────────────────────────────────────────────────────────
+// Renders the broker card, then below it a flex row of child OrgNodes connected by
+// a top-down org-chart skeleton (vertical descender → horizontal sibling bar → vertical
+// risers to each child).  The horizontal bar is composed of two half-borders on each
+// child's top so it naturally spans only between the first and last child without any
+// JS measurement.
+function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, aggregateEarnings, matchedIds, onToggle }: any) {
   const children: Broker[] = tree.childrenOf.get(broker.id) || []
   const hasChildren = children.length > 0
-  const isOpen = expanded.has(broker.id)
+  const isCollapsed = collapsed.has(broker.id) && !forceOpenIds.has(broker.id)
+  const showChildren = hasChildren && !isCollapsed
   const subtree = tree.subtreeSize[broker.id] || 0
   const ownEarned = earnings[broker.id]?.earned || 0
   const teamEarned = (aggregateEarnings[broker.id] || 0) - ownEarned
   const isMatched = matchedIds.has(broker.id)
 
   return (
-    <div className={depth > 0 ? 'pl-5 md:pl-7 relative' : ''}>
-      {depth > 0 && <div className="absolute left-0 top-0 bottom-0 w-px bg-gray-200"/>}
-      {depth > 0 && <div className="absolute left-0 top-7 h-px w-5 md:w-7 bg-gray-200"/>}
+    <div className="flex flex-col items-center">
+      <NodeCard
+        broker={broker}
+        isRoot={isRoot}
+        isMatched={isMatched}
+        hasChildren={hasChildren}
+        isCollapsed={isCollapsed && !forceOpenIds.has(broker.id)}
+        directCount={children.length}
+        subtree={subtree}
+        ownEarned={ownEarned}
+        teamEarned={teamEarned}
+        onToggle={() => hasChildren && onToggle(broker.id)}
+      />
 
-      <div className={`flex items-center gap-3 py-3 pr-2 rounded-xl ${isMatched ? 'bg-amber-50 ring-1 ring-amber-200' : 'hover:bg-gray-50/60'}`}>
-        {/* expand toggle */}
-        <button onClick={() => hasChildren && onToggle(broker.id)}
-          className={`shrink-0 w-6 h-6 flex items-center justify-center rounded-md ${hasChildren ? 'text-gray-600 hover:bg-gray-100' : 'text-transparent'}`}>
-          {hasChildren && (isOpen ? <ChevronDown size={14}/> : <ChevronRight size={14}/>)}
-        </button>
+      {showChildren && (
+        <>
+          {/* Vertical descender from the card down to the sibling bar. */}
+          <div className="w-px h-6 bg-gray-300" />
 
-        {/* avatar */}
-        <div className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold ${
-          isRoot ? 'bg-gray-900 text-white'
-          : broker.status === 'active' ? 'bg-gray-100 text-gray-900'
-          : 'bg-gray-50 text-gray-400'
-        }`}>
-          {(broker.name || '?').charAt(0).toUpperCase()}
-        </div>
-
-        {/* info */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <Link to={`/broker/dashboard?broker_id=${broker.id}`} className="text-sm font-semibold text-gray-900 hover:text-blue-700 truncate">
-              {broker.name || '—'}
-            </Link>
-            <span className="text-[10px] font-mono text-gray-400">[{broker.broker_id}]</span>
-            {broker.rank && (
-              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${rankCls(broker.rank)}`}>{broker.rank}</span>
-            )}
-            {isRoot && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-900 text-white">Root</span>}
-            {broker.kyc_status !== 'approved' && (
-              <span className="text-[10px] text-amber-700 inline-flex items-center gap-0.5"><AlertCircle size={10}/>KYC {broker.kyc_status || 'pending'}</span>
-            )}
-            {broker.status !== 'active' && (
-              <span className="text-[10px] text-gray-400 italic">{broker.status || 'inactive'}</span>
-            )}
+          {/* Children row.  Each child has its own pair of half-borders that, taken together,
+              form the horizontal sibling bar.  The first child's left-half and the last child's
+              right-half are suppressed so the bar starts and ends exactly under the outermost
+              children. */}
+          <div className="flex items-start">
+            {children.map((c, i) => {
+              const isFirst = i === 0
+              const isLast  = i === children.length - 1
+              const isOnly  = children.length === 1
+              return (
+                <div key={c.id} className="relative flex flex-col items-center px-3 pt-6">
+                  {!isOnly && !isFirst && <div className="absolute top-0 left-0 right-1/2 h-px bg-gray-300" />}
+                  {!isOnly && !isLast  && <div className="absolute top-0 left-1/2 right-0 h-px bg-gray-300" />}
+                  {/* Riser into this child */}
+                  <div className="absolute top-0 left-1/2 -translate-x-1/2 w-px h-6 bg-gray-300" />
+                  <OrgNode
+                    broker={c} tree={tree} collapsed={collapsed} forceOpenIds={forceOpenIds}
+                    earnings={earnings} aggregateEarnings={aggregateEarnings}
+                    matchedIds={matchedIds} onToggle={onToggle}
+                  />
+                </div>
+              )
+            })}
           </div>
-          <div className="text-[11px] text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
-            {broker.phone && (
-              <>
-                <a href={`tel:${broker.phone}`} className="hover:text-blue-700 inline-flex items-center gap-0.5"><Phone size={9}/>{broker.phone}</a>
-                <a href={`https://wa.me/${String(broker.phone).replace(/[^\d]/g,'')}`} target="_blank" rel="noreferrer" className="text-emerald-700 hover:underline inline-flex items-center gap-0.5"><MessageCircle size={9}/>WA</a>
-              </>
-            )}
-            {hasChildren && (
-              <span className="inline-flex items-center gap-0.5">
-                <Layers size={9}/>{children.length} direct · {subtree} team
-              </span>
-            )}
-          </div>
-        </div>
+        </>
+      )}
+    </div>
+  )
+}
 
-        {/* earnings + chevron */}
-        <div className="shrink-0 text-right">
-          {ownEarned > 0 && <div className="text-[12px] font-semibold text-emerald-700 tabular-nums">{formatINR(ownEarned)}</div>}
-          {teamEarned > 0 && <div className="text-[10px] text-gray-500 tabular-nums">team · {formatINR(teamEarned)}</div>}
+function NodeCard({ broker, isRoot, isMatched, hasChildren, isCollapsed, directCount, subtree, ownEarned, teamEarned, onToggle }: any) {
+  return (
+    <div
+      onClick={hasChildren ? onToggle : undefined}
+      className={`relative w-[180px] sm:w-[200px] rounded-2xl border bg-white px-3 py-3 shadow-sm transition
+        ${isMatched ? 'border-amber-300 ring-2 ring-amber-200' : 'border-gray-200 hover:border-gray-300'}
+        ${hasChildren ? 'cursor-pointer' : ''}`}
+    >
+      {/* avatar */}
+      <div className="flex flex-col items-center">
+        <div className={`shrink-0 w-12 h-12 rounded-full flex items-center justify-center text-base font-semibold mb-2
+          ${isRoot ? 'bg-gray-900 text-white'
+          : broker.status === 'active' ? 'bg-gradient-to-br from-blue-500 to-indigo-600 text-white'
+          : 'bg-gray-100 text-gray-400'}`}>
+          {broker.name ? broker.name.charAt(0).toUpperCase() : <User size={18}/>}
         </div>
+        <Link
+          to={`/broker/dashboard?broker_id=${broker.id}`}
+          onClick={e => e.stopPropagation()}
+          className="text-sm font-semibold text-gray-900 hover:text-blue-700 truncate max-w-full text-center"
+        >
+          {broker.name || '—'}
+        </Link>
+        <div className="text-[10px] font-mono text-gray-400 mt-0.5">[{broker.broker_id}]</div>
+        {broker.rank && (
+          <span className={`mt-1 text-[10px] px-2 py-0.5 rounded-full font-medium ${rankCls(broker.rank)}`}>{broker.rank}</span>
+        )}
       </div>
 
-      {/* children */}
-      {hasChildren && isOpen && (
-        <div className={depth > 8 && !showAll ? 'opacity-60 italic text-[11px] text-gray-400 pl-5 py-2' : ''}>
-          {depth > 8 && !showAll ? (
-            <span>+ {children.length} more — collapsed for clarity</span>
-          ) : children.map((c: Broker) => (
-            <Node key={c.id} broker={c} depth={depth + 1} tree={tree} expanded={expanded} earnings={earnings} aggregateEarnings={aggregateEarnings} matchedIds={matchedIds} onToggle={onToggle} showAll={showAll}/>
-          ))}
-        </div>
-      )}
+      {/* badges row */}
+      <div className="mt-2 flex items-center justify-center gap-1 flex-wrap text-[10px]">
+        {isRoot && <span className="px-1.5 py-0.5 rounded-full bg-gray-900 text-white">Root</span>}
+        {broker.kyc_status !== 'approved' && (
+          <span className="text-amber-700 inline-flex items-center gap-0.5"><AlertCircle size={9}/>KYC</span>
+        )}
+        {broker.status && broker.status !== 'active' && (
+          <span className="text-gray-400 italic">{broker.status}</span>
+        )}
+      </div>
+
+      {/* contact + earnings */}
+      <div className="mt-2 pt-2 border-t border-gray-100 text-[11px] text-gray-500 space-y-1">
+        {broker.phone && (
+          <div className="flex items-center justify-center gap-2">
+            <a href={`tel:${broker.phone}`} onClick={e => e.stopPropagation()} className="inline-flex items-center gap-0.5 hover:text-blue-700"><Phone size={10}/>{broker.phone}</a>
+            <a href={`https://wa.me/${String(broker.phone).replace(/[^\d]/g,'')}`} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="inline-flex items-center gap-0.5 text-emerald-700 hover:underline"><MessageCircle size={10}/>WA</a>
+          </div>
+        )}
+        {(ownEarned > 0 || teamEarned > 0) && (
+          <div className="flex items-center justify-center gap-2 tabular-nums">
+            {ownEarned > 0 && <span className="font-semibold text-emerald-700">{formatINR(ownEarned)}</span>}
+            {teamEarned > 0 && <span className="text-gray-400">+ team {formatINR(teamEarned)}</span>}
+          </div>
+        )}
+        {hasChildren && (
+          <div className="flex items-center justify-center gap-1 text-gray-400">
+            <Layers size={9}/>{directCount} direct · {subtree} total
+            {isCollapsed
+              ? <ChevronRight size={11} className="text-gray-500"/>
+              : <ChevronDown  size={11} className="text-gray-500"/>}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
