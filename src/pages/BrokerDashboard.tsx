@@ -677,77 +677,24 @@ export default function BrokerDashboard() {
             {downline.length === 0 ? (
               <p className="text-sm text-gray-500">No direct downline yet.</p>
             ) : (
-              <div className="space-y-1">
-                {downline.map((d: any) => {
-                  const open = expandedTeam.has(d.id)
-                  const subs = subTeams[d.id] || []
-                  const ownEarned = downlineEarnings[d.id] || 0
-                  return (
-                    <div key={d.id}>
-                      <div className="flex items-center gap-3 py-3 rounded-xl hover:bg-gray-50/60">
-                        <button onClick={() => toggleTeam(d.id)} className="shrink-0 w-6 h-6 flex items-center justify-center rounded-md text-gray-600 hover:bg-gray-100">
-                          <ChevronRight size={14} className={`transition-transform ${open ? 'rotate-90' : ''}`}/>
-                        </button>
-                        <div className="shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold bg-gray-100 text-gray-900">
-                          {(d.name || '?').charAt(0).toUpperCase()}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <Link to={`/broker/dashboard?broker_id=${d.id}`} className="text-sm font-semibold text-gray-900 hover:text-blue-700 truncate">
-                              {d.name}
-                            </Link>
-                            <span className="text-[10px] font-mono text-gray-400">[{d.broker_id}]</span>
-                            {d.rank && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 font-medium">{d.rank}</span>}
-                          </div>
-                          <div className="text-[11px] text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
-                            {d.phone && (
-                              <>
-                                <a href={`tel:${d.phone}`} className="hover:text-blue-700 inline-flex items-center gap-0.5"><Phone size={9}/>{d.phone}</a>
-                                <a href={`https://wa.me/${String(d.phone).replace(/[^\d]/g,'')}`} target="_blank" rel="noreferrer" className="text-emerald-700 hover:underline inline-flex items-center gap-0.5"><MessageCircle size={9}/>WA</a>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                        <div className="shrink-0 text-right">
-                          <div className="text-[13px] font-semibold text-emerald-700 tabular-nums">{formatINR(ownEarned)}</div>
-                          <div className="text-[10px] text-gray-400">earned</div>
-                        </div>
-                      </div>
-
-                      {/* L2 sub-team — connector line + indented */}
-                      {open && (
-                        <div className="pl-9 md:pl-12 relative">
-                          <div className="absolute left-3 top-0 bottom-2 w-px bg-gray-200"/>
-                          {subs.length === 0 ? (
-                            <div className="text-[12px] text-gray-400 italic py-2">No sub-team under {d.name}.</div>
-                          ) : subs.map((s: any) => (
-                            <div key={s.id} className="relative flex items-center gap-3 py-2 rounded-lg hover:bg-gray-50/60">
-                              <div className="absolute -left-9 top-1/2 h-px w-6 bg-gray-200"/>
-                              <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-semibold bg-gray-50 text-gray-700 border border-gray-200">
-                                {(s.name || '?').charAt(0).toUpperCase()}
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <Link to={`/broker/dashboard?broker_id=${s.id}`} className="text-[13px] font-medium text-gray-800 hover:text-blue-700 truncate">{s.name}</Link>
-                                  <span className="text-[10px] font-mono text-gray-400">[{s.broker_id}]</span>
-                                  {s.rank && <span className="text-[10px] text-gray-500">{s.rank}</span>}
-                                </div>
-                              </div>
-                              {s.phone && (
-                                <div className="flex items-center gap-1 shrink-0">
-                                  <a href={`tel:${s.phone}`} className="p-1 rounded-full bg-gray-50 text-gray-600 hover:bg-blue-50 hover:text-blue-700"><Phone size={10}/></a>
-                                  <a href={`https://wa.me/${String(s.phone).replace(/[^\d]/g,'')}`} target="_blank" rel="noreferrer" className="p-1 rounded-full bg-gray-50 text-gray-600 hover:bg-emerald-50 hover:text-emerald-700"><MessageCircle size={10}/></a>
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
+              // Wrapper scrolls horizontally for wide trees on phones.  The root broker
+              // (the one being viewed) is rendered at the top; their direct downline fans
+              // out beneath, and any deeper level lazy-loads on click via toggleTeam.
+              <div className="overflow-x-auto -mx-5 px-5 py-2">
+                <div className="inline-flex justify-center w-full min-w-fit">
+                  <TeamOrgNode
+                    broker={broker}
+                    isRoot
+                    initialChildren={downline}
+                    subTeams={subTeams}
+                    expandedTeam={expandedTeam}
+                    downlineEarnings={downlineEarnings}
+                    onToggle={toggleTeam}
+                  />
+                </div>
               </div>
             )}
+            <div className="mt-3 text-[11px] text-gray-400">Tap any card to load and expand its sub-team. Tap again to collapse.</div>
           </Section>
         )}
 
@@ -1074,4 +1021,115 @@ function WdBadge({ status }: { status: string }) {
     on_hold:  'bg-gray-100 text-gray-700',
   }
   return <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${map[status] || 'bg-gray-100 text-gray-600'}`}>{status?.replace(/_/g,' ')}</span>
+}
+
+// Recursive org-chart node for the team tab.  The root broker is the dashboard owner;
+// its direct downline is pre-loaded.  Deeper levels lazy-load via onToggle (which fetches
+// brokers where sponsor_id = id and caches the result in subTeams).  Visual skeleton
+// matches /team-tree: vertical descender → horizontal sibling bar → risers into each child.
+function TeamOrgNode({ broker, isRoot, initialChildren, subTeams, expandedTeam, downlineEarnings, onToggle }: any) {
+  if (!broker) return null
+  const isExpanded = isRoot || expandedTeam.has(broker.id)
+  const childrenLoaded = isRoot ? initialChildren : subTeams[broker.id]
+  const showChildren = isExpanded && Array.isArray(childrenLoaded) && childrenLoaded.length > 0
+
+  return (
+    <div className="flex flex-col items-center">
+      <TeamNodeCard broker={broker} isRoot={isRoot} isExpanded={isExpanded}
+        earned={downlineEarnings[broker.id] || 0}
+        loaded={isRoot ? true : Array.isArray(childrenLoaded)}
+        childCount={Array.isArray(childrenLoaded) ? childrenLoaded.length : null}
+        onToggle={() => !isRoot && onToggle(broker.id)}
+      />
+
+      {showChildren && (
+        <>
+          <div className="w-px h-6 bg-gray-300" />
+          <div className="flex items-start">
+            {childrenLoaded.map((c: any, i: number) => {
+              const isFirst = i === 0
+              const isLast  = i === childrenLoaded.length - 1
+              const isOnly  = childrenLoaded.length === 1
+              return (
+                <div key={c.id} className="relative flex flex-col items-center px-3 pt-6">
+                  {!isOnly && !isFirst && <div className="absolute top-0 left-0 right-1/2 h-px bg-gray-300" />}
+                  {!isOnly && !isLast  && <div className="absolute top-0 left-1/2 right-0 h-px bg-gray-300" />}
+                  <div className="absolute top-0 left-1/2 -translate-x-1/2 w-px h-6 bg-gray-300" />
+                  <TeamOrgNode broker={c} initialChildren={null} subTeams={subTeams}
+                    expandedTeam={expandedTeam} downlineEarnings={downlineEarnings} onToggle={onToggle}/>
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
+
+      {/* Show "no sub-team" hint when expanded but the lazy fetch returned zero. */}
+      {!isRoot && isExpanded && Array.isArray(childrenLoaded) && childrenLoaded.length === 0 && (
+        <div className="mt-3 text-[10px] text-gray-400 italic">no sub-team</div>
+      )}
+    </div>
+  )
+}
+
+function TeamNodeCard({ broker, isRoot, isExpanded, earned, loaded, childCount, onToggle }: any) {
+  const clickable = !isRoot
+  return (
+    <div
+      onClick={clickable ? onToggle : undefined}
+      className={`relative w-[150px] sm:w-[170px] rounded-2xl border bg-white px-3 py-3 shadow-sm transition
+        border-gray-200 hover:border-gray-300
+        ${clickable ? 'cursor-pointer active:scale-[0.98]' : ''}`}
+    >
+      <div className="flex flex-col items-center">
+        <div className={`shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold mb-1.5
+          ${isRoot ? 'bg-gray-900 text-white'
+          : broker.status === 'active' ? 'bg-gradient-to-br from-blue-500 to-indigo-600 text-white'
+          : 'bg-gray-100 text-gray-400'}`}>
+          {(broker.name || '?').charAt(0).toUpperCase()}
+        </div>
+        <Link
+          to={`/broker/dashboard?broker_id=${broker.id}`}
+          onClick={e => e.stopPropagation()}
+          className="text-[13px] font-semibold text-gray-900 hover:text-blue-700 truncate max-w-full text-center"
+        >
+          {broker.name || '—'}
+        </Link>
+        <div className="text-[10px] font-mono text-gray-400 mt-0.5">[{broker.broker_id}]</div>
+        {broker.rank && (
+          <span className="mt-1 text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-medium truncate max-w-full">{broker.rank}</span>
+        )}
+      </div>
+
+      {isRoot && (
+        <div className="mt-2 flex items-center justify-center">
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-900 text-white">You</span>
+        </div>
+      )}
+
+      <div className="mt-2 pt-2 border-t border-gray-100 text-[11px] text-gray-500 space-y-1">
+        {broker.phone && (
+          <div className="flex items-center justify-center gap-2">
+            <a href={`tel:${broker.phone}`} onClick={e => e.stopPropagation()} className="inline-flex items-center gap-0.5 hover:text-blue-700"><Phone size={10}/>{broker.phone}</a>
+            <a href={`https://wa.me/${String(broker.phone).replace(/[^\d]/g,'')}`} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="inline-flex items-center gap-0.5 text-emerald-700 hover:underline"><MessageCircle size={10}/>WA</a>
+          </div>
+        )}
+        {!isRoot && earned > 0 && (
+          <div className="text-center font-semibold text-emerald-700 tabular-nums">{formatINR(earned)}<span className="text-[9px] text-gray-400 font-normal ml-1">earned</span></div>
+        )}
+        {clickable && (
+          <div className="flex items-center justify-center gap-1 text-gray-400">
+            {!loaded
+              ? <><ChevronRight size={11}/><span className="text-[10px]">tap to load</span></>
+              : childCount === 0
+                ? <span className="text-[10px] italic">no sub-team</span>
+                : <>
+                    <ChevronRight size={11} className={`transition-transform ${isExpanded ? 'rotate-90' : ''}`}/>
+                    <span className="text-[10px]">{childCount} direct</span>
+                  </>}
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }
