@@ -28,12 +28,11 @@ const EMPTY_PLOT = {
 }
 
 const EMPTY_BULK = {
-  project_id: '', prefix: '', start_number: '101', count: '10', pad_width: '0',
+  project_id: '', start_number: '101', end_number: '110',
   size_sqyd: '', price_per_sqyd: '', plc_charges: '0',
-  category: 'residential', facing: 'east', block: '', sector: '', is_corner: false,
+  category: 'residential', block: '', sector: '', is_corner: false,
 }
 
-const padNum = (n: number, w: number) => w > 0 ? String(n).padStart(w, '0') : String(n)
 const computeTotal = (size: any, rate: any, plc: any) => {
   const s = parseFloat(size) || 0, r = parseFloat(rate) || 0, p = parseFloat(plc) || 0
   return s * r + p
@@ -129,18 +128,19 @@ export default function Plots() {
   const bulkGenerate = useMutation({
     mutationFn: async (bulk: typeof EMPTY_BULK) => {
       if (!bulk.project_id) throw new Error('Select a project')
-      const count = parseInt(bulk.count)
-      if (!count || count < 1 || count > 500) throw new Error('Count must be between 1 and 500')
       const start = parseInt(bulk.start_number)
-      if (Number.isNaN(start)) throw new Error('Enter a numeric start number')
-      const padW = parseInt(bulk.pad_width) || 0
+      const end   = parseInt(bulk.end_number)
+      if (Number.isNaN(start) || Number.isNaN(end)) throw new Error('Enter numeric start and end numbers')
+      if (end < start) throw new Error('End number must be greater than or equal to start number')
+      const count = end - start + 1
+      if (count < 1 || count > 500) throw new Error('Range must produce between 1 and 500 plots')
       const size = parseFloat(bulk.size_sqyd)
       if (!size || size <= 0) throw new Error('Size (sqyd) is required')
       const rate = parseFloat(bulk.price_per_sqyd) || 0
       const plc  = parseFloat(bulk.plc_charges) || 0
 
       // Look for conflicts in this project's plot_nos
-      const wanted = Array.from({ length: count }, (_, i) => `${bulk.prefix}${padNum(start + i, padW)}`)
+      const wanted = Array.from({ length: count }, (_, i) => String(start + i))
       const { data: existing } = await supabase
         .from('bp_plots').select('plot_no').eq('project_id', bulk.project_id).in('plot_no', wanted)
       if (existing && existing.length > 0) {
@@ -156,7 +156,6 @@ export default function Plots() {
         plc_charges:    plc,
         total_price:    rate ? size * rate + plc : null,
         category:   bulk.category || 'residential',
-        facing:     bulk.facing || 'east',
         block:      bulk.block || null,
         sector:     bulk.sector || null,
         is_corner:  !!bulk.is_corner,
@@ -211,13 +210,17 @@ export default function Plots() {
   const addTotalPreview  = computeTotal(addForm.size_sqyd, addForm.price_per_sqyd, addForm.plc_charges)
   const editTotalPreview = computeTotal(editForm.size_sqyd, editForm.price_per_sqyd, editForm.plc_charges)
   const bulkTotalPreview = computeTotal(bulkForm.size_sqyd, bulkForm.price_per_sqyd, bulkForm.plc_charges)
-  const bulkPreviewList  = useMemo(() => {
+  const bulkRangeCount = useMemo(() => {
     const start = parseInt(bulkForm.start_number)
-    const count = Math.min(parseInt(bulkForm.count) || 0, 6)
-    const padW = parseInt(bulkForm.pad_width) || 0
-    if (Number.isNaN(start) || count < 1) return [] as string[]
-    return Array.from({ length: count }, (_, i) => `${bulkForm.prefix || ''}${padNum(start + i, padW)}`)
-  }, [bulkForm.prefix, bulkForm.start_number, bulkForm.count, bulkForm.pad_width])
+    const end   = parseInt(bulkForm.end_number)
+    if (Number.isNaN(start) || Number.isNaN(end) || end < start) return 0
+    return end - start + 1
+  }, [bulkForm.start_number, bulkForm.end_number])
+  const bulkPreviewList = useMemo(() => {
+    const start = parseInt(bulkForm.start_number)
+    if (Number.isNaN(start) || bulkRangeCount < 1) return [] as string[]
+    return Array.from({ length: Math.min(bulkRangeCount, 6) }, (_, i) => String(start + i))
+  }, [bulkForm.start_number, bulkRangeCount])
 
   const openEdit = (p: any) => {
     setEditing(p)
@@ -395,7 +398,7 @@ export default function Plots() {
       {/* ── Bulk Generate Modal ──────────────────────────────────── */}
       <Modal open={bulkModal} onClose={() => setBulkModal(false)} title="Bulk Generate Plots">
         <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3 text-xs text-indigo-900 mb-4">
-          Generate up to <b>500</b> plots at once with shared attributes. Plot numbers are auto-numbered as <code className="bg-white px-1 rounded border">prefix + sequential number</code>.
+          Generate up to <b>500</b> plots in a single range. Plot numbers run from <b>start</b> to <b>end</b> (inclusive).
         </div>
         <div className="grid grid-cols-2 gap-3">
           <Select label="Project" value={bulkForm.project_id} onChange={(e: any) => setB('project_id', e.target.value)} className="col-span-2">
@@ -404,15 +407,13 @@ export default function Plots() {
           </Select>
 
           <div className="col-span-2 text-xs font-semibold text-gray-500 uppercase tracking-wide mt-1">Numbering</div>
-          <Input label="Prefix" value={bulkForm.prefix} onChange={(e: any) => setB('prefix', e.target.value)} placeholder="e.g. GV-A, RR-D" />
           <Input label="Start Number" type="number" value={bulkForm.start_number} onChange={(e: any) => setB('start_number', e.target.value)} placeholder="101"/>
-          <Input label="Count" type="number" value={bulkForm.count} onChange={(e: any) => setB('count', e.target.value)} placeholder="10"/>
-          <Input label="Pad Width (0 = none)" type="number" value={bulkForm.pad_width} onChange={(e: any) => setB('pad_width', e.target.value)} placeholder="0"/>
+          <Input label="End Number"   type="number" value={bulkForm.end_number}   onChange={(e: any) => setB('end_number', e.target.value)}   placeholder="110"/>
 
           {bulkPreviewList.length > 0 && (
             <div className="col-span-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs">
               <span className="text-gray-500">Preview: </span>
-              <span className="font-mono font-semibold">{bulkPreviewList.join(', ')}{Number(bulkForm.count) > 6 ? `, … (${bulkForm.count} total)` : ''}</span>
+              <span className="font-mono font-semibold">{bulkPreviewList.join(', ')}{bulkRangeCount > 6 ? `, … (${bulkRangeCount} total)` : ''}</span>
             </div>
           )}
 
@@ -427,9 +428,6 @@ export default function Plots() {
           <Select label="Category" value={bulkForm.category} onChange={(e: any) => setB('category', e.target.value)}>
             {CATEGORIES.map(c => <option key={c} value={c} className="capitalize">{c}</option>)}
           </Select>
-          <Select label="Facing" value={bulkForm.facing} onChange={(e: any) => setB('facing', e.target.value)}>
-            {FACINGS.map(f => <option key={f} value={f} className="capitalize">{f}</option>)}
-          </Select>
           <Input label="Block" value={bulkForm.block} onChange={(e: any) => setB('block', e.target.value)} />
           <Input label="Sector" value={bulkForm.sector} onChange={(e: any) => setB('sector', e.target.value)} />
           <label className="col-span-2 flex items-center gap-2 text-sm text-gray-700">
@@ -439,8 +437,8 @@ export default function Plots() {
         </div>
         <div className="flex justify-end gap-2 mt-6">
           <Button variant="secondary" onClick={() => setBulkModal(false)}>Cancel</Button>
-          <Button onClick={() => bulkGenerate.mutate(bulkForm)} loading={bulkGenerate.isPending}>
-            <Layers size={14}/>Generate {bulkForm.count || 0} Plots
+          <Button onClick={() => bulkGenerate.mutate(bulkForm)} loading={bulkGenerate.isPending} disabled={bulkRangeCount < 1}>
+            <Layers size={14}/>Generate {bulkRangeCount || 0} Plots
           </Button>
         </div>
       </Modal>
