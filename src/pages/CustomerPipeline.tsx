@@ -479,7 +479,7 @@ export default function CustomerPipeline() {
                   </span>
                 )}
                 <button onClick={() => toggleExpand(r.id)}
-                  className="ml-auto text-[13px] text-gray-500 hover:text-gray-900 inline-flex items-center gap-1">
+                  className="ml-auto inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border border-gray-300 bg-white text-gray-800 text-sm font-medium hover:bg-gray-50 hover:border-gray-400 shadow-sm transition">
                   {open ? 'Hide details' : 'Details'}<ChevronRight size={14} className={`transition-transform ${open ? 'rotate-90' : ''}`}/>
                 </button>
               </div>

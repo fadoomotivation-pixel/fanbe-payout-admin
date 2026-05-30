@@ -18,6 +18,7 @@ type Entry = {
   amount: number
   ref: string
   booking_no?: string
+  detail?: string
 }
 
 const KIND_META: Record<string, { label: string; color: string }> = {
@@ -50,27 +51,34 @@ export default function Commission() {
   const { data: entries = [], isLoading } = useQuery<Entry[]>({
     queryKey: ['commission_ledger'],
     queryFn: async () => {
-      // Credit side: every booking_done booking with a broker and commission
-      const [{ data: bookings }, { data: payouts }, { data: withdrawals }] = await Promise.all([
-        supabase.from('bp_bookings').select('id, broker_id, commission_amount, application_date, booking_no, stage').eq('stage', 'booking_done'),
+      // Credit side = per-payment MLM distributions (the real money a broker has earned).
+      // We DO NOT use bp_bookings.commission_amount here — that's only the promised lifetime
+      // commission on full payment, which inflates the ledger by the unpaid portion of every
+      // booking. The wallet must reflect what was actually distributed (matches broker dashboards).
+      const [{ data: dists }, { data: payouts }, { data: withdrawals }] = await Promise.all([
+        supabase.from('payout_distributions')
+          .select('id, beneficiary_broker_id, net_payout, created_at, income_type, level, bp_bookings(booking_no)'),
         supabase.from('bp_payout_transactions').select('id, broker_id, net_amount, amount, paid_date, status, payout_type, utr_ref, booking_id').eq('status', 'paid'),
         supabase.from('withdrawal_requests').select('id, broker_id, net_amount, amount, paid_at, status, utr').eq('status', 'paid'),
       ])
 
       const list: Entry[] = []
-      for (const b of (bookings || []) as any[]) {
-        const amt = Number(b.commission_amount || 0)
-        if (!b.broker_id || amt <= 0) continue
+      for (const d of (dists || []) as any[]) {
+        const amt = Number(d.net_payout || 0)
+        if (!d.beneficiary_broker_id || amt <= 0) continue
+        const bookingNo = d.bp_bookings?.booking_no || '—'
+        const levelLabel = d.level === 0 ? 'self' : `L${d.level} upline`
         list.push({
-          id: `bk-${b.id}`,
-          at: b.application_date || new Date().toISOString(),
-          broker_id: b.broker_id,
+          id: `pd-${d.id}`,
+          at: d.created_at || new Date().toISOString(),
+          broker_id: d.beneficiary_broker_id,
           broker_name: '', broker_code: '',
           kind: 'commission_earned',
           direction: 'credit',
           amount: amt,
-          ref: b.booking_no || '—',
-          booking_no: b.booking_no,
+          ref: bookingNo,
+          booking_no: bookingNo,
+          detail: `${d.income_type || 'direct'} · ${levelLabel}`,
         })
       }
       for (const p of (payouts || []) as any[]) {
@@ -181,9 +189,14 @@ export default function Commission() {
       const m = KIND_META[r.kind]
       return <Badge label={m?.label || r.kind} className={m?.color || 'bg-gray-100 text-gray-700'} />
     }},
-    { header: 'Reference', render: (r: any) => r.booking_no ? (
-      <Link to={`/bookings?search=${r.booking_no}`} className="text-xs font-mono text-blue-700 hover:underline">{r.ref}</Link>
-    ) : <span className="text-xs font-mono text-gray-600">{r.ref}</span> },
+    { header: 'Reference', render: (r: any) => (
+      <div>
+        {r.booking_no && r.booking_no !== '—' ? (
+          <Link to={`/bookings?search=${r.booking_no}`} className="text-xs font-mono text-blue-700 hover:underline">{r.ref}</Link>
+        ) : <span className="text-xs font-mono text-gray-600">{r.ref}</span>}
+        {r.detail && <div className="text-[10px] text-gray-400 capitalize">{r.detail}</div>}
+      </div>
+    )},
     { header: 'Amount', render: (r: any) => (
       <span className={`font-semibold inline-flex items-center gap-1 ${r.direction === 'credit' ? 'text-emerald-700' : 'text-rose-700'}`}>
         {r.direction === 'credit' ? <ArrowUpRight size={12}/> : <ArrowDownRight size={12}/>}
@@ -248,7 +261,7 @@ export default function Commission() {
 
       <div className="mt-4 text-[11px] text-gray-400 leading-relaxed">
         <Filter size={11} className="inline-block mr-1 -mt-0.5"/>
-        Ledger entries are derived live from <b>bp_bookings</b> (commission credit when stage is Booking Done) and <b>bp_payout_transactions</b> / <b>withdrawal_requests</b> (paid debits). The balance column is a per-broker running total across all time, not just the filtered window.
+        Credits come from <b>payout_distributions</b> — one row per payment per beneficiary (direct + every upline differential), net of TDS &amp; admin. These are the same numbers shown on every broker dashboard. Debits come from <b>bp_payout_transactions</b> &amp; <b>withdrawal_requests</b> (status = paid). The balance column is a per-broker running total across all time.
       </div>
     </div>
   )

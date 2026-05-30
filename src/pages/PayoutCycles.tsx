@@ -18,15 +18,20 @@ const STATUS_COLORS: Record<string, string> = {
   reopened: 'bg-blue-50 text-blue-700 border border-blue-200',
 }
 
-type CommissionRow = {
-  booking_id: string
-  broker_id: string | null
+// Per-distribution row used to build the cycle close preview.  These are real, already-distributed
+// MLM commissions from `payout_distributions` — NOT the promised `bp_bookings.commission_amount`,
+// which would over-state by the unpaid portion of every booking and double-deduct TDS at close time.
+type DistributionRow = {
+  id: string
+  broker_id: string
   broker_name: string
   broker_code: string
-  total_amount: number
-  commission_amount: number
-  application_date: string | null
-  closed_at: string | null
+  booking_id: string | null
+  gross_payout: number
+  tds_amount: number
+  admin_charge: number
+  net_payout: number
+  created_at: string | null
 }
 
 export default function PayoutCycles() {
@@ -50,54 +55,69 @@ export default function PayoutCycles() {
   // Current month's eligible bookings (closed bookings with commission, not yet attached to any cycle)
   const currentMonth = useMemo(() => monthRange(new Date()), [])
 
-  const { data: pendingCommissions = [] } = useQuery<CommissionRow[]>({
-    queryKey: ['cycle_pending_commissions', currentMonth.start, currentMonth.end],
+  const { data: pendingCommissions = [] } = useQuery<DistributionRow[]>({
+    queryKey: ['cycle_pending_distributions', currentMonth.start, currentMonth.end],
     queryFn: async () => {
+      // Closing reads from payout_distributions — every per-payment MLM credit that
+      // actually landed in a broker's wallet during this period.  Includes direct AND
+      // every upline differential, NOT just the booking's direct broker.
       const { data, error } = await supabase
-        .from('bp_bookings')
-        .select('id, broker_id, commission_amount, total_amount, application_date, closed_at, stage, brokers(name, broker_id)')
-        .eq('stage', 'booking_done')
-        .gte('application_date', currentMonth.start)
-        .lte('application_date', currentMonth.end)
+        .from('payout_distributions')
+        .select('id, beneficiary_broker_id, booking_id, gross_payout, tds_amount, admin_charge, net_payout, created_at, brokers!payout_distributions_beneficiary_broker_id_fkey(name, broker_id)')
+        .gte('created_at', currentMonth.start)
+        .lte('created_at', `${currentMonth.end}T23:59:59.999Z`)
       if (error) throw error
-      return (data || []).map((b: any) => ({
-        booking_id:        b.id,
-        broker_id:         b.broker_id,
-        broker_name:       b.brokers?.name || '—',
-        broker_code:       b.brokers?.broker_id || '—',
-        total_amount:      Number(b.total_amount || 0),
-        commission_amount: Number(b.commission_amount || 0),
-        application_date:  b.application_date,
-        closed_at:         b.closed_at,
+      return (data || []).map((d: any) => ({
+        id:           d.id,
+        broker_id:    d.beneficiary_broker_id,
+        broker_name:  d.brokers?.name || '—',
+        broker_code:  d.brokers?.broker_id || '—',
+        booking_id:   d.booking_id,
+        gross_payout: Number(d.gross_payout || 0),
+        tds_amount:   Number(d.tds_amount   || 0),
+        admin_charge: Number(d.admin_charge || 0),
+        net_payout:   Number(d.net_payout   || 0),
+        created_at:   d.created_at,
       }))
     },
   })
 
-  // Aggregate per broker for the close-period preview.
+  // Aggregate per broker for the close-period preview.  Sums already-deducted figures from each
+  // distribution row — no re-calculation of TDS/admin (avoiding the double-deduction the old
+  // bp_bookings.commission_amount path had at close time).
   const perBroker = useMemo(() => {
-    const map = new Map<string, { broker_id: string; broker_name: string; broker_code: string; gross: number; bookings: number }>()
+    const map = new Map<string, { broker_id: string; broker_name: string; broker_code: string; gross: number; tds: number; admin: number; net: number; bookings: Set<string>; distributions: number }>()
     for (const r of pendingCommissions) {
-      if (!r.broker_id || r.commission_amount <= 0) continue
-      const cur = map.get(r.broker_id) || { broker_id: r.broker_id, broker_name: r.broker_name, broker_code: r.broker_code, gross: 0, bookings: 0 }
-      cur.gross += r.commission_amount
-      cur.bookings += 1
+      if (!r.broker_id || r.net_payout <= 0) continue
+      const cur = map.get(r.broker_id) || { broker_id: r.broker_id, broker_name: r.broker_name, broker_code: r.broker_code, gross: 0, tds: 0, admin: 0, net: 0, bookings: new Set<string>(), distributions: 0 }
+      cur.gross += r.gross_payout
+      cur.tds   += r.tds_amount
+      cur.admin += r.admin_charge
+      cur.net   += r.net_payout
+      cur.distributions += 1
+      if (r.booking_id) cur.bookings.add(r.booking_id)
       map.set(r.broker_id, cur)
     }
-    return Array.from(map.values()).sort((a, b) => b.gross - a.gross)
+    return Array.from(map.values())
+      .map(b => ({ ...b, bookings: b.bookings.size }))
+      .sort((a, b) => b.net - a.net)
   }, [pendingCommissions])
 
   const totals = useMemo(() => {
     const gross = perBroker.reduce((s, r) => s + r.gross, 0)
-    const tds   = Math.round(gross * tdsPct / 100)
-    const admin = Math.round(gross * adminPct / 100)
-    return { gross, tds, admin, net: Math.max(0, gross - tds - admin), brokers: perBroker.length, bookings: pendingCommissions.length }
-  }, [perBroker, pendingCommissions.length, tdsPct, adminPct])
+    const tds   = perBroker.reduce((s, r) => s + r.tds,   0)
+    const admin = perBroker.reduce((s, r) => s + r.admin, 0)
+    const net   = perBroker.reduce((s, r) => s + r.net,   0)
+    const bookingSet = new Set<string>()
+    for (const r of pendingCommissions) if (r.booking_id) bookingSet.add(r.booking_id)
+    return { gross, tds, admin, net, brokers: perBroker.length, bookings: bookingSet.size, distributions: pendingCommissions.length }
+  }, [perBroker, pendingCommissions])
 
   const openCycle = (cycles as any[]).find(c => c.status === 'open' || c.status === 'reopened')
 
   const closeCycle = useMutation({
     mutationFn: async ({ reason }: { reason: string }) => {
-      if (perBroker.length === 0) throw new Error('Nothing to close — no eligible commissions in this period')
+      if (perBroker.length === 0) throw new Error('Nothing to close — no commission distributions in this period')
       const userId = await getCurrentUserId()
 
       // Upsert cycle row
@@ -123,23 +143,19 @@ export default function PayoutCycles() {
         .single()
       if (cErr || !cycle) throw cErr || new Error('Failed to create cycle')
 
-      // Generate one payout transaction per broker
-      const tx = perBroker.map(b => {
-        const tds   = Math.round(b.gross * tdsPct / 100)
-        const admin = Math.round(b.gross * adminPct / 100)
-        const net   = Math.max(0, b.gross - tds - admin)
-        return {
-          broker_id:      b.broker_id,
-          cycle_id:       cycle.id,
-          payout_type:    'cycle',
-          amount:         b.gross,
-          tds_amount:     tds,
-          admin_charge:   admin,
-          net_amount:     net,
-          status:         'pending',
-          notes:          `Cycle ${currentMonth.label} — ${b.bookings} booking${b.bookings !== 1 ? 's' : ''}`,
-        }
-      })
+      // Generate one payout transaction per broker — TDS / admin already deducted per distribution row.
+      // We sum the already-net figures rather than re-applying the percentages on gross (would double-deduct).
+      const tx = perBroker.map(b => ({
+        broker_id:      b.broker_id,
+        cycle_id:       cycle.id,
+        payout_type:    'cycle',
+        amount:         b.gross,
+        tds_amount:     b.tds,
+        admin_charge:   b.admin,
+        net_amount:     b.net,
+        status:         'pending',
+        notes:          `Cycle ${currentMonth.label} — ${b.distributions} distribution${b.distributions !== 1 ? 's' : ''} across ${b.bookings} booking${b.bookings !== 1 ? 's' : ''}`,
+      }))
       if (tx.length > 0) {
         const { error: txErr } = await supabase.from('bp_payout_transactions').insert(tx)
         if (txErr) throw txErr
@@ -238,14 +254,14 @@ export default function PayoutCycles() {
           </div>
           <div className="flex gap-2">
             <Button variant="secondary" onClick={() => setShowPreview(s => !s)}>{showPreview ? 'Hide preview' : 'Preview totals'}</Button>
-            <Button onClick={() => setClosureFor({ cycle: { ...currentMonth }, action: 'close' })} disabled={totals.bookings === 0}>
+            <Button onClick={() => setClosureFor({ cycle: { ...currentMonth }, action: 'close' })} disabled={totals.distributions === 0}>
               <Lock size={14}/>Close period
             </Button>
           </div>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-          <Stat icon={<TrendingUp size={14}/>}   label="Eligible bookings" value={String(totals.bookings)} />
+          <Stat icon={<TrendingUp size={14}/>}   label={`Distributions`}   value={String(totals.distributions)} />
           <Stat icon={<Users size={14}/>}        label="Brokers"           value={String(totals.brokers)} />
           <Stat icon={<IndianRupee size={14}/>}  label="Gross commission"  value={formatINR(totals.gross)} accent="text-gray-900" />
           <Stat icon={<IndianRupee size={14}/>}  label={`TDS (${tdsPct}%)`} value={formatINR(totals.tds)} accent="text-rose-700" />
@@ -253,8 +269,8 @@ export default function PayoutCycles() {
           <Stat icon={<Banknote size={14}/>}     label="Net payable"       value={formatINR(totals.net)} accent="text-emerald-700" />
         </div>
 
-        {totals.bookings === 0 && (
-          <div className="mt-4 text-xs text-gray-500">No bookings with commission in this period yet. Mark bookings as <b>Booking Done</b> and assign a broker so they're picked up here.</div>
+        {totals.distributions === 0 && (
+          <div className="mt-4 text-xs text-gray-500">No commission distributions in this period yet. Distributions land here automatically when a customer pays — verify payments on the <b>Payments</b> page.</div>
         )}
 
         {showPreview && perBroker.length > 0 && (
@@ -263,25 +279,21 @@ export default function PayoutCycles() {
             <div className="max-h-72 overflow-y-auto">
               <table className="w-full text-xs">
                 <thead className="bg-gray-50 sticky top-0">
-                  <tr>{['Broker','Code','Bookings','Gross','TDS','Admin','Net'].map(h => <th key={h} className="px-3 py-2 text-left text-gray-500 font-semibold">{h}</th>)}</tr>
+                  <tr>{['Broker','Code','Distributions','Bookings','Gross','TDS','Admin','Net'].map(h => <th key={h} className="px-3 py-2 text-left text-gray-500 font-semibold">{h}</th>)}</tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {perBroker.map(b => {
-                    const tds   = Math.round(b.gross * tdsPct / 100)
-                    const admin = Math.round(b.gross * adminPct / 100)
-                    const net   = Math.max(0, b.gross - tds - admin)
-                    return (
-                      <tr key={b.broker_id}>
-                        <td className="px-3 py-2 font-medium">{b.broker_name}</td>
-                        <td className="px-3 py-2 font-mono text-gray-500">{b.broker_code}</td>
-                        <td className="px-3 py-2">{b.bookings}</td>
-                        <td className="px-3 py-2 font-semibold">{formatINR(b.gross)}</td>
-                        <td className="px-3 py-2 text-rose-700">{formatINR(tds)}</td>
-                        <td className="px-3 py-2 text-amber-700">{formatINR(admin)}</td>
-                        <td className="px-3 py-2 font-bold text-emerald-700">{formatINR(net)}</td>
-                      </tr>
-                    )
-                  })}
+                  {perBroker.map(b => (
+                    <tr key={b.broker_id}>
+                      <td className="px-3 py-2 font-medium">{b.broker_name}</td>
+                      <td className="px-3 py-2 font-mono text-gray-500">{b.broker_code}</td>
+                      <td className="px-3 py-2">{b.distributions}</td>
+                      <td className="px-3 py-2">{b.bookings}</td>
+                      <td className="px-3 py-2 font-semibold">{formatINR(b.gross)}</td>
+                      <td className="px-3 py-2 text-rose-700">{formatINR(b.tds)}</td>
+                      <td className="px-3 py-2 text-amber-700">{formatINR(b.admin)}</td>
+                      <td className="px-3 py-2 font-bold text-emerald-700">{formatINR(b.net)}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -300,7 +312,7 @@ export default function PayoutCycles() {
         entityLabel={`payout cycle ${closureFor?.cycle?.period_label || ''}`}
         description={
           closureFor?.action === 'close'
-            ? `Closing freezes commissions earned in ${currentMonth.label}. A pending payout transaction will be generated for each of the ${totals.brokers} broker${totals.brokers !== 1 ? 's' : ''} with TDS + admin deducted (Net: ${formatINR(totals.net)}).`
+            ? `Closing freezes the ${totals.distributions} distribution${totals.distributions !== 1 ? 's' : ''} that landed in ${currentMonth.label}. A pending payout transaction will be generated for each of the ${totals.brokers} broker${totals.brokers !== 1 ? 's' : ''} using the already-deducted figures (Net payable: ${formatINR(totals.net)}).`
             : 'Reopening clears all pending transactions generated by this cycle close. Brokers will see their wallets reset to pre-close state.'
         }
         warning={closureFor?.action === 'close' && openCycle ? `Previous "open" cycle ${openCycle.period_label} still exists. Closing this period creates a new closed cycle for ${currentMonth.label}.` : undefined}
