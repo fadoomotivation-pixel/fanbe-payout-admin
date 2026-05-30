@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
-import { computeWithdrawal, loadPayoutConfig, type PayoutConfig } from '@/lib/payoutEngine'
+import { computeWithdrawal, loadPayoutConfig, loadBrokerWallets, type PayoutConfig, type BrokerWallet } from '@/lib/payoutEngine'
 import { logClosure, getCurrentUserId } from '@/lib/closure'
 import { ClosureDialog } from '@/components/ClosureDialog'
 import { Lock, Unlock, Plus, Search, Wallet, Banknote, Send, AlertCircle, X } from 'lucide-react'
@@ -32,7 +32,7 @@ type Broker = {
 export default function Withdrawals() {
   const [rows, setRows] = useState<Row[]>([])
   const [brokers, setBrokers] = useState<Broker[]>([])
-  const [walletByBroker, setWalletByBroker] = useState<Record<string, { earned: number; paid: number; pending: number }>>({})
+  const [walletByBroker, setWalletByBroker] = useState<Record<string, BrokerWallet>>({})
   const [cfg, setCfg]   = useState<PayoutConfig | null>(null)
   const [closureFor, setClosureFor] = useState<{ row: Row; action: 'close' | 'reopen' } | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -61,27 +61,9 @@ export default function Withdrawals() {
     if (e1) toast.error(e1.message); else setRows((w || []) as Row[])
     setBrokers((bs || []) as Broker[])
 
-    // Build wallet map: earned (from payout_distributions.net_payout — the same source-of-truth
-    // every broker dashboard reads), paid (withdrawals.paid|closed), pending (withdrawals.pending|approved).
-    // We DO NOT use bp_bookings.commission_amount — that's the promised lifetime commission and
-    // would let brokers withdraw against money customers haven't actually paid yet.
-    const [{ data: dist }, { data: wds }] = await Promise.all([
-      supabase.from('payout_distributions').select('beneficiary_broker_id, net_payout'),
-      supabase.from('withdrawal_requests').select('broker_id, amount, net_amount, status'),
-    ])
-    const wallet: Record<string, { earned: number; paid: number; pending: number }> = {}
-    for (const d of (dist || []) as any[]) {
-      if (!d.beneficiary_broker_id) continue
-      wallet[d.beneficiary_broker_id] = wallet[d.beneficiary_broker_id] || { earned: 0, paid: 0, pending: 0 }
-      wallet[d.beneficiary_broker_id].earned += Number(d.net_payout || 0)
-    }
-    for (const w of (wds || []) as any[]) {
-      if (!w.broker_id) continue
-      wallet[w.broker_id] = wallet[w.broker_id] || { earned: 0, paid: 0, pending: 0 }
-      if (w.status === 'paid' || w.status === 'closed') wallet[w.broker_id].paid    += Number(w.net_amount || w.amount || 0)
-      if (w.status === 'pending' || w.status === 'approved') wallet[w.broker_id].pending += Number(w.amount || 0)
-    }
-    setWalletByBroker(wallet)
+    // Shared wallet helper — sums BOTH withdrawal_requests and bp_payout_transactions so the
+    // "available" figure here matches the /payouts page and the broker's own dashboard exactly.
+    setWalletByBroker(await loadBrokerWallets())
   }
   useEffect(() => { load(); loadPayoutConfig().then(setCfg) }, [])
 
@@ -127,8 +109,8 @@ export default function Withdrawals() {
     setOverrideBank(false); setBankOverride({ bank_name: '', account_no: '', ifsc: '', account_holder: '' })
   }
   const selectedBroker = createBrokerId ? brokerLookup[createBrokerId] : null
-  const wallet = selectedBroker ? walletByBroker[selectedBroker.id] || { earned: 0, paid: 0, pending: 0 } : null
-  const available = wallet ? Math.max(0, wallet.earned - wallet.paid - wallet.pending) : 0
+  const wallet = selectedBroker ? walletByBroker[selectedBroker.id] || { earned: 0, paid: 0, pending: 0, available: 0 } : null
+  const available = wallet?.available ?? 0
   const computeForCreate = useMemo(() => {
     if (!cfg) return null
     const amt = parseFloat(createAmount) || 0
@@ -367,7 +349,7 @@ export default function Withdrawals() {
                     <div className="border border-gray-200 rounded-lg max-h-48 overflow-y-auto divide-y divide-gray-50">
                       {filteredBrokersForPicker.length === 0 && <div className="p-3 text-xs text-gray-400">No brokers match.</div>}
                       {filteredBrokersForPicker.map(b => {
-                        const w = walletByBroker[b.id] || { earned: 0, paid: 0, pending: 0 }
+                        const w = walletByBroker[b.id] || { earned: 0, paid: 0, pending: 0, available: 0 }
                         const avail = Math.max(0, w.earned - w.paid - w.pending)
                         return (
                           <button key={b.id} onClick={() => setCreateBrokerId(b.id)} className="w-full px-3 py-2 text-left hover:bg-emerald-50/60 flex items-center justify-between">

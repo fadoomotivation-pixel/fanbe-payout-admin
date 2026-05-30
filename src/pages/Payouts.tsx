@@ -82,18 +82,18 @@ export default function Payouts() {
     },
   })
 
-  // Paid withdrawals = broker-initiated debits.  Only needed for the activity-log view
-  // (per-broker rollup tracks paid amount via bp_payout_transactions).
-  const { data: paidWithdrawals = [] } = useQuery({
-    queryKey: ['paid_withdrawals_for_ledger'],
+  // All withdrawal_requests, every status.  Needed by both views: the activity ledger
+  // (paid debits) and the per-broker rollup ("owed" balance considers paid + pending).
+  const { data: allWithdrawals = [] } = useQuery({
+    queryKey: ['withdrawals_for_payouts'],
     queryFn: async () => {
       const { data } = await supabase
         .from('withdrawal_requests')
-        .select('id, broker_id, net_amount, amount, paid_at, status, utr')
-        .eq('status', 'paid')
+        .select('id, broker_id, net_amount, amount, paid_at, created_at, status, utr')
       return data || []
     },
   })
+  const paidWithdrawals = useMemo(() => (allWithdrawals as any[]).filter(w => w.status === 'paid'), [allWithdrawals])
 
   const update = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: any }) => {
@@ -128,13 +128,13 @@ export default function Payouts() {
       row.distributions.push(d)
     }
 
-    // Transactions = payout requests / batches
+    // Transactions = cycle-batch payouts
     for (const t of (txns as any[])) {
       const k = t.broker_id
       if (!k) continue
       if (!map.has(k)) {
         const b = brokerLookup[k]
-        map.set(k, { broker_id: k, broker: b || t.brokers, earned: 0, paid: 0, pending_payout: 0, approved_payout: 0, txns: [] as any[], distributions: [] as any[] })
+        map.set(k, { broker_id: k, broker: b || t.brokers, earned: 0, paid: 0, pending_payout: 0, approved_payout: 0, txns: [] as any[], distributions: [] as any[], withdrawals: [] as any[] })
       }
       const row = map.get(k)
       row.txns.push(t)
@@ -144,10 +144,28 @@ export default function Payouts() {
       else if (t.status === 'pending')  row.pending_payout += net
     }
 
+    // Withdrawal_requests = broker self-initiated payouts.  Treated as the same kind of
+    // debit as a cycle-batch txn so the "owed" balance can't be double-spent.
+    for (const w of (allWithdrawals as any[])) {
+      const k = w.broker_id
+      if (!k) continue
+      if (!map.has(k)) {
+        const b = brokerLookup[k]
+        map.set(k, { broker_id: k, broker: b, earned: 0, paid: 0, pending_payout: 0, approved_payout: 0, txns: [] as any[], distributions: [] as any[], withdrawals: [] as any[] })
+      }
+      const row = map.get(k)
+      row.withdrawals = row.withdrawals || []
+      row.withdrawals.push(w)
+      const net = Number(w.net_amount || w.amount || 0)
+      if (w.status === 'paid' || w.status === 'closed') row.paid += net
+      else if (w.status === 'approved')                row.approved_payout += net
+      else if (w.status === 'pending')                 row.pending_payout += net
+    }
+
     return Array.from(map.values())
       .map(r => ({ ...r, balance: Math.max(0, r.earned - r.paid - r.approved_payout - r.pending_payout) }))
       .sort((a, b) => (b.earned + b.paid) - (a.earned + a.paid))
-  }, [distributions, txns, brokers])
+  }, [distributions, txns, allWithdrawals, brokers])
 
   // ── KPIs ────────────────────────────────────────────────────────
   const kpis = useMemo(() => {

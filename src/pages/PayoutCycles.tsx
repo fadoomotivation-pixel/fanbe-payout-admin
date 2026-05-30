@@ -1,14 +1,14 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
-import { Table } from '@/components/ui/Table.tsx'
 import { Button } from '@/components/ui/Button.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
-import { formatINR, formatDate } from '@/lib/utils'
+import { formatINR, formatDate, PAYOUT_STATUS_COLORS } from '@/lib/utils'
 import { loadPayoutConfig, type PayoutConfig } from '@/lib/payoutEngine'
 import { logClosure, getCurrentUserId, monthRange } from '@/lib/closure'
 import { ClosureDialog } from '@/components/ClosureDialog'
-import { CalendarRange, Lock, Unlock, TrendingUp, Users, IndianRupee, Banknote } from 'lucide-react'
+import { CalendarRange, Lock, Unlock, TrendingUp, Users, IndianRupee, Banknote, ChevronRight, ExternalLink } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -38,6 +38,12 @@ export default function PayoutCycles() {
   const qc = useQueryClient()
   const [closureFor, setClosureFor] = useState<{ cycle: any; action: 'close' | 'reopen' } | null>(null)
   const [showPreview, setShowPreview] = useState(false)
+  // Period picker — admin can close a prior month if data was backfilled.  Default = current month.
+  const [periodAnchor, setPeriodAnchor] = useState<string>(() => new Date().toISOString().slice(0, 7))
+  // Search/filter for past cycles (e.g. only those containing a specific broker)
+  const [brokerFilter, setBrokerFilter] = useState<string>('')
+  // Expanded closed-cycle rows
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   const { data: cfg } = useQuery<PayoutConfig>({ queryKey: ['payout_config'], queryFn: loadPayoutConfig })
   const tdsPct   = cfg?.tds_pct ?? 0
@@ -52,11 +58,26 @@ export default function PayoutCycles() {
     },
   })
 
-  // Current month's eligible bookings (closed bookings with commission, not yet attached to any cycle)
-  const currentMonth = useMemo(() => monthRange(new Date()), [])
+  // List every broker so the period-cycle filter and the close preview both stay aware of
+  // brokers that have zero distributions in the active period.
+  const { data: brokers = [] } = useQuery({
+    queryKey: ['payout_cycles_brokers_lite'],
+    queryFn: async () => {
+      const { data } = await supabase.from('brokers').select('id, name, broker_id').order('name')
+      return data || []
+    },
+  })
+
+  // Driven by periodAnchor (a YYYY-MM string).  When it changes, the eligible-distributions
+  // query refires for that month so admin can preview and close ANY past month.
+  const activeMonth = useMemo(() => {
+    const [yStr, mStr] = periodAnchor.split('-')
+    const anchor = new Date(Number(yStr), Number(mStr) - 1, 1)
+    return monthRange(anchor)
+  }, [periodAnchor])
 
   const { data: pendingCommissions = [] } = useQuery<DistributionRow[]>({
-    queryKey: ['cycle_pending_distributions', currentMonth.start, currentMonth.end],
+    queryKey: ['cycle_pending_distributions', activeMonth.start, activeMonth.end],
     queryFn: async () => {
       // Closing reads from payout_distributions — every per-payment MLM credit that
       // actually landed in a broker's wallet during this period.  Includes direct AND
@@ -64,8 +85,8 @@ export default function PayoutCycles() {
       const { data, error } = await supabase
         .from('payout_distributions')
         .select('id, beneficiary_broker_id, booking_id, gross_payout, tds_amount, admin_charge, net_payout, created_at, brokers!payout_distributions_beneficiary_broker_id_fkey(name, broker_id)')
-        .gte('created_at', currentMonth.start)
-        .lte('created_at', `${currentMonth.end}T23:59:59.999Z`)
+        .gte('created_at', activeMonth.start)
+        .lte('created_at', `${activeMonth.end}T23:59:59.999Z`)
       if (error) throw error
       return (data || []).map((d: any) => ({
         id:           d.id,
@@ -124,9 +145,9 @@ export default function PayoutCycles() {
       const { data: cycle, error: cErr } = await supabase
         .from('payout_cycles')
         .upsert({
-          period_label:    currentMonth.label,
-          period_start:    currentMonth.start,
-          period_end:      currentMonth.end,
+          period_label:    activeMonth.label,
+          period_start:    activeMonth.start,
+          period_end:      activeMonth.end,
           status:          'closed',
           total_bookings:  totals.bookings,
           total_brokers:   totals.brokers,
@@ -154,7 +175,7 @@ export default function PayoutCycles() {
         admin_charge:   b.admin,
         net_amount:     b.net,
         status:         'pending',
-        notes:          `Cycle ${currentMonth.label} — ${b.distributions} distribution${b.distributions !== 1 ? 's' : ''} across ${b.bookings} booking${b.bookings !== 1 ? 's' : ''}`,
+        notes:          `Cycle ${activeMonth.label} — ${b.distributions} distribution${b.distributions !== 1 ? 's' : ''} across ${b.bookings} booking${b.bookings !== 1 ? 's' : ''}`,
       }))
       if (tx.length > 0) {
         const { error: txErr } = await supabase.from('bp_payout_transactions').insert(tx)
@@ -166,7 +187,7 @@ export default function PayoutCycles() {
         entityId:   cycle.id,
         action:     'closed',
         reason,
-        metadata: { period: currentMonth.label, brokers: totals.brokers, gross: totals.gross, net: totals.net },
+        metadata: { period: activeMonth.label, brokers: totals.brokers, gross: totals.gross, net: totals.net },
       })
       return cycle
     },
@@ -210,28 +231,42 @@ export default function PayoutCycles() {
     onError: (e: any) => toast.error(e.message),
   })
 
-  const cols = [
-    { header: 'Period', render: (r: any) => (
-      <div>
-        <div className="font-semibold">{r.period_label}</div>
-        <div className="text-[11px] text-gray-400">{formatDate(r.period_start)} → {formatDate(r.period_end)}</div>
-      </div>
-    )},
-    { header: 'Bookings', render: (r: any) => <span className="text-sm">{r.total_bookings || 0}</span> },
-    { header: 'Brokers',  render: (r: any) => <span className="text-sm">{r.total_brokers || 0}</span> },
-    { header: 'Gross',    render: (r: any) => <span className="font-semibold">{formatINR(r.total_gross)}</span> },
-    { header: 'TDS',      render: (r: any) => <span className="text-rose-700">{formatINR(r.total_tds)}</span> },
-    { header: 'Admin',    render: (r: any) => <span className="text-amber-700">{formatINR(r.total_admin)}</span> },
-    { header: 'Net Payable', render: (r: any) => <span className="font-bold text-emerald-700">{formatINR(r.total_net)}</span> },
-    { header: 'Status',   render: (r: any) => <Badge label={r.status} className={STATUS_COLORS[r.status] || 'bg-gray-100 text-gray-700'} /> },
-    { header: 'Closed', render: (r: any) => r.closed_at ? <span className="text-xs text-gray-500">{formatDate(r.closed_at)}</span> : <span className="text-xs text-gray-300">—</span> },
-    { header: '', render: (r: any) => {
-      if (r.status === 'closed' || r.status === 'settled') {
-        return <Button size="sm" variant="secondary" onClick={() => setClosureFor({ cycle: r, action: 'reopen' })}><Unlock size={12}/>Reopen</Button>
-      }
-      return null
-    }},
-  ]
+  // Load every cycle-generated transaction across all cycles in one round-trip; partition
+  // per-cycle in memory.  Cheap even at 100s of cycles, avoids N+1 queries on row-expand.
+  const { data: allCycleTxns = [] } = useQuery({
+    queryKey: ['cycle_txns_all'],
+    queryFn: async () => {
+      const { data } = await supabase.from('bp_payout_transactions')
+        .select('id, cycle_id, broker_id, amount, tds_amount, admin_charge, net_amount, status, payout_type, utr_ref, paid_date, created_at, brokers(name, broker_id)')
+        .eq('payout_type', 'cycle')
+        .order('created_at', { ascending: false })
+      return data || []
+    },
+  })
+
+  const txnsByCycle = useMemo(() => {
+    const m: Record<string, any[]> = {}
+    for (const t of allCycleTxns as any[]) {
+      if (!t.cycle_id) continue
+      ;(m[t.cycle_id] ??= []).push(t)
+    }
+    return m
+  }, [allCycleTxns])
+
+  const cyclesWithStatus = useMemo(() => {
+    return (cycles as any[]).map((c: any) => {
+      const ts = txnsByCycle[c.id] || []
+      const paidCount    = ts.filter((t: any) => t.status === 'paid').length
+      const pendingCount = ts.filter((t: any) => t.status === 'pending').length
+      const approvedCount = ts.filter((t: any) => t.status === 'approved').length
+      return { ...c, ts, paidCount, pendingCount, approvedCount, totalCount: ts.length }
+    }).filter((c: any) => {
+      if (!brokerFilter) return true
+      return (c.ts as any[]).some(t => t.broker_id === brokerFilter)
+    })
+  }, [cycles, txnsByCycle, brokerFilter])
+
+  const toggleExpand = (id: string) => setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
 
   return (
     <div>
@@ -246,15 +281,20 @@ export default function PayoutCycles() {
       </div>
 
       <div className="bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-100 rounded-2xl p-5 mb-6">
-        <div className="flex items-start justify-between mb-4">
+        <div className="flex items-start justify-between mb-4 flex-wrap gap-3">
           <div>
-            <div className="text-xs font-semibold text-indigo-600 uppercase tracking-wider mb-1">Current Open Period</div>
-            <div className="text-lg font-bold text-gray-900">{currentMonth.label}</div>
-            <div className="text-xs text-gray-500">{formatDate(currentMonth.start)} → {formatDate(currentMonth.end)}</div>
+            <div className="text-xs font-semibold text-indigo-600 uppercase tracking-wider mb-1">Period to close</div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <input type="month" value={periodAnchor} onChange={e => setPeriodAnchor(e.target.value)}
+                className="bg-white border border-indigo-200 rounded-lg px-3 py-1.5 text-sm font-semibold focus:outline-none focus:border-indigo-400"/>
+              <button onClick={() => setPeriodAnchor(new Date().toISOString().slice(0, 7))}
+                className="text-[11px] text-indigo-600 hover:underline">Reset to current</button>
+            </div>
+            <div className="text-xs text-gray-500 mt-1">{activeMonth.label} · {formatDate(activeMonth.start)} → {formatDate(activeMonth.end)}</div>
           </div>
           <div className="flex gap-2">
             <Button variant="secondary" onClick={() => setShowPreview(s => !s)}>{showPreview ? 'Hide preview' : 'Preview totals'}</Button>
-            <Button onClick={() => setClosureFor({ cycle: { ...currentMonth }, action: 'close' })} disabled={totals.distributions === 0}>
+            <Button onClick={() => setClosureFor({ cycle: { ...activeMonth }, action: 'close' })} disabled={totals.distributions === 0}>
               <Lock size={14}/>Close period
             </Button>
           </div>
@@ -301,9 +341,92 @@ export default function PayoutCycles() {
         )}
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
-        <div className="px-4 py-3 border-b border-gray-100 text-sm font-semibold text-gray-700">Closed cycles</div>
-        <Table columns={cols} data={cycles} loading={isLoading} />
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between gap-2 flex-wrap">
+          <div className="text-sm font-semibold text-gray-700">Closed cycles ({cyclesWithStatus.length})</div>
+          <select value={brokerFilter} onChange={e => setBrokerFilter(e.target.value)}
+            className="bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:border-gray-400">
+            <option value="">Filter by broker — all</option>
+            {(brokers as any[]).map((b: any) => <option key={b.id} value={b.id}>{b.name} [{b.broker_id}]</option>)}
+          </select>
+        </div>
+
+        {isLoading && <div className="py-10 text-center text-sm text-gray-400">Loading cycles…</div>}
+        {!isLoading && cyclesWithStatus.length === 0 && (
+          <div className="py-10 text-center text-sm text-gray-400">{brokerFilter ? 'No cycles contain that broker yet.' : 'No closed cycles yet. Use Close period above to create the first one.'}</div>
+        )}
+
+        <div className="divide-y divide-gray-100">
+          {cyclesWithStatus.map((r: any) => {
+            const open = expanded.has(r.id)
+            return (
+              <div key={r.id}>
+                <button onClick={() => toggleExpand(r.id)} className="w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-gray-50">
+                  <ChevronRight size={14} className={`text-gray-400 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`}/>
+                  <div className="min-w-0 flex-1">
+                    <div className="font-semibold text-gray-900">{r.period_label}</div>
+                    <div className="text-[11px] text-gray-400">{formatDate(r.period_start)} → {formatDate(r.period_end)} · closed {r.closed_at ? formatDate(r.closed_at) : '—'}</div>
+                  </div>
+                  <div className="hidden sm:flex flex-col items-end shrink-0">
+                    <div className="text-[10px] text-gray-400">Net payable</div>
+                    <div className="font-bold text-emerald-700 tabular-nums">{formatINR(r.total_net)}</div>
+                  </div>
+                  <div className="flex flex-col items-end shrink-0 text-[11px] tabular-nums">
+                    <span className="text-emerald-700">{r.paidCount} paid</span>
+                    {r.approvedCount > 0 && <span className="text-amber-700">{r.approvedCount} approved</span>}
+                    {r.pendingCount > 0 && <span className="text-orange-700">{r.pendingCount} pending</span>}
+                    <span className="text-gray-400">{r.totalCount} txn{r.totalCount === 1 ? '' : 's'}</span>
+                  </div>
+                  <Badge label={r.status} className={STATUS_COLORS[r.status] || 'bg-gray-100 text-gray-700'} />
+                  {(r.status === 'closed' || r.status === 'settled') && (
+                    <Button size="sm" variant="secondary" onClick={(e: any) => { e.stopPropagation(); setClosureFor({ cycle: r, action: 'reopen' }) }}><Unlock size={12}/>Reopen</Button>
+                  )}
+                </button>
+
+                {open && (
+                  <div className="bg-gray-50/60 px-12 py-4 border-t border-gray-100 space-y-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                      <Stat icon={<Users size={13}/>}        label="Brokers"  value={String(r.total_brokers || 0)} />
+                      <Stat icon={<IndianRupee size={13}/>}  label="Gross"    value={formatINR(r.total_gross)} accent="text-gray-900"/>
+                      <Stat icon={<IndianRupee size={13}/>}  label="TDS"      value={formatINR(r.total_tds)}   accent="text-rose-700"/>
+                      <Stat icon={<IndianRupee size={13}/>}  label="Admin"    value={formatINR(r.total_admin)} accent="text-amber-700"/>
+                    </div>
+
+                    {r.ts.length === 0 ? (
+                      <div className="text-xs text-gray-400 italic">No payout transactions on this cycle yet.</div>
+                    ) : (
+                      <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead className="bg-gray-50 text-gray-500"><tr>{['Broker','Code','Gross','TDS','Admin','Net','Status','UTR','Paid date','Manage'].map(h => <th key={h} className="px-3 py-2 text-left">{h}</th>)}</tr></thead>
+                          <tbody className="divide-y divide-gray-50">
+                            {(r.ts as any[]).filter(t => !brokerFilter || t.broker_id === brokerFilter).map((t: any) => (
+                              <tr key={t.id}>
+                                <td className="px-3 py-2 font-medium">{t.brokers?.name || '—'}</td>
+                                <td className="px-3 py-2 font-mono text-gray-500">{t.brokers?.broker_id || '—'}</td>
+                                <td className="px-3 py-2">{formatINR(t.amount)}</td>
+                                <td className="px-3 py-2 text-rose-600">−{formatINR(t.tds_amount || 0)}</td>
+                                <td className="px-3 py-2 text-amber-700">−{formatINR(t.admin_charge || 0)}</td>
+                                <td className="px-3 py-2 font-semibold text-emerald-700">{formatINR(t.net_amount || 0)}</td>
+                                <td className="px-3 py-2"><Badge label={t.status} className={PAYOUT_STATUS_COLORS[t.status] || 'bg-gray-100 text-gray-700'}/></td>
+                                <td className="px-3 py-2 font-mono">{t.utr_ref || '—'}</td>
+                                <td className="px-3 py-2">{t.paid_date ? formatDate(t.paid_date) : '—'}</td>
+                                <td className="px-3 py-2">
+                                  <Link to={`/payouts?broker=${t.broker_id}`} className="text-xs text-blue-700 hover:underline inline-flex items-center gap-0.5">
+                                    Open <ExternalLink size={10}/>
+                                  </Link>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
       </div>
 
       <ClosureDialog
@@ -312,10 +435,10 @@ export default function PayoutCycles() {
         entityLabel={`payout cycle ${closureFor?.cycle?.period_label || ''}`}
         description={
           closureFor?.action === 'close'
-            ? `Closing freezes the ${totals.distributions} distribution${totals.distributions !== 1 ? 's' : ''} that landed in ${currentMonth.label}. A pending payout transaction will be generated for each of the ${totals.brokers} broker${totals.brokers !== 1 ? 's' : ''} using the already-deducted figures (Net payable: ${formatINR(totals.net)}).`
+            ? `Closing freezes the ${totals.distributions} distribution${totals.distributions !== 1 ? 's' : ''} that landed in ${activeMonth.label}. A pending payout transaction will be generated for each of the ${totals.brokers} broker${totals.brokers !== 1 ? 's' : ''} using the already-deducted figures (Net payable: ${formatINR(totals.net)}).`
             : 'Reopening clears all pending transactions generated by this cycle close. Brokers will see their wallets reset to pre-close state.'
         }
-        warning={closureFor?.action === 'close' && openCycle ? `Previous "open" cycle ${openCycle.period_label} still exists. Closing this period creates a new closed cycle for ${currentMonth.label}.` : undefined}
+        warning={closureFor?.action === 'close' && openCycle ? `Previous "open" cycle ${openCycle.period_label} still exists. Closing this period creates a new closed cycle for ${activeMonth.label}.` : undefined}
         reasonRequired={closureFor?.action === 'reopen'}
         onClose={() => setClosureFor(null)}
         onConfirm={async (reason) => {

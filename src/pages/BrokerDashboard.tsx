@@ -33,6 +33,7 @@ export default function BrokerDashboard() {
   const [downlineEarnings, setDownlineEarnings] = useState<Record<string, number>>({})
   const [payouts, setPayouts] = useState<any[]>([])
   const [withdrawals, setWithdrawals] = useState<any[]>([])
+  const [cycleTxns, setCycleTxns] = useState<any[]>([])
   const [bookings, setBookings] = useState<any[]>([])
   const [customers, setCustomers] = useState<any[]>([])
   const [expandedCust, setExpandedCust] = useState<string | null>(null)
@@ -79,7 +80,7 @@ export default function BrokerDashboard() {
     }
     setBroker(b)
 
-    const [rk, dl, po, wd, bk] = await Promise.all([
+    const [rk, dl, po, wd, bk, cycleTx] = await Promise.all([
       supabase.from('commission_ranks').select('*').eq('active', true).order('level', { ascending: true }),
       supabase.from('brokers').select('id, name, broker_id, rank, phone, status').eq('sponsor_id', b.id),
       supabase.from('payout_distributions').select('*, bp_bookings(booking_no, bp_customers(name), bp_plots(plot_no))').eq('beneficiary_broker_id', b.id).order('created_at', { ascending: false }).limit(200),
@@ -89,11 +90,15 @@ export default function BrokerDashboard() {
         .select('id, booking_no, customer_id, plot_total_price, total_amount, booking_amount, commission_amount, stage, scheme_name, application_date, bp_customers(id,customer_code,name,phone,father_or_husband_name), bp_plots(plot_no,size_sqyd), bp_projects(name)')
         .eq('broker_id', b.id)
         .order('created_at', { ascending: false }),
+      // Cycle-batch payouts for this broker — must count toward "paid out" and reduce "available"
+      // so the broker can't withdraw money admin already paid via a Payout Cycle batch.
+      supabase.from('bp_payout_transactions').select('id, net_amount, amount, status, paid_date, payout_type, utr_ref, cycle_id, created_at').eq('broker_id', b.id),
     ])
     setRanks(rk.data || [])
     setDownline(dl.data || [])
     setPayouts(po.data || [])
     setWithdrawals(wd.data || [])
+    setCycleTxns(cycleTx.data || [])
     setBookings(bk.data || [])
 
     // Downline earnings (their commissions)
@@ -193,13 +198,19 @@ export default function BrokerDashboard() {
     const promisedTotal = confirmed.reduce((s: number, b: any) => s + Number(b.commission_amount || 0), 0)
     const promisedPending = Math.max(0, promisedTotal - totalEarned)
 
-    const paidOut = withdrawals.filter((w: any) => w.status === 'paid').reduce((s: number, w: any) => s + Number(w.net_amount || w.amount || 0), 0)
-    const pendingWithdrawals = withdrawals.filter((w: any) => w.status === 'pending' || w.status === 'approved').reduce((s: number, w: any) => s + Number(w.amount || 0), 0)
-    const availableBalance = Math.max(0, totalEarned - paidOut - pendingWithdrawals)
+    // "Paid out" + "pending" both pool the two payout channels — self-initiated withdrawals
+    // AND admin-initiated cycle-batch transactions — so available balance never double-counts.
+    const wdPaid     = withdrawals.filter((w: any) => w.status === 'paid' || w.status === 'closed').reduce((s: number, w: any) => s + Number(w.net_amount || w.amount || 0), 0)
+    const wdPending  = withdrawals.filter((w: any) => w.status === 'pending' || w.status === 'approved').reduce((s: number, w: any) => s + Number(w.amount || 0), 0)
+    const cyPaid     = (cycleTxns || []).filter((t: any) => t.status === 'paid').reduce((s: number, t: any) => s + Number(t.net_amount || t.amount || 0), 0)
+    const cyPending  = (cycleTxns || []).filter((t: any) => t.status === 'pending' || t.status === 'approved').reduce((s: number, t: any) => s + Number(t.net_amount || t.amount || 0), 0)
+    const paidOut    = wdPaid + cyPaid
+    const pending    = wdPending + cyPending
+    const availableBalance = Math.max(0, totalEarned - paidOut - pending)
     const totalVolume = confirmed.reduce((s: number, b: any) => s + Number(b.total_amount || b.plot_total_price || 0), 0)
     const teamVolume = Object.values(downlineEarnings).reduce((s, v) => s + v, 0)
     return { totalEarned, earnedThisMonth, paidOut, availableBalance, totalVolume, teamVolume, confirmedCount: confirmed.length, promisedTotal, promisedPending }
-  }, [bookings, withdrawals, downlineEarnings, payouts])
+  }, [bookings, withdrawals, downlineEarnings, payouts, cycleTxns])
 
   // Last 6 months earnings bar chart
   const monthlyEarnings = useMemo(() => {
