@@ -61,16 +61,19 @@ export default function Withdrawals() {
     if (e1) toast.error(e1.message); else setRows((w || []) as Row[])
     setBrokers((bs || []) as Broker[])
 
-    // Build wallet map: earned (booking_done.commission), paid (withdrawals.paid), pending (withdrawals.pending+approved)
-    const [{ data: bks }, { data: wds }] = await Promise.all([
-      supabase.from('bp_bookings').select('broker_id, commission_amount, stage').eq('stage', 'booking_done'),
+    // Build wallet map: earned (from payout_distributions.net_payout — the same source-of-truth
+    // every broker dashboard reads), paid (withdrawals.paid|closed), pending (withdrawals.pending|approved).
+    // We DO NOT use bp_bookings.commission_amount — that's the promised lifetime commission and
+    // would let brokers withdraw against money customers haven't actually paid yet.
+    const [{ data: dist }, { data: wds }] = await Promise.all([
+      supabase.from('payout_distributions').select('beneficiary_broker_id, net_payout'),
       supabase.from('withdrawal_requests').select('broker_id, amount, net_amount, status'),
     ])
     const wallet: Record<string, { earned: number; paid: number; pending: number }> = {}
-    for (const b of (bks || []) as any[]) {
-      if (!b.broker_id) continue
-      wallet[b.broker_id] = wallet[b.broker_id] || { earned: 0, paid: 0, pending: 0 }
-      wallet[b.broker_id].earned += Number(b.commission_amount || 0)
+    for (const d of (dist || []) as any[]) {
+      if (!d.beneficiary_broker_id) continue
+      wallet[d.beneficiary_broker_id] = wallet[d.beneficiary_broker_id] || { earned: 0, paid: 0, pending: 0 }
+      wallet[d.beneficiary_broker_id].earned += Number(d.net_payout || 0)
     }
     for (const w of (wds || []) as any[]) {
       if (!w.broker_id) continue
