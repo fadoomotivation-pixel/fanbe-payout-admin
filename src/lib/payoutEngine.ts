@@ -497,3 +497,48 @@ export function computeAchieversClub(
   const monthlyInstalment = round2(perAchiever / 3)           // paid over 3 months
   return { totalPool, perAchiever, monthlyInstalment }
 }
+
+// ── Broker wallet ────────────────────────────────────────────────────────────
+// Single source-of-truth for every page that needs to know what a broker has earned,
+// what's been paid, what's queued, and what's still available to withdraw.
+//
+// We sum across BOTH payout channels:
+//   - withdrawal_requests        (broker self-initiated)
+//   - bp_payout_transactions     (admin-initiated via Payout Cycle close)
+// Without this, /payouts and /withdrawals showed different 'available' numbers and
+// a broker paid via a cycle batch could still request a withdrawal for the same money.
+export type BrokerWallet = {
+  earned: number          // sum of payout_distributions.net_payout
+  paid: number            // withdrawal_requests in paid|closed + bp_payout_transactions in paid
+  pending: number         // withdrawal_requests in pending|approved + bp_payout_transactions in pending|approved
+  available: number       // max(0, earned - paid - pending)
+}
+
+export async function loadBrokerWallets(): Promise<Record<string, BrokerWallet>> {
+  const [{ data: dist }, { data: wds }, { data: txns }] = await Promise.all([
+    supabase.from('payout_distributions').select('beneficiary_broker_id, net_payout'),
+    supabase.from('withdrawal_requests').select('broker_id, amount, net_amount, status'),
+    supabase.from('bp_payout_transactions').select('broker_id, amount, net_amount, status'),
+  ])
+  const out: Record<string, BrokerWallet> = {}
+  const ensure = (id: string) => (out[id] ??= { earned: 0, paid: 0, pending: 0, available: 0 })
+  for (const d of (dist || []) as any[]) {
+    if (!d.beneficiary_broker_id) continue
+    ensure(d.beneficiary_broker_id).earned += Number(d.net_payout || 0)
+  }
+  for (const w of (wds || []) as any[]) {
+    if (!w.broker_id) continue
+    const w_ = ensure(w.broker_id)
+    if (w.status === 'paid' || w.status === 'closed')    w_.paid    += Number(w.net_amount || w.amount || 0)
+    if (w.status === 'pending' || w.status === 'approved') w_.pending += Number(w.amount || 0)
+  }
+  for (const t of (txns || []) as any[]) {
+    if (!t.broker_id) continue
+    const w_ = ensure(t.broker_id)
+    if (t.status === 'paid')                                 w_.paid    += Number(t.net_amount || t.amount || 0)
+    if (t.status === 'pending' || t.status === 'approved')   w_.pending += Number(t.net_amount || t.amount || 0)
+  }
+  for (const id in out) out[id].available = Math.max(0, out[id].earned - out[id].paid - out[id].pending)
+  return out
+}
+
