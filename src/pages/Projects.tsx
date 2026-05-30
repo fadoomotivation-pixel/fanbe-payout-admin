@@ -7,7 +7,7 @@ import { Input, Select, Textarea } from '@/components/ui/Input.tsx'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR } from '@/lib/utils'
-import { Building2, Plus, Edit3 } from 'lucide-react'
+import { Building2, Plus, Edit3, Trash2, AlertTriangle } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 // Projects writes to `bp_projects` — the same table that bp_plots / bp_bookings /
@@ -57,9 +57,26 @@ export default function Projects() {
     onError: (e: any) => toast.error(e.message),
   })
 
+  const deleteProject = useMutation({
+    mutationFn: async (project: any) => {
+      // Block delete if any plot or booking still references this project so we never orphan downstream data.
+      const [{ count: plotCount }, { count: bookingCount }] = await Promise.all([
+        supabase.from('bp_plots').select('id', { count: 'exact', head: true }).eq('project_id', project.id),
+        supabase.from('bp_bookings').select('id', { count: 'exact', head: true }).eq('project_id', project.id),
+      ])
+      if ((plotCount || 0) > 0)    throw new Error(`Project has ${plotCount} plot${plotCount !== 1 ? 's' : ''} — delete or reassign them first.`)
+      if ((bookingCount || 0) > 0) throw new Error(`Project has ${bookingCount} booking${bookingCount !== 1 ? 's' : ''} — cannot delete.`)
+      const { error } = await supabase.from('bp_projects').delete().eq('id', project.id)
+      if (error) throw error
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['projects'] }); toast.success('Project deleted'); setDeleteFor(null) },
+    onError: (e: any) => toast.error(e.message),
+  })
+
   const [modal, setModal] = useState(false)
   const [editing, setEditing] = useState<any>(null)
   const [form, setForm] = useState<any>(EMPTY_PROJECT)
+  const [deleteFor, setDeleteFor] = useState<any>(null)
 
   const openCreate = () => { setEditing(null); setForm(EMPTY_PROJECT); setModal(true) }
   const openEdit = (p: any) => {
@@ -128,9 +145,18 @@ export default function Projects() {
     },
     {
       header: '',
-      render: (r: any) => (
-        <Button size="sm" variant="ghost" onClick={() => openEdit(r)}><Edit3 size={13}/>Edit</Button>
-      ),
+      render: (r: any) => {
+        const inUse = (r.bp_plots?.[0]?.count ?? 0) > 0
+        return (
+          <div className="flex gap-1">
+            <Button size="sm" variant="ghost" onClick={() => openEdit(r)}><Edit3 size={13}/>Edit</Button>
+            <Button size="sm" variant="ghost" onClick={() => setDeleteFor(r)} disabled={inUse}
+              className={inUse ? 'opacity-40 cursor-not-allowed' : 'text-red-600 hover:bg-red-50'}>
+              <Trash2 size={13}/>{inUse ? 'In use' : 'Delete'}
+            </Button>
+          </div>
+        )
+      },
     },
   ]
 
@@ -177,6 +203,19 @@ export default function Projects() {
         <div className="flex justify-end gap-2 mt-6">
           <Button variant="secondary" onClick={() => setModal(false)}>Cancel</Button>
           <Button onClick={save} loading={createProject.isPending || updateProject.isPending}>Save Project</Button>
+        </div>
+      </Modal>
+
+      <Modal open={!!deleteFor} onClose={() => setDeleteFor(null)} title={`Delete project — ${deleteFor?.name ?? ''}?`} size="sm">
+        <div className="rounded-lg bg-red-50 border border-red-200 text-red-900 p-3 text-sm flex items-start gap-2">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0"/>
+          <div>This permanently removes the project. If any plot or booking still references it, deletion is blocked — clean those up first. This action cannot be undone.</div>
+        </div>
+        <div className="flex justify-end gap-2 mt-5">
+          <Button variant="secondary" onClick={() => setDeleteFor(null)}>Cancel</Button>
+          <Button onClick={() => deleteProject.mutate(deleteFor)} loading={deleteProject.isPending} className="bg-red-600 hover:bg-red-700 text-white">
+            <Trash2 size={14}/>Delete project
+          </Button>
         </div>
       </Modal>
     </div>

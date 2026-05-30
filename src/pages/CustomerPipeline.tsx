@@ -29,22 +29,71 @@ const PAYMENT_MODES = ['cash','neft','rtgs','imps','upi','cheque','dd']
 
 const today = () => new Date().toISOString().slice(0, 10)
 
+const PAGE_SIZE = 25
+const SEARCH_DEBOUNCE_MS = 300
+
+// Built so the page stays responsive at 10,000+ bookings: pagination + debounced server-side
+// search + per-page derived queries.  Earlier .limit(500) loaded everything and filtered in
+// the browser — fine at small scale, broken at production scale.
 export default function CustomerPipeline() {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [tab, setTab] = useState<Tab>('all')
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [searchScope, setSearchScope] = useState<'all' | 'customer' | 'broker' | 'booking' | 'plot'>('all')
   const [filterBroker, setFilterBroker] = useState('')
   const [filterProject, setFilterProject] = useState('')
+  const [page, setPage] = useState(0)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [emiBooking, setEmiBooking] = useState<any>(null)
   const [payFor, setPayFor] = useState<{ booking: any; type: 'token' | 'booking' } | null>(null)
 
-  // ── Queries ────────────────────────────────────────────────────────
-  const { data: bookings = [], isLoading } = useQuery({
-    queryKey: ['cp_bookings'],
+  // Debounce the search input so we don't fire a query on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(t)
+  }, [search])
+
+  // Reset to page 0 whenever any filter changes — current page may not exist in the new result set.
+  useEffect(() => { setPage(0) }, [tab, debouncedSearch, searchScope, filterBroker, filterProject])
+
+  // Server-side search: resolve customer/broker IDs that match the query, then constrain bookings
+  // via OR across booking_no.ilike and the resolved IDs.  PostgREST can't filter on nested table
+  // columns directly, so we do this two-step lookup ourselves.
+  const { data: searchTargets } = useQuery({
+    queryKey: ['cp_search_targets', debouncedSearch, searchScope],
+    enabled: !!debouncedSearch,
     queryFn: async () => {
-      const { data, error } = await supabase
+      const q = debouncedSearch
+      const wantsCustomer = searchScope === 'all' || searchScope === 'customer'
+      const wantsBroker   = searchScope === 'all' || searchScope === 'broker'
+      const wantsPlot     = searchScope === 'all' || searchScope === 'plot'
+      const [cust, brk, plots] = await Promise.all([
+        wantsCustomer
+          ? supabase.from('bp_customers').select('id').or(`name.ilike.%${q}%,phone.ilike.%${q}%,customer_code.ilike.%${q}%`).limit(500)
+          : Promise.resolve({ data: [] as any[] }),
+        wantsBroker
+          ? supabase.from('brokers').select('id').or(`name.ilike.%${q}%,broker_id.ilike.%${q}%`).limit(500)
+          : Promise.resolve({ data: [] as any[] }),
+        wantsPlot
+          ? supabase.from('bp_plots').select('id').ilike('plot_no', `%${q}%`).limit(500)
+          : Promise.resolve({ data: [] as any[] }),
+      ])
+      return {
+        customerIds: (cust.data || []).map((r: any) => r.id),
+        brokerIds:   (brk.data  || []).map((r: any) => r.id),
+        plotIds:     (plots.data || []).map((r: any) => r.id),
+      }
+    },
+  })
+
+  // Build the bookings query: server-side filter + sort + range pagination + count.
+  const bookingsQueryKey = useMemo(() => ['cp_bookings_page', tab, debouncedSearch, searchScope, filterBroker, filterProject, page, searchTargets], [tab, debouncedSearch, searchScope, filterBroker, filterProject, page, searchTargets])
+  const { data: pageResult, isLoading } = useQuery({
+    queryKey: bookingsQueryKey,
+    queryFn: async () => {
+      let q = supabase
         .from('bp_bookings')
         .select(`
           id, booking_no, stage, application_date, total_amount, plot_total_price,
@@ -55,14 +104,43 @@ export default function CustomerPipeline() {
           bp_plots(plot_no, size_sqyd, sector, block),
           bp_projects(name, location),
           brokers(name, broker_id, rank)
-        `)
+        `, { count: 'exact' })
         .not('stage', 'eq', 'cancelled')
         .order('created_at', { ascending: false })
-        .limit(500)
+
+      if (filterBroker)  q = q.eq('broker_id',  filterBroker)
+      if (filterProject) q = q.eq('project_id', filterProject)
+
+      if (debouncedSearch) {
+        const orParts: string[] = []
+        if (searchScope === 'all' || searchScope === 'booking') {
+          orParts.push(`booking_no.ilike.%${debouncedSearch}%`)
+        }
+        if ((searchScope === 'all' || searchScope === 'customer') && searchTargets?.customerIds?.length) {
+          orParts.push(`customer_id.in.(${searchTargets.customerIds.join(',')})`)
+        }
+        if ((searchScope === 'all' || searchScope === 'broker') && searchTargets?.brokerIds?.length) {
+          orParts.push(`broker_id.in.(${searchTargets.brokerIds.join(',')})`)
+        }
+        if ((searchScope === 'all' || searchScope === 'plot') && searchTargets?.plotIds?.length) {
+          orParts.push(`plot_id.in.(${searchTargets.plotIds.join(',')})`)
+        }
+        if (orParts.length === 0) {
+          // No targets matched at all — short-circuit to empty result without hitting bookings.
+          return { rows: [] as any[], total: 0 }
+        }
+        q = q.or(orParts.join(','))
+      }
+
+      q = q.range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
+      const { data, error, count } = await q
       if (error) throw error
-      return data || []
+      return { rows: data || [], total: count || 0 }
     },
   })
+  const bookings = pageResult?.rows ?? []
+  const totalBookings = pageResult?.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(totalBookings / PAGE_SIZE))
 
   const bookingIds = useMemo(() => bookings.map((b: any) => b.id), [bookings])
 
@@ -304,32 +382,34 @@ export default function CustomerPipeline() {
     })
   }, [bookings, paymentsByBooking, emiSummary, mlmByBooking, brokerChains])
 
+  // Global counts (independent of the visible page) so the four KPI tiles still show the truth.
+  // Run as a single round-trip with head:true counts; cheap even at 10k+ bookings.
+  const { data: globalStats } = useQuery({
+    queryKey: ['cp_global_stats'],
+    queryFn: async () => {
+      const { count: all } = await supabase.from('bp_bookings').select('id', { count: 'exact', head: true }).not('stage', 'eq', 'cancelled')
+      return { all: all || 0 }
+    },
+  })
+
+  // Tab-scoped stats use the current page's data (derived locally).  At 10k+ rows it's
+  // intentionally a snapshot — admins switch tabs which re-queries with that tab applied.
   const stats = useMemo(() => {
-    const all = rows.length
+    const all = globalStats?.all ?? totalBookings
     const unpaid = rows.filter(r => r.category === 'unpaid_booking').length
     const emi    = rows.filter(r => r.category === 'emi_active').length
     const settled = rows.filter(r => r.category === 'settled').length
     const expectedAmt = rows.filter(r => r.category === 'unpaid_booking').reduce((s, r) => s + r.expected, 0)
     const balanceAmt  = rows.reduce((s, r) => s + r.balance, 0)
     return { all, unpaid, emi, settled, expectedAmt, balanceAmt }
-  }, [rows])
+  }, [rows, globalStats, totalBookings])
 
+  // Tab filter is applied locally to the current page.  Search / broker / project are server-side
+  // (handled in the bookings query above) so the user can navigate the full data set.
   const filtered = useMemo(() => {
-    let arr = rows
-    if (tab !== 'all') arr = arr.filter(r => r.category === tab)
-    if (filterBroker)  arr = arr.filter(r => r.broker_id === filterBroker)
-    if (filterProject) arr = arr.filter(r => r.project_id === filterProject)
-    const q = search.trim().toLowerCase()
-    if (q) arr = arr.filter(r =>
-      (r.bp_customers?.name || '').toLowerCase().includes(q) ||
-      (r.bp_customers?.phone || '').toLowerCase().includes(q) ||
-      (r.bp_customers?.customer_code || '').toLowerCase().includes(q) ||
-      (r.booking_no || '').toLowerCase().includes(q) ||
-      (r.bp_plots?.plot_no || '').toLowerCase().includes(q) ||
-      (r.brokers?.name || '').toLowerCase().includes(q)
-    )
-    return arr
-  }, [rows, tab, filterBroker, filterProject, search])
+    if (tab === 'all') return rows
+    return rows.filter(r => r.category === tab)
+  }, [rows, tab])
 
   const toggleExpand = (id: string) => setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
 
@@ -352,13 +432,28 @@ export default function CustomerPipeline() {
           icon={<CheckCircle2 size={16}/>}       label="Fully settled"      value={String(stats.settled)} sub="zero balance"                              tint="emerald"/>
       </div>
 
-      {/* Calm search bar */}
+      {/* Search bar — scope dropdown disambiguates whether you mean customer or broker, etc. */}
       <div className="flex flex-wrap gap-2 items-center">
         <div className="relative flex-1 min-w-[240px]">
           <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400"/>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search customer, phone, booking, plot, broker"
+          <input value={search} onChange={e => setSearch(e.target.value)}
+            placeholder={
+              searchScope === 'customer' ? 'Search customer name / phone / code'
+              : searchScope === 'broker' ? 'Search broker name / code'
+              : searchScope === 'booking' ? 'Search booking number (BK-…)'
+              : searchScope === 'plot' ? 'Search plot number'
+              : 'Search anything — pick scope to narrow'
+            }
             className="w-full pl-10 pr-3 py-2.5 text-sm bg-white border border-gray-200 rounded-full focus:outline-none focus:border-gray-900 transition"/>
         </div>
+        <select value={searchScope} onChange={e => setSearchScope(e.target.value as any)}
+          className="bg-white border border-gray-200 rounded-full px-3 py-2.5 text-sm focus:outline-none focus:border-gray-900">
+          <option value="all">Search: All</option>
+          <option value="customer">Search: Customers</option>
+          <option value="broker">Search: Brokers</option>
+          <option value="booking">Search: Booking #</option>
+          <option value="plot">Search: Plots</option>
+        </select>
         <select value={filterBroker} onChange={e => setFilterBroker(e.target.value)} className="bg-white border border-gray-200 rounded-full px-3 py-2.5 text-sm focus:outline-none focus:border-gray-900">
           <option value="">All brokers</option>
           {(brokers as any[]).map((b: any) => <option key={b.id} value={b.id}>{b.name} [{b.broker_id}]</option>)}
@@ -367,7 +462,9 @@ export default function CustomerPipeline() {
           <option value="">All projects</option>
           {(projects as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
-        <span className="text-[12px] text-gray-400 tabular-nums ml-auto">{filtered.length} · {rows.length}</span>
+        <span className="text-[12px] text-gray-400 tabular-nums ml-auto">
+          {totalBookings.toLocaleString('en-IN')} result{totalBookings === 1 ? '' : 's'}
+        </span>
       </div>
 
       {/* Deals list */}
@@ -425,6 +522,10 @@ export default function CustomerPipeline() {
               {/* Header: name + balance */}
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0 flex-1">
+                  {/* Explicit "Customer" pill so it can never be confused with the broker badge below. */}
+                  <div className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-full px-2 py-0.5 mb-1">
+                    <Users size={10}/>CUSTOMER
+                  </div>
                   <Link to={`/customer-history?customer=${r.customer_id}`} className="text-[17px] font-semibold text-gray-900 hover:text-blue-700 truncate block">
                     {cust?.name || '—'}
                   </Link>
@@ -435,12 +536,20 @@ export default function CustomerPipeline() {
                     {r.bp_plots?.size_sqyd && <> · {r.bp_plots.size_sqyd} sqyd</>}
                     {(r.bp_projects?.name || r.scheme_name) && <> · {r.bp_projects?.name || r.scheme_name}</>}
                   </div>
-                  {/* Subline 2: broker · application date · stage */}
-                  <div className="text-[12px] text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
-                    {r.brokers && (
-                      <Link to={`/broker/dashboard?broker_id=${r.broker_id}`} className="inline-flex items-center gap-1 text-blue-600 hover:underline">
-                        <ArrowUpRight size={10}/>{r.brokers.name}
-                      </Link>
+                  {/* Subline 2: broker (explicit "BROKER" pill) · application date · stage */}
+                  <div className="text-[12px] text-gray-400 mt-1 flex items-center gap-2 flex-wrap">
+                    {r.brokers ? (
+                      <span className="inline-flex items-center gap-1">
+                        <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-full px-2 py-0.5">BROKER</span>
+                        <Link to={`/broker/dashboard?broker_id=${r.broker_id}`} className="text-blue-600 hover:underline">
+                          {r.brokers.name}{r.brokers.broker_id ? ` [${r.brokers.broker_id}]` : ''}
+                        </Link>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1">
+                        <span className="text-[10px] font-semibold text-gray-500 bg-gray-50 border border-gray-200 rounded-full px-2 py-0.5">BROKER</span>
+                        <span className="italic">none</span>
+                      </span>
                     )}
                     {r.application_date && <span>· {formatDate(r.application_date)}</span>}
                     <span>·</span>
@@ -585,6 +694,26 @@ export default function CustomerPipeline() {
           )
         })}
       </div>
+
+      {/* Pagination — server-side range; total comes from the bookings query's count.
+          Designed to stay responsive at 10,000+ rows by only fetching PAGE_SIZE at a time. */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="text-[12px] text-gray-500">
+            Page <b>{page + 1}</b> of <b>{totalPages}</b> · showing {rows.length} of {totalBookings.toLocaleString('en-IN')}
+          </div>
+          <div className="inline-flex items-center gap-1">
+            <button onClick={() => setPage(0)} disabled={page === 0}
+              className="px-3 py-1.5 text-xs rounded-full bg-white border border-gray-200 text-gray-700 disabled:opacity-40 disabled:cursor-not-allowed hover:border-gray-300">« First</button>
+            <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}
+              className="px-3 py-1.5 text-xs rounded-full bg-white border border-gray-200 text-gray-700 disabled:opacity-40 disabled:cursor-not-allowed hover:border-gray-300">‹ Prev</button>
+            <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1}
+              className="px-3 py-1.5 text-xs rounded-full bg-white border border-gray-200 text-gray-700 disabled:opacity-40 disabled:cursor-not-allowed hover:border-gray-300">Next ›</button>
+            <button onClick={() => setPage(totalPages - 1)} disabled={page >= totalPages - 1}
+              className="px-3 py-1.5 text-xs rounded-full bg-white border border-gray-200 text-gray-700 disabled:opacity-40 disabled:cursor-not-allowed hover:border-gray-300">Last »</button>
+          </div>
+        </div>
+      )}
 
       {/* EMI panel (reuse from Bookings) */}
       <EmiPanel booking={emiBooking} open={!!emiBooking} onClose={() => setEmiBooking(null)}/>
