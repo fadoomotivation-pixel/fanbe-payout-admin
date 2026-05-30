@@ -574,6 +574,11 @@ export default function CustomerPipeline() {
                       </button>
                     </div>
                   </div>
+
+                  {/* Payment history — reprint individual receipts for any past verified payment
+                      (booking deposit, token, EMI instalments).  Lazy-loaded the first time the row
+                      is expanded so we don't fan out queries for collapsed rows. */}
+                  <PaymentHistoryList booking={r} customer={cust} />
                 </div>
               )}
             </div>
@@ -593,6 +598,86 @@ export default function CustomerPipeline() {
         onSubmit={(form: any) => recordPay.mutate({ booking: payFor!.booking, type: payFor!.type, ...form })}
         submitting={recordPay.isPending}
       />
+    </div>
+  )
+}
+
+// Lists every verified payment on a booking, with a "Reprint receipt" button per row.
+// Used inside the expanded pipeline row so an admin can issue a duplicate token / booking-deposit
+// / EMI receipt without having to dig through the Payments page.
+function PaymentHistoryList({ booking, customer }: { booking: any; customer: any }) {
+  const { data: payments = [], isLoading } = useQuery({
+    queryKey: ['cp_payment_history', booking.id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('bp_payments')
+        .select('id, amount, payment_type, payment_mode, payment_date, receipt_no, utr_ref, instalment_no, verification_status, notes, created_at')
+        .eq('booking_id', booking.id)
+        .eq('verification_status', 'verified')
+        .order('payment_date', { ascending: false })
+      if (error) throw error
+      return data || []
+    },
+  })
+
+  if (isLoading) return (
+    <div className="text-[12px] text-gray-400">Loading payment history…</div>
+  )
+
+  if (!payments.length) return (
+    <div className="text-[12px] text-gray-400 italic">No verified payments yet on this booking.</div>
+  )
+
+  const reprint = (p: any) => printPaymentReceipt(p, {
+    customer,
+    booking,
+    project: booking.bp_projects,
+    plot: booking.bp_plots,
+  })
+
+  const labelFor = (p: any) => {
+    if (p.payment_type === 'emi') return `EMI #${p.instalment_no || '?'}`
+    if (p.payment_type === 'booking') return 'Booking deposit'
+    if (p.payment_type === 'token') return 'Token'
+    if (p.payment_type === 'full') return 'Full settlement'
+    return p.payment_type || 'Payment'
+  }
+
+  return (
+    <div className="rounded-2xl border border-gray-100 bg-gray-50/40 overflow-hidden">
+      <div className="px-4 py-2 flex items-center justify-between border-b border-gray-100">
+        <h4 className="text-[12px] font-semibold text-gray-700 inline-flex items-center gap-1.5">
+          <Printer size={12} className="text-gray-500"/>Receipts
+          <span className="text-[11px] text-gray-400 font-normal">({payments.length})</span>
+        </h4>
+        <span className="text-[10px] text-gray-400">Tap any row to reprint that receipt.</span>
+      </div>
+      <div className="divide-y divide-gray-100">
+        {payments.map((p: any) => (
+          <button
+            key={p.id}
+            onClick={() => reprint(p)}
+            className="w-full text-left px-4 py-2 flex items-center gap-3 hover:bg-white transition"
+          >
+            <div className="shrink-0 w-7 h-7 rounded-full bg-white border border-gray-200 flex items-center justify-center text-gray-500">
+              <Printer size={12}/>
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap text-[12px]">
+                <span className="font-semibold text-gray-900">{labelFor(p)}</span>
+                {p.receipt_no && <span className="font-mono text-[10px] text-gray-400">{p.receipt_no}</span>}
+                <span className="text-[10px] text-gray-400">· {(p.payment_mode || '—').toUpperCase()}</span>
+                {p.utr_ref && <span className="text-[10px] text-gray-400">· UTR {p.utr_ref}</span>}
+              </div>
+              <div className="text-[11px] text-gray-500 mt-0.5">{formatDate(p.payment_date)}</div>
+            </div>
+            <div className="shrink-0 text-right">
+              <div className="text-[13px] font-semibold text-emerald-700 tabular-nums">{formatINR(Number(p.amount || 0))}</div>
+              <div className="text-[10px] text-blue-600 inline-flex items-center gap-0.5"><Printer size={10}/>Reprint</div>
+            </div>
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
