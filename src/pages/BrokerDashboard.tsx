@@ -1088,13 +1088,11 @@ function TeamNodeCard({ broker, isRoot, isExpanded, earned, loaded, childCount, 
           : 'bg-gray-100 text-gray-400'}`}>
           {(broker.name || '?').charAt(0).toUpperCase()}
         </div>
-        <Link
-          to={`/broker/dashboard?broker_id=${broker.id}`}
-          onClick={e => e.stopPropagation()}
-          className="text-[13px] font-semibold text-gray-900 hover:text-blue-700 truncate max-w-full text-center"
-        >
+        {/* Name is plain text — the entire card is the click target for expand/collapse, and a
+            card click must never navigate to another broker's portal (privacy boundary). */}
+        <div className="text-[13px] font-semibold text-gray-900 truncate max-w-full text-center">
           {broker.name || '—'}
-        </Link>
+        </div>
         <div className="text-[10px] font-mono text-gray-400 mt-0.5">[{broker.broker_id}]</div>
         {broker.rank && (
           <span className="mt-1 text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-medium truncate max-w-full">{broker.rank}</span>
