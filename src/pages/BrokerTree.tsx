@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { formatINR } from '@/lib/utils'
 import {
@@ -354,13 +354,11 @@ function NodeCard({ broker, isRoot, isMatched, hasChildren, isCollapsed, directC
           : 'bg-gray-100 text-gray-400'}`}>
           {broker.name ? broker.name.charAt(0).toUpperCase() : <User size={18}/>}
         </div>
-        <Link
-          to={`/broker/dashboard?broker_id=${broker.id}`}
-          onClick={e => e.stopPropagation()}
-          className="text-sm font-semibold text-gray-900 hover:text-blue-700 truncate max-w-full text-center"
-        >
+        {/* Name is plain text — the entire card is the click target for expand/collapse, and a
+            card click must never navigate to another broker's portal (privacy boundary). */}
+        <div className="text-sm font-semibold text-gray-900 truncate max-w-full text-center">
           {broker.name || '—'}
-        </Link>
+        </div>
         <div className="text-[10px] font-mono text-gray-400 mt-0.5">[{broker.broker_id}]</div>
         {broker.rank && (
           <span className={`mt-1 text-[10px] px-2 py-0.5 rounded-full font-medium ${rankCls(broker.rank)}`}>{broker.rank}</span>
