@@ -14,7 +14,6 @@ import Plots from '@/pages/Plots'
 import Bookings from '@/pages/Bookings'
 import Payments from '@/pages/Payments'
 import KYC from '@/pages/KYC'
-import Commission from '@/pages/Commission'
 import Analytics from '@/pages/Analytics'
 import Reports from '@/pages/Reports'
 import Settings from '@/pages/Settings'
@@ -69,7 +68,8 @@ export default function App(){
         <Route path="/payouts" element={<Payouts/>}/>
         <Route path="/payout-cycles" element={<PayoutCycles/>}/>
         <Route path="/withdrawals" element={<Withdrawals/>}/>
-        <Route path="/commission" element={<Commission/>}/>
+        {/* Commission Ledger was folded into Payouts — keep this redirect for old bookmarks. */}
+        <Route path="/commission" element={<Navigate to="/payouts" replace/>}/>
         <Route path="/commission-ranks" element={<CommissionRanks/>}/>
         <Route path="/achievers-club" element={<AchieversClub/>}/>
         <Route path="/team-rewards" element={<TeamRewards/>}/>
