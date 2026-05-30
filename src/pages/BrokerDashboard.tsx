@@ -99,15 +99,17 @@ export default function BrokerDashboard() {
     // Downline earnings (their commissions)
     const dlIds = (dl.data || []).map((d: any) => d.id)
     if (dlIds.length) {
-      const { data: dlBk } = await supabase
-        .from('bp_bookings')
-        .select('broker_id, commission_amount, stage')
-        .in('broker_id', dlIds)
-        .eq('stage', 'booking_done')
+      // Each direct downline's "earned" on the team tree cards must match what they see on
+      // their own dashboard — distributed via payout_distributions, NOT the promised
+      // bp_bookings.commission_amount which would over-state by the unpaid portion.
+      const { data: dlDist } = await supabase
+        .from('payout_distributions')
+        .select('beneficiary_broker_id, net_payout')
+        .in('beneficiary_broker_id', dlIds)
       const map: Record<string, number> = {}
-      for (const r of dlBk || []) {
-        if (!r.broker_id) continue
-        map[r.broker_id] = (map[r.broker_id] || 0) + Number(r.commission_amount || 0)
+      for (const d of (dlDist || []) as any[]) {
+        if (!d.beneficiary_broker_id) continue
+        map[d.beneficiary_broker_id] = (map[d.beneficiary_broker_id] || 0) + Number(d.net_payout || 0)
       }
       setDownlineEarnings(map)
     }

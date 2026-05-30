@@ -50,6 +50,22 @@ export default function BrokerProfile() {
     },
   })
 
+  // Distributed commissions for this broker — same source the broker's own dashboard reads.
+  // We don't sum bp_bookings.commission_amount because that's the promised lifetime commission
+  // (over-states earnings by the unpaid portion of every booking).
+  const { data: distributions = [] } = useQuery({
+    queryKey: ['broker_distributions', id],
+    enabled: !!id,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('payout_distributions')
+        .select('net_payout, created_at')
+        .eq('beneficiary_broker_id', id!)
+      if (error) throw error
+      return data || []
+    },
+  })
+
   const { data: rank } = useQuery({
     queryKey: ['broker_rank', broker?.rank],
     enabled: !!broker?.rank,
@@ -64,10 +80,11 @@ export default function BrokerProfile() {
   })
 
   const confirmed   = (bookings as any[]).filter((b: any) => b.stage === 'booking_done')
-  const earnedTotal = confirmed.reduce((s: number, b: any) => s + Number(b.commission_amount || 0), 0)
-  const earnedYTD   = confirmed
-    .filter((b: any) => b.application_date && new Date(b.application_date).getFullYear() === new Date().getFullYear())
-    .reduce((s: number, b: any) => s + Number(b.commission_amount || 0), 0)
+  const earnedTotal = (distributions as any[]).reduce((s: number, d: any) => s + Number(d.net_payout || 0), 0)
+  const currentYear = new Date().getFullYear()
+  const earnedYTD   = (distributions as any[])
+    .filter((d: any) => d.created_at && new Date(d.created_at).getFullYear() === currentYear)
+    .reduce((s: number, d: any) => s + Number(d.net_payout || 0), 0)
   const totalVolume = confirmed.reduce((s: number, b: any) => s + Number(b.total_amount || 0), 0)
 
   if (!broker) return <div className="p-8 text-center text-gray-400 text-sm">Loading broker…</div>
@@ -103,8 +120,8 @@ export default function BrokerProfile() {
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatTile icon={<Wallet size={16}/>}     label="Total Earned"    value={formatINR(earnedTotal)} sub={`${confirmed.length} confirmed bookings`} color="text-green-700"/>
-        <StatTile icon={<TrendingUp size={16}/>} label="Earned YTD"      value={formatINR(earnedYTD)}                                                   color="text-blue-700"/>
+        <StatTile icon={<Wallet size={16}/>}     label="Earned (Distributed)" value={formatINR(earnedTotal)} sub={`${distributions.length} MLM credits · ${confirmed.length} confirmed bookings`} color="text-green-700"/>
+        <StatTile icon={<TrendingUp size={16}/>} label="Earned YTD"           value={formatINR(earnedYTD)}                                                                                       color="text-blue-700"/>
         <StatTile icon={<Award size={16}/>}      label="Sales Volume"    value={formatINR(totalVolume)} sub="confirmed booking value"                  color="text-gray-900"/>
         <StatTile icon={<Users size={16}/>}      label="Direct Downline" value={String(downline.length)} sub={`rank ${broker.rank || '—'}`}             color="text-purple-700"/>
       </div>
