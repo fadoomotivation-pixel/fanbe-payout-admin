@@ -107,18 +107,22 @@ export default function BrokerDashboard() {
 
     // Downline earnings (their commissions)
     const dlIds = (dl.data || []).map((d: any) => d.id)
-    if (dlIds.length) {
+    // Always fetch customers for the broker being viewed too, not just their downline.
+    // Otherwise the org chart shows NIDHI under Nisha in /team-tree but NOT in Nisha's own
+    // dashboard team tab — the two views must agree.
+    const customerLookupIds = [b.id, ...dlIds]
+    if (customerLookupIds.length) {
       const [{ data: dlDist }, { data: dlBk }] = await Promise.all([
-        supabase
-          .from('payout_distributions')
-          .select('beneficiary_broker_id, net_payout')
-          .in('beneficiary_broker_id', dlIds),
-        // Full customer list per downline broker — admin needs to see the actual names
-        // (e.g. "Nidhi"), not just a count, when scanning the team tab.
+        dlIds.length
+          ? supabase
+              .from('payout_distributions')
+              .select('beneficiary_broker_id, net_payout')
+              .in('beneficiary_broker_id', dlIds)
+          : Promise.resolve({ data: [] as any[] }),
         supabase
           .from('bp_bookings')
           .select('broker_id, customer_id, bp_customers(id, name, customer_code)')
-          .in('broker_id', dlIds)
+          .in('broker_id', customerLookupIds)
           .not('customer_id', 'is', null),
       ])
       const earnedMap: Record<string, number> = {}
