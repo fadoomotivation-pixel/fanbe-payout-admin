@@ -31,6 +31,7 @@ export default function BrokerDashboard() {
   const [ranks, setRanks] = useState<any[]>([])
   const [downline, setDownline] = useState<any[]>([])
   const [downlineEarnings, setDownlineEarnings] = useState<Record<string, number>>({})
+  const [downlineCustomers, setDownlineCustomers] = useState<Record<string, number>>({})
   const [payouts, setPayouts] = useState<any[]>([])
   const [withdrawals, setWithdrawals] = useState<any[]>([])
   const [cycleTxns, setCycleTxns] = useState<any[]>([])
@@ -107,19 +108,32 @@ export default function BrokerDashboard() {
     // Downline earnings (their commissions)
     const dlIds = (dl.data || []).map((d: any) => d.id)
     if (dlIds.length) {
-      // Each direct downline's "earned" on the team tree cards must match what they see on
-      // their own dashboard — distributed via payout_distributions, NOT the promised
-      // bp_bookings.commission_amount which would over-state by the unpaid portion.
-      const { data: dlDist } = await supabase
-        .from('payout_distributions')
-        .select('beneficiary_broker_id, net_payout')
-        .in('beneficiary_broker_id', dlIds)
-      const map: Record<string, number> = {}
+      const [{ data: dlDist }, { data: dlBk }] = await Promise.all([
+        supabase
+          .from('payout_distributions')
+          .select('beneficiary_broker_id, net_payout')
+          .in('beneficiary_broker_id', dlIds),
+        // Customer counts per downline broker — surfaces "Nisha brought 1 customer" on
+        // her tree card so admin can spot newly active downlines without drilling in.
+        supabase
+          .from('bp_bookings')
+          .select('broker_id, customer_id')
+          .in('broker_id', dlIds)
+          .not('customer_id', 'is', null),
+      ])
+      const earnedMap: Record<string, number> = {}
       for (const d of (dlDist || []) as any[]) {
         if (!d.beneficiary_broker_id) continue
-        map[d.beneficiary_broker_id] = (map[d.beneficiary_broker_id] || 0) + Number(d.net_payout || 0)
+        earnedMap[d.beneficiary_broker_id] = (earnedMap[d.beneficiary_broker_id] || 0) + Number(d.net_payout || 0)
       }
-      setDownlineEarnings(map)
+      const custSeen: Record<string, Set<string>> = {}
+      for (const r of (dlBk || []) as any[]) {
+        (custSeen[r.broker_id] ??= new Set()).add(r.customer_id)
+      }
+      const custMap: Record<string, number> = {}
+      for (const k in custSeen) custMap[k] = custSeen[k].size
+      setDownlineEarnings(earnedMap)
+      setDownlineCustomers(custMap)
     }
 
     // Group bookings by customer + aggregate paid/overdue
@@ -732,6 +746,7 @@ export default function BrokerDashboard() {
                     subTeams={subTeams}
                     expandedTeam={expandedTeam}
                     downlineEarnings={downlineEarnings}
+                    downlineCustomers={downlineCustomers}
                     onToggle={toggleTeam}
                   />
                 </div>
@@ -1107,7 +1122,7 @@ function WdBadge({ status }: { status: string }) {
 // its direct downline is pre-loaded.  Deeper levels lazy-load via onToggle (which fetches
 // brokers where sponsor_id = id and caches the result in subTeams).  Visual skeleton
 // matches /team-tree: vertical descender → horizontal sibling bar → risers into each child.
-function TeamOrgNode({ broker, isRoot, initialChildren, subTeams, expandedTeam, downlineEarnings, onToggle }: any) {
+function TeamOrgNode({ broker, isRoot, initialChildren, subTeams, expandedTeam, downlineEarnings, downlineCustomers, onToggle }: any) {
   if (!broker) return null
   const isExpanded = isRoot || expandedTeam.has(broker.id)
   const childrenLoaded = isRoot ? initialChildren : subTeams[broker.id]
@@ -1117,6 +1132,7 @@ function TeamOrgNode({ broker, isRoot, initialChildren, subTeams, expandedTeam, 
     <div className="flex flex-col items-center">
       <TeamNodeCard broker={broker} isRoot={isRoot} isExpanded={isExpanded}
         earned={downlineEarnings[broker.id] || 0}
+        customerCount={downlineCustomers?.[broker.id] || 0}
         loaded={isRoot ? true : Array.isArray(childrenLoaded)}
         childCount={Array.isArray(childrenLoaded) ? childrenLoaded.length : null}
         onToggle={() => !isRoot && onToggle(broker.id)}
@@ -1136,7 +1152,7 @@ function TeamOrgNode({ broker, isRoot, initialChildren, subTeams, expandedTeam, 
                   {!isOnly && !isLast  && <div className="absolute top-0 left-1/2 right-0 h-px bg-gray-300" />}
                   <div className="absolute top-0 left-1/2 -translate-x-1/2 w-px h-6 bg-gray-300" />
                   <TeamOrgNode broker={c} initialChildren={null} subTeams={subTeams}
-                    expandedTeam={expandedTeam} downlineEarnings={downlineEarnings} onToggle={onToggle}/>
+                    expandedTeam={expandedTeam} downlineEarnings={downlineEarnings} downlineCustomers={downlineCustomers} onToggle={onToggle}/>
                 </div>
               )
             })}
@@ -1152,7 +1168,7 @@ function TeamOrgNode({ broker, isRoot, initialChildren, subTeams, expandedTeam, 
   )
 }
 
-function TeamNodeCard({ broker, isRoot, isExpanded, earned, loaded, childCount, onToggle }: any) {
+function TeamNodeCard({ broker, isRoot, isExpanded, earned, customerCount = 0, loaded, childCount, onToggle }: any) {
   const clickable = !isRoot
   return (
     <div
@@ -1179,9 +1195,14 @@ function TeamNodeCard({ broker, isRoot, isExpanded, earned, loaded, childCount, 
         )}
       </div>
 
-      {isRoot && (
-        <div className="mt-2 flex items-center justify-center">
-          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-900 text-white">You</span>
+      {(isRoot || customerCount > 0) && (
+        <div className="mt-2 flex items-center justify-center gap-1 flex-wrap">
+          {isRoot && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-900 text-white">You</span>}
+          {customerCount > 0 && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100 font-medium inline-flex items-center gap-0.5">
+              <Users size={9}/>{customerCount}
+            </span>
+          )}
         </div>
       )}
 
