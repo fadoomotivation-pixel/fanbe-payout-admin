@@ -87,6 +87,27 @@ export default function BrokerTree() {
     },
   })
 
+  // Customer counts per broker so each card surfaces how many people the broker has
+  // actually brought in via bookings.  This answers questions like "did Nisha land
+  // anyone today?" without forcing admin to drill into each broker dashboard.
+  const { data: customersByBroker = {} } = useQuery<Record<string, number>>({
+    queryKey: ['team_tree_customer_counts'],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('bp_bookings')
+        .select('broker_id, customer_id')
+        .not('broker_id', 'is', null)
+        .not('customer_id', 'is', null)
+      const seen: Record<string, Set<string>> = {}
+      for (const r of (data || []) as any[]) {
+        (seen[r.broker_id] ??= new Set()).add(r.customer_id)
+      }
+      const out: Record<string, number> = {}
+      for (const k in seen) out[k] = seen[k].size
+      return out
+    },
+  })
+
   const tree = useMemo(() => {
     const byId = new Map<string, Broker>()
     const childrenOf = new Map<string, Broker[]>()
@@ -255,6 +276,7 @@ export default function BrokerTree() {
                   collapsed={collapsed}
                   forceOpenIds={forceOpenIds}
                   earnings={earningsByBroker}
+                  customers={customersByBroker}
                   aggregateEarnings={aggregateEarnings}
                   matchedIds={matchedIds}
                   onToggle={toggleNode}
@@ -278,7 +300,7 @@ export default function BrokerTree() {
 // risers to each child).  The horizontal bar is composed of two half-borders on each
 // child's top so it naturally spans only between the first and last child without any
 // JS measurement.
-function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, aggregateEarnings, matchedIds, onToggle }: any) {
+function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, customers, aggregateEarnings, matchedIds, onToggle }: any) {
   const children: Broker[] = tree.childrenOf.get(broker.id) || []
   const hasChildren = children.length > 0
   const isCollapsed = collapsed.has(broker.id) && !forceOpenIds.has(broker.id)
@@ -286,6 +308,7 @@ function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, aggr
   const subtree = tree.subtreeSize[broker.id] || 0
   const ownEarned = earnings[broker.id]?.earned || 0
   const teamEarned = (aggregateEarnings[broker.id] || 0) - ownEarned
+  const customerCount = customers[broker.id] || 0
   const isMatched = matchedIds.has(broker.id)
 
   return (
@@ -300,18 +323,13 @@ function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, aggr
         subtree={subtree}
         ownEarned={ownEarned}
         teamEarned={teamEarned}
+        customerCount={customerCount}
         onToggle={() => hasChildren && onToggle(broker.id)}
       />
 
       {showChildren && (
         <>
-          {/* Vertical descender from the card down to the sibling bar. */}
           <div className="w-px h-6 bg-gray-300" />
-
-          {/* Children row.  Each child has its own pair of half-borders that, taken together,
-              form the horizontal sibling bar.  The first child's left-half and the last child's
-              right-half are suppressed so the bar starts and ends exactly under the outermost
-              children. */}
           <div className="flex items-start">
             {children.map((c, i) => {
               const isFirst = i === 0
@@ -321,11 +339,10 @@ function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, aggr
                 <div key={c.id} className="relative flex flex-col items-center px-3 pt-6">
                   {!isOnly && !isFirst && <div className="absolute top-0 left-0 right-1/2 h-px bg-gray-300" />}
                   {!isOnly && !isLast  && <div className="absolute top-0 left-1/2 right-0 h-px bg-gray-300" />}
-                  {/* Riser into this child */}
                   <div className="absolute top-0 left-1/2 -translate-x-1/2 w-px h-6 bg-gray-300" />
                   <OrgNode
                     broker={c} tree={tree} collapsed={collapsed} forceOpenIds={forceOpenIds}
-                    earnings={earnings} aggregateEarnings={aggregateEarnings}
+                    earnings={earnings} customers={customers} aggregateEarnings={aggregateEarnings}
                     matchedIds={matchedIds} onToggle={onToggle}
                   />
                 </div>
@@ -338,7 +355,7 @@ function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, aggr
   )
 }
 
-function NodeCard({ broker, isRoot, isMatched, hasChildren, isCollapsed, directCount, subtree, ownEarned, teamEarned, onToggle }: any) {
+function NodeCard({ broker, isRoot, isMatched, hasChildren, isCollapsed, directCount, subtree, ownEarned, teamEarned, customerCount = 0, onToggle }: any) {
   return (
     <div
       onClick={hasChildren ? onToggle : undefined}
@@ -368,6 +385,11 @@ function NodeCard({ broker, isRoot, isMatched, hasChildren, isCollapsed, directC
       {/* badges row */}
       <div className="mt-2 flex items-center justify-center gap-1 flex-wrap text-[10px]">
         {isRoot && <span className="px-1.5 py-0.5 rounded-full bg-gray-900 text-white">Root</span>}
+        {customerCount > 0 && (
+          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100 font-medium">
+            <Users size={9}/>{customerCount} {customerCount === 1 ? 'customer' : 'customers'}
+          </span>
+        )}
         {broker.kyc_status !== 'approved' && (
           <span className="text-amber-700 inline-flex items-center gap-0.5"><AlertCircle size={9}/>KYC</span>
         )}
