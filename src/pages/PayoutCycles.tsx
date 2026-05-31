@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/Button.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate, PAYOUT_STATUS_COLORS } from '@/lib/utils'
 import { loadPayoutConfig, type PayoutConfig } from '@/lib/payoutEngine'
-import { logClosure, getCurrentUserId, monthRange } from '@/lib/closure'
+import { logClosure, getCurrentUserId } from '@/lib/closure'
 import { ClosureDialog } from '@/components/ClosureDialog'
 import { CalendarRange, Lock, Unlock, TrendingUp, Users, IndianRupee, Banknote, ChevronRight, ExternalLink } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -38,9 +38,13 @@ export default function PayoutCycles() {
   const qc = useQueryClient()
   const [closureFor, setClosureFor] = useState<{ cycle: any; action: 'close' | 'reopen' } | null>(null)
   const [showPreview, setShowPreview] = useState(false)
-  // Period picker — admin can close a prior month if data was backfilled.  Default = current month.
-  const [periodAnchor, setPeriodAnchor] = useState<string>(() => new Date().toISOString().slice(0, 7))
-  // Search/filter for past cycles (e.g. only those containing a specific broker)
+  // On-demand closing — admin closes whatever's currently unbatched, anytime.
+  // No more month-anchor: a "cycle" is any settlement run, not a calendar boundary.
+  // Optional slice mode lets admin limit the close to a custom date range.
+  const [sliceMode, setSliceMode] = useState<'all' | 'range'>('all')
+  const [sliceFrom, setSliceFrom] = useState<string>('')
+  const [sliceTo,   setSliceTo]   = useState<string>('')
+  // Filter for past cycles (e.g. only those containing a specific broker)
   const [brokerFilter, setBrokerFilter] = useState<string>('')
   // Expanded closed-cycle rows
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -58,8 +62,6 @@ export default function PayoutCycles() {
     },
   })
 
-  // List every broker so the period-cycle filter and the close preview both stay aware of
-  // brokers that have zero distributions in the active period.
   const { data: brokers = [] } = useQuery({
     queryKey: ['payout_cycles_brokers_lite'],
     queryFn: async () => {
@@ -68,25 +70,18 @@ export default function PayoutCycles() {
     },
   })
 
-  // Driven by periodAnchor (a YYYY-MM string).  When it changes, the eligible-distributions
-  // query refires for that month so admin can preview and close ANY past month.
-  const activeMonth = useMemo(() => {
-    const [yStr, mStr] = periodAnchor.split('-')
-    const anchor = new Date(Number(yStr), Number(mStr) - 1, 1)
-    return monthRange(anchor)
-  }, [periodAnchor])
-
+  // Eligible distributions = ones not yet in any cycle (cycle_id IS NULL).  Optionally
+  // sliced by a date range so admin can settle just a slice (e.g. last week's earnings).
   const { data: pendingCommissions = [] } = useQuery<DistributionRow[]>({
-    queryKey: ['cycle_pending_distributions', activeMonth.start, activeMonth.end],
+    queryKey: ['cycle_pending_distributions', sliceMode, sliceFrom, sliceTo],
     queryFn: async () => {
-      // Closing reads from payout_distributions — every per-payment MLM credit that
-      // actually landed in a broker's wallet during this period.  Includes direct AND
-      // every upline differential, NOT just the booking's direct broker.
-      const { data, error } = await supabase
+      let q = supabase
         .from('payout_distributions')
         .select('id, beneficiary_broker_id, booking_id, gross_payout, tds_amount, admin_charge, net_payout, created_at, brokers!payout_distributions_beneficiary_broker_id_fkey(name, broker_id)')
-        .gte('created_at', activeMonth.start)
-        .lte('created_at', `${activeMonth.end}T23:59:59.999Z`)
+        .is('cycle_id', null)
+      if (sliceMode === 'range' && sliceFrom) q = q.gte('created_at', sliceFrom)
+      if (sliceMode === 'range' && sliceTo)   q = q.lte('created_at', `${sliceTo}T23:59:59.999Z`)
+      const { data, error } = await q
       if (error) throw error
       return (data || []).map((d: any) => ({
         id:           d.id,
@@ -134,20 +129,26 @@ export default function PayoutCycles() {
     return { gross, tds, admin, net, brokers: perBroker.length, bookings: bookingSet.size, distributions: pendingCommissions.length }
   }, [perBroker, pendingCommissions])
 
-  const openCycle = (cycles as any[]).find(c => c.status === 'open' || c.status === 'reopened')
-
   const closeCycle = useMutation({
     mutationFn: async ({ reason }: { reason: string }) => {
-      if (perBroker.length === 0) throw new Error('Nothing to close — no commission distributions in this period')
+      if (perBroker.length === 0) throw new Error('Nothing to close — no unbatched commission distributions')
       const userId = await getCurrentUserId()
 
-      // Upsert cycle row
+      // Period = the actual span of distributions being closed, not a calendar boundary.
+      // Label "Settlement · {timestamp}" or "Range {from} → {to}" when admin sliced.
+      const dates = pendingCommissions.map(p => p.created_at).filter(Boolean).sort()
+      const periodStart = sliceMode === 'range' && sliceFrom ? sliceFrom : (dates[0] || new Date().toISOString()).slice(0, 10)
+      const periodEnd   = sliceMode === 'range' && sliceTo   ? sliceTo   : (dates[dates.length - 1] || new Date().toISOString()).slice(0, 10)
+      const periodLabel = sliceMode === 'range'
+        ? `Range · ${periodStart} → ${periodEnd}`
+        : `Settlement · ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}`
+
       const { data: cycle, error: cErr } = await supabase
         .from('payout_cycles')
-        .upsert({
-          period_label:    activeMonth.label,
-          period_start:    activeMonth.start,
-          period_end:      activeMonth.end,
+        .insert({
+          period_label:    periodLabel,
+          period_start:    periodStart,
+          period_end:      periodEnd,
           status:          'closed',
           total_bookings:  totals.bookings,
           total_brokers:   totals.brokers,
@@ -159,13 +160,23 @@ export default function PayoutCycles() {
           closed_by:       userId,
           closure_notes:   reason || null,
           updated_at:      new Date().toISOString(),
-        }, { onConflict: 'period_start,period_end' })
+        })
         .select()
         .single()
       if (cErr || !cycle) throw cErr || new Error('Failed to create cycle')
 
-      // Generate one payout transaction per broker — TDS / admin already deducted per distribution row.
-      // We sum the already-net figures rather than re-applying the percentages on gross (would double-deduct).
+      // Stamp every distribution we're closing with the new cycle.id so they don't get
+      // double-batched on the next close.  This is what makes the "all unbatched" model safe.
+      const distIds = pendingCommissions.map(p => p.id)
+      if (distIds.length > 0) {
+        const { error: updErr } = await supabase
+          .from('payout_distributions')
+          .update({ cycle_id: cycle.id })
+          .in('id', distIds)
+        if (updErr) throw updErr
+      }
+
+      // One payout transaction per broker — already-net figures, no re-deduction.
       const tx = perBroker.map(b => ({
         broker_id:      b.broker_id,
         cycle_id:       cycle.id,
@@ -175,7 +186,7 @@ export default function PayoutCycles() {
         admin_charge:   b.admin,
         net_amount:     b.net,
         status:         'pending',
-        notes:          `Cycle ${activeMonth.label} — ${b.distributions} distribution${b.distributions !== 1 ? 's' : ''} across ${b.bookings} booking${b.bookings !== 1 ? 's' : ''}`,
+        notes:          `${periodLabel} — ${b.distributions} distribution${b.distributions !== 1 ? 's' : ''} across ${b.bookings} booking${b.bookings !== 1 ? 's' : ''}`,
       }))
       if (tx.length > 0) {
         const { error: txErr } = await supabase.from('bp_payout_transactions').insert(tx)
@@ -187,15 +198,16 @@ export default function PayoutCycles() {
         entityId:   cycle.id,
         action:     'closed',
         reason,
-        metadata: { period: activeMonth.label, brokers: totals.brokers, gross: totals.gross, net: totals.net },
+        metadata: { period: periodLabel, brokers: totals.brokers, gross: totals.gross, net: totals.net, distributions: distIds.length },
       })
       return cycle
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['payout_cycles'] })
-      qc.invalidateQueries({ queryKey: ['cycle_pending_commissions'] })
+      qc.invalidateQueries({ queryKey: ['cycle_pending_distributions'] })
+      qc.invalidateQueries({ queryKey: ['cycle_txns_all'] })
       qc.invalidateQueries({ queryKey: ['payouts'] })
-      toast.success('Payout cycle closed and batch generated')
+      toast.success('Settlement closed — payout transactions generated')
       setClosureFor(null)
       setShowPreview(false)
     },
@@ -207,8 +219,10 @@ export default function PayoutCycles() {
       if (!reason) throw new Error('Reopen reason is required')
       const userId = await getCurrentUserId()
 
-      // Delete pending transactions for this cycle so the period can be reclosed cleanly
+      // Delete pending transactions AND unstamp the distributions so they go back into
+      // the "unbatched" pool and can be included in the next close.
       await supabase.from('bp_payout_transactions').delete().eq('cycle_id', cycle.id).eq('status', 'pending')
+      await supabase.from('payout_distributions').update({ cycle_id: null }).eq('cycle_id', cycle.id)
 
       const { error } = await supabase.from('payout_cycles').update({
         status: 'reopened',
@@ -224,8 +238,10 @@ export default function PayoutCycles() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['payout_cycles'] })
+      qc.invalidateQueries({ queryKey: ['cycle_pending_distributions'] })
+      qc.invalidateQueries({ queryKey: ['cycle_txns_all'] })
       qc.invalidateQueries({ queryKey: ['payouts'] })
-      toast.success('Cycle reopened — pending payouts cleared')
+      toast.success('Cycle reopened — distributions returned to the unbatched pool')
       setClosureFor(null)
     },
     onError: (e: any) => toast.error(e.message),
@@ -283,19 +299,40 @@ export default function PayoutCycles() {
       <div className="bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-100 rounded-2xl p-5 mb-6">
         <div className="flex items-start justify-between mb-4 flex-wrap gap-3">
           <div>
-            <div className="text-xs font-semibold text-indigo-600 uppercase tracking-wider mb-1">Period to close</div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <input type="month" value={periodAnchor} onChange={e => setPeriodAnchor(e.target.value)}
-                className="bg-white border border-indigo-200 rounded-lg px-3 py-1.5 text-sm font-semibold focus:outline-none focus:border-indigo-400"/>
-              <button onClick={() => setPeriodAnchor(new Date().toISOString().slice(0, 7))}
-                className="text-[11px] text-indigo-600 hover:underline">Reset to current</button>
+            <div className="text-xs font-semibold text-indigo-600 uppercase tracking-wider mb-1">Pending settlement</div>
+            <div className="text-lg font-bold text-gray-900">
+              {totals.distributions === 0
+                ? 'Nothing to close · all commissions are batched'
+                : `${totals.distributions} distribution${totals.distributions === 1 ? '' : 's'} ready to close`}
             </div>
-            <div className="text-xs text-gray-500 mt-1">{activeMonth.label} · {formatDate(activeMonth.start)} → {formatDate(activeMonth.end)}</div>
+            <div className="text-xs text-gray-500 mt-0.5">
+              Real-time MLM commissions accumulate here until you settle them.  Close whenever
+              you're ready to issue the bank transfers — no monthly schedule required.
+            </div>
+            {/* Optional slice — narrow the close to a specific date range */}
+            <div className="mt-2 flex items-center gap-2 text-xs flex-wrap">
+              <span className="text-gray-500">Scope:</span>
+              <div className="inline-flex bg-white rounded-full border border-indigo-200 p-0.5">
+                <button onClick={() => setSliceMode('all')}
+                  className={`px-3 py-0.5 rounded-full transition ${sliceMode === 'all' ? 'bg-indigo-600 text-white font-semibold' : 'text-gray-600'}`}>All unbatched</button>
+                <button onClick={() => setSliceMode('range')}
+                  className={`px-3 py-0.5 rounded-full transition ${sliceMode === 'range' ? 'bg-indigo-600 text-white font-semibold' : 'text-gray-600'}`}>Date range</button>
+              </div>
+              {sliceMode === 'range' && (
+                <>
+                  <input type="date" value={sliceFrom} onChange={e => setSliceFrom(e.target.value)}
+                    className="bg-white border border-indigo-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-indigo-400"/>
+                  <span className="text-gray-400">→</span>
+                  <input type="date" value={sliceTo} onChange={e => setSliceTo(e.target.value)}
+                    className="bg-white border border-indigo-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-indigo-400"/>
+                </>
+              )}
+            </div>
           </div>
-          <div className="flex gap-2">
-            <Button variant="secondary" onClick={() => setShowPreview(s => !s)}>{showPreview ? 'Hide preview' : 'Preview totals'}</Button>
-            <Button onClick={() => setClosureFor({ cycle: { ...activeMonth }, action: 'close' })} disabled={totals.distributions === 0}>
-              <Lock size={14}/>Close period
+          <div className="flex gap-2 self-end">
+            <Button variant="secondary" onClick={() => setShowPreview(s => !s)} disabled={totals.distributions === 0}>{showPreview ? 'Hide preview' : 'Preview totals'}</Button>
+            <Button onClick={() => setClosureFor({ cycle: { period_label: 'New settlement' }, action: 'close' })} disabled={totals.distributions === 0}>
+              <Lock size={14}/>Close now
             </Button>
           </div>
         </div>
@@ -310,7 +347,11 @@ export default function PayoutCycles() {
         </div>
 
         {totals.distributions === 0 && (
-          <div className="mt-4 text-xs text-gray-500">No commission distributions in this period yet. Distributions land here automatically when a customer pays — verify payments on the <b>Payments</b> page.</div>
+          <div className="mt-4 text-xs text-gray-500">
+            {sliceMode === 'range'
+              ? 'No unbatched distributions in this date range.'
+              : 'All commissions have been batched into closed cycles. New distributions land here automatically when customers pay.'}
+          </div>
         )}
 
         {showPreview && perBroker.length > 0 && (
@@ -435,10 +476,10 @@ export default function PayoutCycles() {
         entityLabel={`payout cycle ${closureFor?.cycle?.period_label || ''}`}
         description={
           closureFor?.action === 'close'
-            ? `Closing freezes the ${totals.distributions} distribution${totals.distributions !== 1 ? 's' : ''} that landed in ${activeMonth.label}. A pending payout transaction will be generated for each of the ${totals.brokers} broker${totals.brokers !== 1 ? 's' : ''} using the already-deducted figures (Net payable: ${formatINR(totals.net)}).`
+            ? `Closing freezes the ${totals.distributions} distribution${totals.distributions !== 1 ? 's' : ''} ${sliceMode === 'range' ? `in the selected range` : 'currently unbatched'} into a settlement.  ${totals.brokers} broker${totals.brokers !== 1 ? 's' : ''} will get a pending payout transaction with the already-deducted figures (Net payable: ${formatINR(totals.net)}).`
             : 'Reopening clears all pending transactions generated by this cycle close. Brokers will see their wallets reset to pre-close state.'
         }
-        warning={closureFor?.action === 'close' && openCycle ? `Previous "open" cycle ${openCycle.period_label} still exists. Closing this period creates a new closed cycle for ${activeMonth.label}.` : undefined}
+        warning={undefined}
         reasonRequired={closureFor?.action === 'reopen'}
         onClose={() => setClosureFor(null)}
         onConfirm={async (reason) => {
