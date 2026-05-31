@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Users, Building2, Map, BookOpen, CreditCard, Banknote, Settings, LogOut, ChevronLeft, ChevronRight, BarChart2, FileText, UserCheck, MessageSquare, Megaphone, ShieldCheck, Receipt, Wallet, Calculator, Inbox, UserPlus, History, TrendingUp, Landmark, Star, Gift, Trophy, ScrollText, CalendarRange } from 'lucide-react'
+import { LayoutDashboard, Users, Building2, Map, BookOpen, CreditCard, Banknote, Settings, LogOut, ChevronLeft, ChevronRight, BarChart2, FileText, UserCheck, MessageSquare, Megaphone, ShieldCheck, Receipt, Wallet, Briefcase, Inbox, UserPlus, History, TrendingUp, Landmark, Star, Gift, Trophy, ScrollText, CalendarRange, Network } from 'lucide-react'
 import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
@@ -17,12 +17,13 @@ const NAV = [
   { group:'Real Estate', items:[
     {to:'/projects',icon:Building2,label:'Projects'},
     {to:'/plots',icon:Map,label:'Plots'},
-    {to:'/bookings',icon:BookOpen,label:'Bookings'},
+    {to:'/bookings',icon:BookOpen,label:'New Booking'},
+    {to:'/customer-pipeline',icon:Briefcase,label:'Customer Pipeline'},
     {to:'/payments',icon:CreditCard,label:'Payments'},
-    {to:'/emi',icon:Calculator,label:'EMI Schedule'},
   ]},
   { group:'Broker Network', items:[
     {to:'/brokers',icon:Users,label:'Brokers'},
+    {to:'/team-tree',icon:Network,label:'Team Tree'},
     {to:'/kyc',icon:UserCheck,label:'KYC Review'},
     {to:'/commission-ranks',icon:Trophy,label:'Rank Slabs'},
   ]},

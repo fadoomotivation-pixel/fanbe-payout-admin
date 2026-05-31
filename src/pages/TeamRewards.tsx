@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { Gift, Users, ChevronDown, ChevronRight, CheckCircle, Clock, XCircle, Info } from 'lucide-react';
+import { Gift, ChevronDown, ChevronRight, CheckCircle, Clock, XCircle, Info, ArrowUpRight } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -92,17 +93,37 @@ export default function TeamRewards() {
     async function fetchData() {
       setLoading(true);
 
-      const [tiersRes, brokersRes] = await Promise.all([
+      // brokers.lifetime_business and direct_count don't exist as columns.  Derive both:
+      //   - lifetime sqyd = sum of bp_plots.size_sqyd across this broker's confirmed bookings
+      //   - direct count   = number of brokers sponsored by this broker
+      const [tiersRes, brokersRes, bookingsRes, downlineRes] = await Promise.all([
         supabase
           .from('team_reward_tiers')
           .select('*')
+          .eq('is_active', true)
           .order('required_sq_yards', { ascending: true }),
         supabase
           .from('brokers')
-          .select('id, name, phone, lifetime_business, direct_count')
-          .order('lifetime_business', { ascending: false })
-          .limit(150),
+          .select('id, name, phone, sponsor_id')
+          .neq('status', 'inactive')
+          .limit(500),
+        supabase
+          .from('bp_bookings')
+          .select('broker_id, bp_plots(size_sqyd)')
+          .eq('stage', 'booking_done'),
+        supabase.from('brokers').select('sponsor_id').not('sponsor_id', 'is', null),
       ]);
+
+      const sqydByBroker: Record<string, number> = {};
+      for (const b of (bookingsRes.data || []) as any[]) {
+        if (!b.broker_id) continue;
+        sqydByBroker[b.broker_id] = (sqydByBroker[b.broker_id] || 0) + Number(b.bp_plots?.size_sqyd || 0);
+      }
+      const directCountByBroker: Record<string, number> = {};
+      for (const d of (downlineRes.data || []) as any[]) {
+        if (!d.sponsor_id) continue;
+        directCountByBroker[d.sponsor_id] = (directCountByBroker[d.sponsor_id] || 0) + 1;
+      }
 
       const loadedTiers: RewardTier[] = tiersRes.data ?? [];
       setTiers(loadedTiers);
@@ -113,8 +134,8 @@ export default function TeamRewards() {
             id: b.id,
             name: b.name,
             phone: b.phone,
-            lifetime_business: b.lifetime_business ?? 0,
-            direct_count: b.direct_count ?? 0,
+            lifetime_business: sqydByBroker[b.id] || 0,
+            direct_count: directCountByBroker[b.id] || 0,
           };
 
           // Apply 33% cap rule per PDF
@@ -138,6 +159,8 @@ export default function TeamRewards() {
             }),
           };
         });
+        // Sort: highest effective business first; brokers with zero sqyd drift to bottom.
+        built.sort((a, b) => b.effective_business - a.effective_business);
         setStatuses(built);
       }
 
@@ -294,8 +317,10 @@ export default function TeamRewards() {
                           : <ChevronRight size={14} />}
                       </td>
                       <td className="px-4 py-3">
-                        <p className="font-medium text-gray-800">{s.broker.name}</p>
-                        <p className="text-xs text-gray-400">{s.broker.phone}</p>
+                        <Link to={`/broker/dashboard?broker_id=${s.broker.id}`} className="hover:text-blue-700 inline-block">
+                          <p className="font-medium text-gray-800 inline-flex items-center gap-1">{s.broker.name}<ArrowUpRight size={10} className="text-gray-400"/></p>
+                          <p className="text-xs text-gray-400">{s.broker.phone}{s.broker.direct_count > 0 ? ` · ${s.broker.direct_count} direct` : ''}</p>
+                        </Link>
                       </td>
                       {/* Raw business */}
                       <td className="px-4 py-3 text-right tabular-nums text-gray-500 text-xs">
