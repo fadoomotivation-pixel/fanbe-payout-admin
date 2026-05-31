@@ -471,18 +471,37 @@ export default function Payouts() {
                     {b?.kyc_status && b.kyc_status !== 'approved' && <span className="ml-2 text-amber-700">KYC {b.kyc_status}</span>}
                   </div>
                 </div>
-                <div className="text-right shrink-0 hidden sm:block">
-                  <div className="text-[10px] text-gray-400">Earned</div>
-                  <div className="font-bold text-emerald-700">{formatINR(r.earned)}</div>
-                </div>
-                <div className="text-right shrink-0 hidden sm:block">
-                  <div className="text-[10px] text-gray-400">Paid</div>
-                  <div className="font-bold text-blue-700">{formatINR(r.paid)}</div>
-                </div>
-                <div className="text-right shrink-0">
-                  <div className="text-[10px] text-gray-400">Owed</div>
-                  <div className={`font-bold ${r.balance > 0 ? 'text-rose-700' : 'text-gray-400'}`}>{formatINR(r.balance)}</div>
-                </div>
+                {(() => {
+                  // Coordination check across both settlement paths.  If total committed
+                  // (paid + pending across cycles + withdrawals) exceeds earned, the broker
+                  // is over-allocated — admin should review before paying anything else.
+                  const committed = r.paid + r.approved_payout + r.pending_payout
+                  const overAllocated = committed > r.earned + 0.01
+                  const overBy = committed - r.earned
+                  return (
+                    <>
+                      <div className="text-right shrink-0 hidden sm:block">
+                        <div className="text-[10px] text-gray-400">Earned</div>
+                        <div className="font-bold text-emerald-700">{formatINR(r.earned)}</div>
+                      </div>
+                      <div className="text-right shrink-0 hidden sm:block">
+                        <div className="text-[10px] text-gray-400">Paid</div>
+                        <div className="font-bold text-blue-700">{formatINR(r.paid)}</div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-[10px] text-gray-400 inline-flex items-center gap-0.5">
+                          Owed
+                          {overAllocated && (
+                            <span title={`Over-allocated by ${formatINR(overBy)} — cycle + withdrawal commitments exceed earnings. Resolve before paying out.`}>
+                              <AlertCircle size={11} className="text-rose-600 ml-0.5"/>
+                            </span>
+                          )}
+                        </div>
+                        <div className={`font-bold ${overAllocated ? 'text-rose-700' : r.balance > 0 ? 'text-rose-700' : 'text-gray-400'}`}>{formatINR(r.balance)}</div>
+                      </div>
+                    </>
+                  )
+                })()}
                 <Link to={`/broker/dashboard?broker_id=${r.broker_id}`}
                   onClick={e => e.stopPropagation()}
                   className="ml-2 inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md border border-gray-200 hover:bg-gray-50">
