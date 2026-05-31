@@ -307,15 +307,26 @@ export default function BrokerTree() {
 // child's top so it naturally spans only between the first and last child without any
 // JS measurement.
 function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, customers, aggregateEarnings, matchedIds, onToggle }: any) {
-  const children: Broker[] = tree.childrenOf.get(broker.id) || []
-  const hasChildren = children.length > 0
+  const subBrokers: Broker[] = tree.childrenOf.get(broker.id) || []
+  const customerList: { id: string; name: string; code: string }[] = customers?.[broker.id] || []
+  const hasSubBrokers = subBrokers.length > 0
+  const hasCustomers  = customerList.length > 0
+  const hasChildren   = hasSubBrokers || hasCustomers
   const isCollapsed = collapsed.has(broker.id) && !forceOpenIds.has(broker.id)
   const showChildren = hasChildren && !isCollapsed
   const subtree = tree.subtreeSize[broker.id] || 0
   const ownEarned = earnings[broker.id]?.earned || 0
   const teamEarned = (aggregateEarnings[broker.id] || 0) - ownEarned
-  const customerList = (customers?.[broker.id] || []) as { id: string; name: string; code: string }[]
   const isMatched = matchedIds.has(broker.id)
+
+  // Combine sub-brokers + customers into a single ordered child list so they share
+  // the org chart's sibling bar and risers — Nidhi appears under Nisha exactly like
+  // Anjana / Rohit do, just styled as a customer leaf instead of a broker recursive node.
+  type Child = { kind: 'broker'; key: string; data: Broker } | { kind: 'customer'; key: string; data: { id: string; name: string; code: string } }
+  const combined: Child[] = [
+    ...subBrokers.map(b => ({ kind: 'broker' as const, key: b.id, data: b })),
+    ...customerList.map(c => ({ kind: 'customer' as const, key: `c-${c.id}`, data: c })),
+  ]
 
   return (
     <div className="flex flex-col items-center">
@@ -325,7 +336,7 @@ function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, cust
         isMatched={isMatched}
         hasChildren={hasChildren}
         isCollapsed={isCollapsed && !forceOpenIds.has(broker.id)}
-        directCount={children.length}
+        directCount={subBrokers.length}
         subtree={subtree}
         ownEarned={ownEarned}
         teamEarned={teamEarned}
@@ -337,20 +348,24 @@ function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, cust
         <>
           <div className="w-px h-6 bg-gray-300" />
           <div className="flex items-start">
-            {children.map((c, i) => {
+            {combined.map((c, i) => {
               const isFirst = i === 0
-              const isLast  = i === children.length - 1
-              const isOnly  = children.length === 1
+              const isLast  = i === combined.length - 1
+              const isOnly  = combined.length === 1
               return (
-                <div key={c.id} className="relative flex flex-col items-center px-3 pt-6">
+                <div key={c.key} className="relative flex flex-col items-center px-3 pt-6">
                   {!isOnly && !isFirst && <div className="absolute top-0 left-0 right-1/2 h-px bg-gray-300" />}
                   {!isOnly && !isLast  && <div className="absolute top-0 left-1/2 right-0 h-px bg-gray-300" />}
                   <div className="absolute top-0 left-1/2 -translate-x-1/2 w-px h-6 bg-gray-300" />
-                  <OrgNode
-                    broker={c} tree={tree} collapsed={collapsed} forceOpenIds={forceOpenIds}
-                    earnings={earnings} customers={customers} aggregateEarnings={aggregateEarnings}
-                    matchedIds={matchedIds} onToggle={onToggle}
-                  />
+                  {c.kind === 'broker' ? (
+                    <OrgNode
+                      broker={c.data} tree={tree} collapsed={collapsed} forceOpenIds={forceOpenIds}
+                      earnings={earnings} customers={customers} aggregateEarnings={aggregateEarnings}
+                      matchedIds={matchedIds} onToggle={onToggle}
+                    />
+                  ) : (
+                    <CustomerLeaf customer={c.data}/>
+                  )}
                 </div>
               )
             })}
@@ -361,11 +376,31 @@ function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, cust
   )
 }
 
+// Terminal leaf node for a customer.  Same footprint as a broker NodeCard so the org
+// chart stays aligned, but visually distinct (amber + "CUSTOMER" badge + dashed border)
+// so admin can tell brokers from customers at a glance.  Clicking jumps to the
+// customer's history page.
+function CustomerLeaf({ customer }: { customer: { id: string; name: string; code: string } }) {
+  return (
+    <Link
+      to={`/customer-history?customer=${customer.id}`}
+      onClick={e => e.stopPropagation()}
+      className="w-[180px] sm:w-[200px] rounded-2xl border-2 border-dashed border-amber-200 bg-amber-50/40 px-3 py-3 shadow-sm hover:border-amber-300 hover:bg-amber-50 transition flex flex-col items-center"
+    >
+      <div className="w-12 h-12 rounded-full flex items-center justify-center text-base font-semibold mb-2 bg-gradient-to-br from-amber-400 to-orange-500 text-white">
+        {(customer.name || '?').charAt(0).toUpperCase()}
+      </div>
+      <div className="text-sm font-semibold text-gray-900 truncate max-w-full text-center">{customer.name || '—'}</div>
+      <div className="text-[10px] font-mono text-gray-400 mt-0.5">[{customer.code || '—'}]</div>
+      <span className="mt-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">CUSTOMER</span>
+    </Link>
+  )
+}
+
 function NodeCard({ broker, isRoot, isMatched, hasChildren, isCollapsed, directCount, subtree, ownEarned, teamEarned, customers = [], onToggle }: any) {
-  // Tap the customer pill to reveal the actual customer names inline on the card.
-  // Solves the original report — admin saw "1 customer" on Nisha's card but couldn't
-  // see who that customer was (Nidhi) without leaving the tree.
-  const [showCustomers, setShowCustomers] = useState(false)
+  // Customers now render as actual tree leaves when the broker is expanded — the pill is
+  // a simple count badge again.  Tapping anywhere on the card (including the pill) toggles
+  // the children, so Nisha tapped → reveals sub-brokers AND Nidhi as sibling leaves.
   const customerCount = customers.length
   return (
     <div
@@ -397,15 +432,9 @@ function NodeCard({ broker, isRoot, isMatched, hasChildren, isCollapsed, directC
       <div className="mt-2 flex items-center justify-center gap-1 flex-wrap text-[10px]">
         {isRoot && <span className="px-1.5 py-0.5 rounded-full bg-gray-900 text-white">Root</span>}
         {customerCount > 0 && (
-          <button
-            onClick={e => { e.stopPropagation(); setShowCustomers(s => !s) }}
-            className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full border font-medium transition
-              ${showCustomers ? 'bg-blue-100 text-blue-800 border-blue-200' : 'bg-blue-50 text-blue-700 border-blue-100 hover:border-blue-200'}`}
-            title={showCustomers ? 'Hide customers' : 'Show customers'}
-          >
+          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-100 font-medium">
             <Users size={9}/>{customerCount} {customerCount === 1 ? 'customer' : 'customers'}
-            <ChevronRight size={9} className={`transition-transform ${showCustomers ? 'rotate-90' : ''}`}/>
-          </button>
+          </span>
         )}
         {broker.kyc_status !== 'approved' && (
           <span className="text-amber-700 inline-flex items-center gap-0.5"><AlertCircle size={9}/>KYC</span>
@@ -414,26 +443,6 @@ function NodeCard({ broker, isRoot, isMatched, hasChildren, isCollapsed, directC
           <span className="text-gray-400 italic">{broker.status}</span>
         )}
       </div>
-
-      {/* Expanded customer list — names of every customer this broker has brought in. */}
-      {showCustomers && customerCount > 0 && (
-        <div className="mt-2 -mx-1 px-1 py-1.5 rounded-lg bg-blue-50/60 border border-blue-100">
-          <div className="max-h-32 overflow-y-auto divide-y divide-blue-100">
-            {customers.map((c: any) => (
-              <Link
-                key={c.id}
-                to={`/customer-history?customer=${c.id}`}
-                onClick={e => e.stopPropagation()}
-                className="block py-1 text-[11px] text-blue-900 hover:text-blue-700 truncate"
-                title={c.name}
-              >
-                <span className="font-medium">{c.name}</span>
-                {c.code && <span className="ml-1 font-mono text-[9px] text-blue-400">[{c.code}]</span>}
-              </Link>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* contact + earnings */}
       <div className="mt-2 pt-2 border-t border-gray-100 text-[11px] text-gray-500 space-y-1">
@@ -451,7 +460,9 @@ function NodeCard({ broker, isRoot, isMatched, hasChildren, isCollapsed, directC
         )}
         {hasChildren && (
           <div className="flex items-center justify-center gap-1 text-gray-400">
-            <Layers size={9}/>{directCount} direct · {subtree} total
+            <Layers size={9}/>
+            {directCount > 0 && <span>{directCount} direct · {subtree} total</span>}
+            {directCount === 0 && customerCount > 0 && <span>{customerCount} {customerCount === 1 ? 'customer' : 'customers'}</span>}
             {isCollapsed
               ? <ChevronRight size={11} className="text-gray-500"/>
               : <ChevronDown  size={11} className="text-gray-500"/>}

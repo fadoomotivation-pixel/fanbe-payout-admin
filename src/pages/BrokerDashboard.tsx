@@ -1131,17 +1131,28 @@ function WdBadge({ status }: { status: string }) {
 // matches /team-tree: vertical descender → horizontal sibling bar → risers into each child.
 function TeamOrgNode({ broker, isRoot, initialChildren, subTeams, expandedTeam, downlineEarnings, downlineCustomers, onToggle }: any) {
   if (!broker) return null
+  const customerList = (downlineCustomers?.[broker.id] || []) as { id: string; name: string; code: string }[]
+  const subBrokersLoaded: any[] = isRoot ? (initialChildren || []) : (subTeams[broker.id] || [])
   const isExpanded = isRoot || expandedTeam.has(broker.id)
-  const childrenLoaded = isRoot ? initialChildren : subTeams[broker.id]
-  const showChildren = isExpanded && Array.isArray(childrenLoaded) && childrenLoaded.length > 0
+  const hasSubBrokers = Array.isArray(subBrokersLoaded) && subBrokersLoaded.length > 0
+  const hasCustomers  = customerList.length > 0
+  const showChildren  = isExpanded && (hasSubBrokers || hasCustomers)
+
+  // Merge sub-brokers + customers into one ordered children list so Nidhi shows up as a
+  // tree leaf under Nisha, alongside Anjana / Rohit, instead of buried in a popover.
+  type Child = { kind: 'broker'; key: string; data: any } | { kind: 'customer'; key: string; data: { id: string; name: string; code: string } }
+  const combined: Child[] = [
+    ...subBrokersLoaded.map((b: any) => ({ kind: 'broker' as const, key: b.id, data: b })),
+    ...customerList.map(c => ({ kind: 'customer' as const, key: `c-${c.id}`, data: c })),
+  ]
 
   return (
     <div className="flex flex-col items-center">
       <TeamNodeCard broker={broker} isRoot={isRoot} isExpanded={isExpanded}
         earned={downlineEarnings[broker.id] || 0}
-        customers={downlineCustomers?.[broker.id] || []}
-        loaded={isRoot ? true : Array.isArray(childrenLoaded)}
-        childCount={Array.isArray(childrenLoaded) ? childrenLoaded.length : null}
+        customers={customerList}
+        loaded={isRoot ? true : Array.isArray(subTeams[broker.id])}
+        childCount={hasSubBrokers ? subBrokersLoaded.length : 0}
         onToggle={() => !isRoot && onToggle(broker.id)}
       />
 
@@ -1149,17 +1160,21 @@ function TeamOrgNode({ broker, isRoot, initialChildren, subTeams, expandedTeam, 
         <>
           <div className="w-px h-6 bg-gray-300" />
           <div className="flex items-start">
-            {childrenLoaded.map((c: any, i: number) => {
+            {combined.map((c, i) => {
               const isFirst = i === 0
-              const isLast  = i === childrenLoaded.length - 1
-              const isOnly  = childrenLoaded.length === 1
+              const isLast  = i === combined.length - 1
+              const isOnly  = combined.length === 1
               return (
-                <div key={c.id} className="relative flex flex-col items-center px-3 pt-6">
+                <div key={c.key} className="relative flex flex-col items-center px-3 pt-6">
                   {!isOnly && !isFirst && <div className="absolute top-0 left-0 right-1/2 h-px bg-gray-300" />}
                   {!isOnly && !isLast  && <div className="absolute top-0 left-1/2 right-0 h-px bg-gray-300" />}
                   <div className="absolute top-0 left-1/2 -translate-x-1/2 w-px h-6 bg-gray-300" />
-                  <TeamOrgNode broker={c} initialChildren={null} subTeams={subTeams}
-                    expandedTeam={expandedTeam} downlineEarnings={downlineEarnings} downlineCustomers={downlineCustomers} onToggle={onToggle}/>
+                  {c.kind === 'broker' ? (
+                    <TeamOrgNode broker={c.data} initialChildren={null} subTeams={subTeams}
+                      expandedTeam={expandedTeam} downlineEarnings={downlineEarnings} downlineCustomers={downlineCustomers} onToggle={onToggle}/>
+                  ) : (
+                    <CustomerLeaf customer={c.data}/>
+                  )}
                 </div>
               )
             })}
@@ -1175,10 +1190,29 @@ function TeamOrgNode({ broker, isRoot, initialChildren, subTeams, expandedTeam, 
   )
 }
 
+// Terminal leaf node for a customer.  Identical footprint to TeamNodeCard so the org chart
+// stays aligned, but visually distinct (amber + dashed + "CUSTOMER" badge) so customers
+// can't be confused with brokers.  Click → jumps to that customer's history page.
+function CustomerLeaf({ customer }: { customer: { id: string; name: string; code: string } }) {
+  return (
+    <Link
+      to={`/customer-history?customer=${customer.id}`}
+      onClick={e => e.stopPropagation()}
+      className="w-[150px] sm:w-[170px] rounded-2xl border-2 border-dashed border-amber-200 bg-amber-50/40 px-3 py-3 shadow-sm hover:border-amber-300 hover:bg-amber-50 transition flex flex-col items-center"
+    >
+      <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold mb-1.5 bg-gradient-to-br from-amber-400 to-orange-500 text-white">
+        {(customer.name || '?').charAt(0).toUpperCase()}
+      </div>
+      <div className="text-[13px] font-semibold text-gray-900 truncate max-w-full text-center">{customer.name || '—'}</div>
+      <div className="text-[10px] font-mono text-gray-400 mt-0.5">[{customer.code || '—'}]</div>
+      <span className="mt-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">CUSTOMER</span>
+    </Link>
+  )
+}
+
 function TeamNodeCard({ broker, isRoot, isExpanded, earned, customers = [], loaded, childCount, onToggle }: any) {
   const clickable = !isRoot
   const customerCount = customers.length
-  const [showCustomers, setShowCustomers] = useState(false)
   return (
     <div
       onClick={clickable ? onToggle : undefined}
@@ -1208,35 +1242,10 @@ function TeamNodeCard({ broker, isRoot, isExpanded, earned, customers = [], load
         <div className="mt-2 flex items-center justify-center gap-1 flex-wrap">
           {isRoot && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-900 text-white">You</span>}
           {customerCount > 0 && (
-            <button
-              onClick={e => { e.stopPropagation(); setShowCustomers(s => !s) }}
-              className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium inline-flex items-center gap-0.5 transition
-                ${showCustomers ? 'bg-blue-100 text-blue-800 border-blue-200' : 'bg-blue-50 text-blue-700 border-blue-100 hover:border-blue-200'}`}
-              title={showCustomers ? 'Hide customers' : 'Show customers'}
-            >
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-100 font-medium inline-flex items-center gap-0.5">
               <Users size={9}/>{customerCount}
-              <ChevronRight size={9} className={`transition-transform ${showCustomers ? 'rotate-90' : ''}`}/>
-            </button>
+            </span>
           )}
-        </div>
-      )}
-
-      {showCustomers && customerCount > 0 && (
-        <div className="mt-2 -mx-1 px-1 py-1.5 rounded-lg bg-blue-50/60 border border-blue-100">
-          <div className="max-h-32 overflow-y-auto divide-y divide-blue-100">
-            {customers.map((c: any) => (
-              <Link
-                key={c.id}
-                to={`/customer-history?customer=${c.id}`}
-                onClick={e => e.stopPropagation()}
-                className="block py-1 text-[11px] text-blue-900 hover:text-blue-700 truncate"
-                title={c.name}
-              >
-                <span className="font-medium">{c.name}</span>
-                {c.code && <span className="ml-1 font-mono text-[9px] text-blue-400">[{c.code}]</span>}
-              </Link>
-            ))}
-          </div>
         </div>
       )}
 
