@@ -56,6 +56,9 @@ export default function BrokerDashboard() {
   const [expandedTeam, setExpandedTeam] = useState<Set<string>>(new Set())
   const [subTeams, setSubTeams]         = useState<Record<string, any[]>>({})
   const [activity, setActivity]         = useState<any[]>([])
+  // Filter chips at the top of the Activity tab — admin can narrow a busy timeline to
+  // just commissions, just withdrawals, or just bookings without scrolling.
+  const [activityFilter, setActivityFilter] = useState<'all' | 'payouts' | 'withdrawals' | 'bookings'>('all')
   const [payoutOpen, setPayoutOpen]     = useState<Record<string, boolean>>({})
 
   useEffect(() => { (async () => {
@@ -170,7 +173,34 @@ export default function BrokerDashboard() {
       if (w.closed_at)  events.push({ at: w.closed_at,  kind: 'withdrawal_closed',    title: 'Withdrawal closed',   sub: w.bank_name || '—',    icon: 'lock', amount: w.net_amount || w.amount })
     }
     for (const p of (po.data || []) as any[]) {
-      if (p.created_at) events.push({ at: p.created_at, kind: 'payout',            title: `Payout L${p.level || '?'}`,         sub: p.income_type || '—', icon: 'coins', amount: p.net_payout })
+      if (!p.created_at) continue
+      // Earlier this title was `Payout L${p.level || '?'}` — when level is 0 (direct/self),
+      // 0 is falsy so it rendered "L?".  And "L1 / differential" still told the admin
+      // nothing about WHICH deal the credit came from.  Use a friendly label per income
+      // type and surface the booking + customer + plot so the event is self-explaining.
+      const bookingNo = p.bp_bookings?.booking_no
+      const customer  = p.bp_bookings?.bp_customers?.name
+      const plotNo    = p.bp_bookings?.bp_plots?.plot_no
+      const lvl       = Number(p.level ?? 0)
+      const title     =
+        p.income_type === 'direct' || lvl === 0
+          ? 'Direct commission'
+          : `Upline differential · L${lvl}`
+      const rate      = Number(p.differential_pct ?? p.rate_pct ?? 0)
+      const parts     = [
+        bookingNo ? bookingNo : null,
+        customer  ? customer  : null,
+        plotNo    ? `Plot ${plotNo}` : null,
+        rate > 0  ? `${rate}%` : null,
+      ].filter(Boolean)
+      events.push({
+        at: p.created_at,
+        kind: lvl === 0 ? 'payout_direct' : 'payout_upline',
+        title,
+        sub: parts.join(' · ') || '—',
+        icon: 'coins',
+        amount: p.net_payout,
+      })
     }
     events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
     setActivity(events.slice(0, 40))
@@ -711,46 +741,83 @@ export default function BrokerDashboard() {
           </Section>
         )}
 
-        {tab === 'activity' && (
-          <Section title="Activity timeline" icon={<Activity size={14}/>}>
-            {activity.length === 0 ? (
-              <p className="text-sm text-gray-500">No activity yet.</p>
-            ) : (
-              <div className="divide-y divide-gray-100">
-                {activity.map((e, i) => {
-                  const Ic =
-                    e.icon === 'booking' ? FileText :
-                    e.icon === 'lock'    ? Lock :
-                    e.icon === 'send'    ? Send :
-                    e.icon === 'check'   ? CheckCircle2 :
-                    e.icon === 'coins'   ? Coins :
-                                           Activity
-                  const tint =
-                    e.kind === 'booking_created'     ? 'bg-blue-50 text-blue-700' :
-                    e.kind === 'booking_closed'     ? 'bg-slate-100 text-slate-700' :
-                    e.kind === 'withdrawal_requested' ? 'bg-amber-50 text-amber-700' :
-                    e.kind === 'withdrawal_paid'    ? 'bg-emerald-50 text-emerald-700' :
-                    e.kind === 'withdrawal_closed'  ? 'bg-slate-100 text-slate-700' :
-                    e.kind === 'payout'             ? 'bg-indigo-50 text-indigo-700' :
-                                                      'bg-gray-50 text-gray-700'
-                  return (
-                    <div key={i} className="py-2.5 flex items-start gap-3">
-                      <div className={`w-7 h-7 rounded-full flex items-center justify-center ${tint} shrink-0`}><Ic size={13}/></div>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium text-gray-900">{e.title}</div>
-                        <div className="text-xs text-gray-500 truncate">{e.sub}</div>
-                      </div>
-                      <div className="text-right shrink-0">
-                        {e.amount != null && <div className="text-sm font-semibold text-gray-900">{formatINR(e.amount)}</div>}
-                        <div className="text-[10px] text-gray-400">{formatDate(e.at)}</div>
-                      </div>
-                    </div>
-                  )
-                })}
+        {tab === 'activity' && (() => {
+          // Filter by chip selection.  Counts are computed from the full event list so the
+          // chip labels show how many events are in each bucket regardless of current filter.
+          const counts = {
+            all:         activity.length,
+            payouts:     activity.filter(e => e.kind === 'payout_direct' || e.kind === 'payout_upline').length,
+            withdrawals: activity.filter(e => e.kind?.startsWith('withdrawal_')).length,
+            bookings:    activity.filter(e => e.kind?.startsWith('booking_')).length,
+          }
+          const shown = activity.filter(e => {
+            if (activityFilter === 'all') return true
+            if (activityFilter === 'payouts')     return e.kind === 'payout_direct' || e.kind === 'payout_upline'
+            if (activityFilter === 'withdrawals') return e.kind?.startsWith('withdrawal_')
+            if (activityFilter === 'bookings')    return e.kind?.startsWith('booking_')
+            return true
+          })
+          return (
+            <Section title="Activity timeline" icon={<Activity size={14}/>}>
+              {/* Filter chips */}
+              <div className="flex flex-wrap gap-1.5 mb-3">
+                {([
+                  { key: 'all',         label: 'All',         count: counts.all },
+                  { key: 'payouts',     label: 'Commissions', count: counts.payouts },
+                  { key: 'withdrawals', label: 'Withdrawals', count: counts.withdrawals },
+                  { key: 'bookings',    label: 'Bookings',    count: counts.bookings },
+                ] as const).map(c => (
+                  <button key={c.key} onClick={() => setActivityFilter(c.key)}
+                    className={`text-xs px-3 py-1 rounded-full border transition ${
+                      activityFilter === c.key
+                        ? 'bg-gray-900 text-white border-gray-900'
+                        : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
+                    }`}>
+                    {c.label} <span className={`ml-1 text-[10px] ${activityFilter === c.key ? 'opacity-70' : 'text-gray-400'}`}>{c.count}</span>
+                  </button>
+                ))}
               </div>
-            )}
-          </Section>
-        )}
+
+              {shown.length === 0 ? (
+                <p className="text-sm text-gray-500">{activity.length === 0 ? 'No activity yet.' : 'No events in this view.'}</p>
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  {shown.map((e, i) => {
+                    const Ic =
+                      e.icon === 'booking' ? FileText :
+                      e.icon === 'lock'    ? Lock :
+                      e.icon === 'send'    ? Send :
+                      e.icon === 'check'   ? CheckCircle2 :
+                      e.icon === 'coins'   ? Coins :
+                                             Activity
+                    const tint =
+                      e.kind === 'booking_created'      ? 'bg-blue-50 text-blue-700' :
+                      e.kind === 'booking_closed'       ? 'bg-slate-100 text-slate-700' :
+                      e.kind === 'withdrawal_requested' ? 'bg-amber-50 text-amber-700' :
+                      e.kind === 'withdrawal_paid'      ? 'bg-emerald-50 text-emerald-700' :
+                      e.kind === 'withdrawal_closed'    ? 'bg-slate-100 text-slate-700' :
+                      e.kind === 'payout_direct'        ? 'bg-emerald-50 text-emerald-700' :
+                      e.kind === 'payout_upline'        ? 'bg-indigo-50 text-indigo-700' :
+                                                          'bg-gray-50 text-gray-700'
+                    return (
+                      <div key={i} className="py-2.5 flex items-start gap-3">
+                        <div className={`w-7 h-7 rounded-full flex items-center justify-center ${tint} shrink-0`}><Ic size={13}/></div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-gray-900">{e.title}</div>
+                          <div className="text-xs text-gray-500 truncate">{e.sub}</div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          {e.amount != null && <div className="text-sm font-semibold text-gray-900">{formatINR(e.amount)}</div>}
+                          <div className="text-[10px] text-gray-400">{formatDate(e.at)}</div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </Section>
+          )
+        })()}
 
         {tab === 'payouts' && (
           <Section title="Payout history" right={
