@@ -1,11 +1,12 @@
 import { useMemo, useState, useEffect } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { formatINR } from '@/lib/utils'
+import toast from 'react-hot-toast'
 import {
   ChevronRight, ChevronDown, Search, Users, TrendingUp,
-  ShieldCheck, AlertCircle, Phone, MessageCircle, Layers, GitBranch, User,
+  ShieldCheck, AlertCircle, Phone, MessageCircle, Layers, GitBranch, User, UserPlus, Loader2,
 } from 'lucide-react'
 
 type Broker = {
@@ -112,6 +113,46 @@ export default function BrokerTree() {
       }
       return out
     },
+  })
+
+  const qc = useQueryClient()
+
+  // One-click promote: turn an existing customer into a broker sponsored by whichever broker
+  // brought them in.  Derives the new broker_id from the highest existing FNB-NNNNN code and
+  // seeds with the lowest active commission rank.  Admin can refine rank / contact later.
+  const promoteToBroker = useMutation({
+    mutationFn: async ({ customerId, sponsorId }: { customerId: string; sponsorId: string }) => {
+      const [{ data: cust }, { data: ranks }, { data: existing }] = await Promise.all([
+        supabase.from('bp_customers').select('id, name, phone, email').eq('id', customerId).single(),
+        supabase.from('commission_ranks').select('rank_name, level').eq('active', true).order('level', { ascending: true }).limit(1),
+        supabase.from('brokers').select('broker_id').ilike('broker_id', 'FNB-%').order('broker_id', { ascending: false }).limit(1),
+      ])
+      if (!cust) throw new Error('Customer not found')
+      let nextNum = 6000
+      const lastCode = existing?.[0]?.broker_id || ''
+      const m = lastCode.match(/(\d+)\s*$/)
+      if (m) nextNum = Number(m[1]) + 1
+      const broker_id = `FNB-${String(nextNum).padStart(5, '0')}`
+      const rank = ranks?.[0]?.rank_name || null
+      const { error } = await supabase.from('brokers').insert({
+        broker_id,
+        name:        cust.name,
+        phone:       cust.phone || null,
+        email:       cust.email || null,
+        sponsor_id:  sponsorId,
+        rank,
+        status:      'active',
+        kyc_status:  'pending',
+      })
+      if (error) throw error
+      return broker_id
+    },
+    onSuccess: (code) => {
+      toast.success(`Promoted to broker · ${code}`)
+      qc.invalidateQueries({ queryKey: ['team_tree_brokers'] })
+      qc.invalidateQueries({ queryKey: ['team_tree_customers_full'] })
+    },
+    onError: (e: any) => toast.error(e.message),
   })
 
   const tree = useMemo(() => {
@@ -286,6 +327,8 @@ export default function BrokerTree() {
                   aggregateEarnings={aggregateEarnings}
                   matchedIds={matchedIds}
                   onToggle={toggleNode}
+                  onPromote={(customerId: string, sponsorId: string) => promoteToBroker.mutate({ customerId, sponsorId })}
+                  isPromoting={promoteToBroker.isPending}
                 />
               ))}
             </div>
@@ -306,7 +349,7 @@ export default function BrokerTree() {
 // risers to each child).  The horizontal bar is composed of two half-borders on each
 // child's top so it naturally spans only between the first and last child without any
 // JS measurement.
-function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, customers, aggregateEarnings, matchedIds, onToggle }: any) {
+function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, customers, aggregateEarnings, matchedIds, onToggle, onPromote, isPromoting }: any) {
   const subBrokers: Broker[] = tree.childrenOf.get(broker.id) || []
   const customerList: { id: string; name: string; code: string }[] = customers?.[broker.id] || []
   const hasSubBrokers = subBrokers.length > 0
@@ -362,9 +405,10 @@ function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, cust
                       broker={c.data} tree={tree} collapsed={collapsed} forceOpenIds={forceOpenIds}
                       earnings={earnings} customers={customers} aggregateEarnings={aggregateEarnings}
                       matchedIds={matchedIds} onToggle={onToggle}
+                      onPromote={onPromote} isPromoting={isPromoting}
                     />
                   ) : (
-                    <CustomerLeaf customer={c.data}/>
+                    <CustomerLeaf customer={c.data} sponsorBrokerId={broker.id} onPromote={onPromote} isPromoting={isPromoting}/>
                   )}
                 </div>
               )
@@ -380,20 +424,60 @@ function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, cust
 // chart stays aligned, but visually distinct (amber + "CUSTOMER" badge + dashed border)
 // so admin can tell brokers from customers at a glance.  Clicking jumps to the
 // customer's history page.
-function CustomerLeaf({ customer }: { customer: { id: string; name: string; code: string } }) {
+function CustomerLeaf({ customer, sponsorBrokerId, onPromote, isPromoting }: {
+  customer: { id: string; name: string; code: string }
+  sponsorBrokerId?: string
+  onPromote?: (customerId: string, sponsorId: string) => void
+  isPromoting?: boolean
+}) {
+  // Inline confirm: tap once → "Confirm?" with Yes/No.  Avoids a heavyweight modal for
+  // an action that's already adjacent to the customer's card.
+  const [confirming, setConfirming] = useState(false)
   return (
-    <Link
-      to={`/customer-history?customer=${customer.id}`}
-      onClick={e => e.stopPropagation()}
-      className="w-[180px] sm:w-[200px] rounded-2xl border-2 border-dashed border-amber-200 bg-amber-50/40 px-3 py-3 shadow-sm hover:border-amber-300 hover:bg-amber-50 transition flex flex-col items-center"
-    >
-      <div className="w-12 h-12 rounded-full flex items-center justify-center text-base font-semibold mb-2 bg-gradient-to-br from-amber-400 to-orange-500 text-white">
-        {(customer.name || '?').charAt(0).toUpperCase()}
-      </div>
-      <div className="text-sm font-semibold text-gray-900 truncate max-w-full text-center">{customer.name || '—'}</div>
-      <div className="text-[10px] font-mono text-gray-400 mt-0.5">[{customer.code || '—'}]</div>
-      <span className="mt-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">CUSTOMER</span>
-    </Link>
+    <div className="w-[180px] sm:w-[200px] rounded-2xl border-2 border-dashed border-amber-200 bg-amber-50/40 px-3 py-3 shadow-sm hover:border-amber-300 hover:bg-amber-50 transition flex flex-col items-center">
+      <Link
+        to={`/customer-history?customer=${customer.id}`}
+        onClick={e => e.stopPropagation()}
+        className="flex flex-col items-center w-full"
+      >
+        <div className="w-12 h-12 rounded-full flex items-center justify-center text-base font-semibold mb-2 bg-gradient-to-br from-amber-400 to-orange-500 text-white">
+          {(customer.name || '?').charAt(0).toUpperCase()}
+        </div>
+        <div className="text-sm font-semibold text-gray-900 truncate max-w-full text-center">{customer.name || '—'}</div>
+        <div className="text-[10px] font-mono text-gray-400 mt-0.5">[{customer.code || '—'}]</div>
+        <span className="mt-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">CUSTOMER</span>
+      </Link>
+
+      {onPromote && sponsorBrokerId && (
+        <div className="mt-2 pt-2 w-full border-t border-amber-100">
+          {confirming ? (
+            <div className="flex gap-1">
+              <button
+                onClick={e => { e.stopPropagation(); onPromote(customer.id, sponsorBrokerId); setConfirming(false) }}
+                disabled={isPromoting}
+                className="flex-1 text-[10px] py-1 rounded-full bg-emerald-600 text-white font-medium hover:bg-emerald-700 disabled:opacity-50 inline-flex items-center justify-center gap-0.5"
+              >
+                {isPromoting ? <Loader2 size={10} className="animate-spin"/> : 'Yes'}
+              </button>
+              <button
+                onClick={e => { e.stopPropagation(); setConfirming(false) }}
+                className="flex-1 text-[10px] py-1 rounded-full bg-gray-100 text-gray-600 font-medium hover:bg-gray-200"
+              >
+                No
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={e => { e.stopPropagation(); setConfirming(true) }}
+              className="w-full text-[10px] py-1 rounded-full bg-white border border-amber-300 text-amber-800 font-medium hover:bg-amber-100 inline-flex items-center justify-center gap-1"
+              title="Promote this customer to a broker under the same sponsor"
+            >
+              <UserPlus size={10}/>Make broker
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
