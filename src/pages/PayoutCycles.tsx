@@ -134,14 +134,41 @@ export default function PayoutCycles() {
       if (perBroker.length === 0) throw new Error('Nothing to close — no unbatched commission distributions')
       const userId = await getCurrentUserId()
 
+      // Coordination guard with the other settlement path: skip any broker who already has
+      // an in-flight withdrawal request (pending or approved).  Otherwise we'd batch the
+      // same earnings into a cycle txn AND let admin pay the withdrawal — double payout.
+      // Admin can resolve the withdrawal first, then re-close to pick up that broker.
+      const brokerIds = perBroker.map(b => b.broker_id)
+      const { data: openWds } = await supabase
+        .from('withdrawal_requests')
+        .select('broker_id')
+        .in('broker_id', brokerIds)
+        .in('status', ['pending', 'approved'])
+      const skipSet = new Set((openWds || []).map((w: any) => w.broker_id))
+      const eligible = perBroker.filter(b => !skipSet.has(b.broker_id))
+      if (eligible.length === 0) {
+        throw new Error('Every broker in this batch has a pending withdrawal. Resolve those on /withdrawals first.')
+      }
+
+      const eligibleIds = new Set(eligible.map(b => b.broker_id))
+      const eligibleDistributions = pendingCommissions.filter(d => eligibleIds.has(d.broker_id))
+
       // Period = the actual span of distributions being closed, not a calendar boundary.
-      // Label "Settlement · {timestamp}" or "Range {from} → {to}" when admin sliced.
-      const dates = pendingCommissions.map(p => p.created_at).filter(Boolean).sort()
+      const dates = eligibleDistributions.map(p => p.created_at).filter(Boolean).sort()
       const periodStart = sliceMode === 'range' && sliceFrom ? sliceFrom : (dates[0] || new Date().toISOString()).slice(0, 10)
       const periodEnd   = sliceMode === 'range' && sliceTo   ? sliceTo   : (dates[dates.length - 1] || new Date().toISOString()).slice(0, 10)
       const periodLabel = sliceMode === 'range'
         ? `Range · ${periodStart} → ${periodEnd}`
         : `Settlement · ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}`
+
+      const totalsEligible = {
+        gross: eligible.reduce((s, r) => s + r.gross, 0),
+        tds:   eligible.reduce((s, r) => s + r.tds,   0),
+        admin: eligible.reduce((s, r) => s + r.admin, 0),
+        net:   eligible.reduce((s, r) => s + r.net,   0),
+        brokers: eligible.length,
+        bookings: new Set(eligibleDistributions.map(d => d.booking_id).filter(Boolean)).size,
+      }
 
       const { data: cycle, error: cErr } = await supabase
         .from('payout_cycles')
@@ -150,12 +177,12 @@ export default function PayoutCycles() {
           period_start:    periodStart,
           period_end:      periodEnd,
           status:          'closed',
-          total_bookings:  totals.bookings,
-          total_brokers:   totals.brokers,
-          total_gross:     totals.gross,
-          total_tds:       totals.tds,
-          total_admin:     totals.admin,
-          total_net:       totals.net,
+          total_bookings:  totalsEligible.bookings,
+          total_brokers:   totalsEligible.brokers,
+          total_gross:     totalsEligible.gross,
+          total_tds:       totalsEligible.tds,
+          total_admin:     totalsEligible.admin,
+          total_net:       totalsEligible.net,
           closed_at:       new Date().toISOString(),
           closed_by:       userId,
           closure_notes:   reason || null,
@@ -165,9 +192,7 @@ export default function PayoutCycles() {
         .single()
       if (cErr || !cycle) throw cErr || new Error('Failed to create cycle')
 
-      // Stamp every distribution we're closing with the new cycle.id so they don't get
-      // double-batched on the next close.  This is what makes the "all unbatched" model safe.
-      const distIds = pendingCommissions.map(p => p.id)
+      const distIds = eligibleDistributions.map(p => p.id)
       if (distIds.length > 0) {
         const { error: updErr } = await supabase
           .from('payout_distributions')
@@ -176,8 +201,7 @@ export default function PayoutCycles() {
         if (updErr) throw updErr
       }
 
-      // One payout transaction per broker — already-net figures, no re-deduction.
-      const tx = perBroker.map(b => ({
+      const tx = eligible.map(b => ({
         broker_id:      b.broker_id,
         cycle_id:       cycle.id,
         payout_type:    'cycle',
@@ -198,16 +222,20 @@ export default function PayoutCycles() {
         entityId:   cycle.id,
         action:     'closed',
         reason,
-        metadata: { period: periodLabel, brokers: totals.brokers, gross: totals.gross, net: totals.net, distributions: distIds.length },
+        metadata: { period: periodLabel, brokers: totalsEligible.brokers, gross: totalsEligible.gross, net: totalsEligible.net, distributions: distIds.length, skippedBrokers: skipSet.size },
       })
-      return cycle
+      return { cycle, skippedCount: skipSet.size }
     },
-    onSuccess: () => {
+    onSuccess: ({ skippedCount }: any) => {
       qc.invalidateQueries({ queryKey: ['payout_cycles'] })
       qc.invalidateQueries({ queryKey: ['cycle_pending_distributions'] })
       qc.invalidateQueries({ queryKey: ['cycle_txns_all'] })
       qc.invalidateQueries({ queryKey: ['payouts'] })
-      toast.success('Settlement closed — payout transactions generated')
+      toast.success(
+        skippedCount > 0
+          ? `Settlement closed — skipped ${skippedCount} broker${skippedCount === 1 ? '' : 's'} with pending withdrawals`
+          : 'Settlement closed — payout transactions generated'
+      )
       setClosureFor(null)
       setShowPreview(false)
     },
