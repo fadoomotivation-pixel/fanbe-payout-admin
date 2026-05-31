@@ -31,7 +31,7 @@ export default function BrokerDashboard() {
   const [ranks, setRanks] = useState<any[]>([])
   const [downline, setDownline] = useState<any[]>([])
   const [downlineEarnings, setDownlineEarnings] = useState<Record<string, number>>({})
-  const [downlineCustomers, setDownlineCustomers] = useState<Record<string, number>>({})
+  const [downlineCustomers, setDownlineCustomers] = useState<Record<string, { id: string; name: string; code: string }[]>>({})
   const [payouts, setPayouts] = useState<any[]>([])
   const [withdrawals, setWithdrawals] = useState<any[]>([])
   const [cycleTxns, setCycleTxns] = useState<any[]>([])
@@ -113,11 +113,11 @@ export default function BrokerDashboard() {
           .from('payout_distributions')
           .select('beneficiary_broker_id, net_payout')
           .in('beneficiary_broker_id', dlIds),
-        // Customer counts per downline broker — surfaces "Nisha brought 1 customer" on
-        // her tree card so admin can spot newly active downlines without drilling in.
+        // Full customer list per downline broker — admin needs to see the actual names
+        // (e.g. "Nidhi"), not just a count, when scanning the team tab.
         supabase
           .from('bp_bookings')
-          .select('broker_id, customer_id')
+          .select('broker_id, customer_id, bp_customers(id, name, customer_code)')
           .in('broker_id', dlIds)
           .not('customer_id', 'is', null),
       ])
@@ -126,12 +126,19 @@ export default function BrokerDashboard() {
         if (!d.beneficiary_broker_id) continue
         earnedMap[d.beneficiary_broker_id] = (earnedMap[d.beneficiary_broker_id] || 0) + Number(d.net_payout || 0)
       }
-      const custSeen: Record<string, Set<string>> = {}
+      const seen: Record<string, Set<string>> = {}
+      const custMap: Record<string, { id: string; name: string; code: string }[]> = {}
       for (const r of (dlBk || []) as any[]) {
-        (custSeen[r.broker_id] ??= new Set()).add(r.customer_id)
+        if (!r.bp_customers) continue
+        const s = (seen[r.broker_id] ??= new Set())
+        if (s.has(r.customer_id)) continue
+        s.add(r.customer_id)
+        ;(custMap[r.broker_id] ??= []).push({
+          id:   r.bp_customers.id,
+          name: r.bp_customers.name || '—',
+          code: r.bp_customers.customer_code || '',
+        })
       }
-      const custMap: Record<string, number> = {}
-      for (const k in custSeen) custMap[k] = custSeen[k].size
       setDownlineEarnings(earnedMap)
       setDownlineCustomers(custMap)
     }
@@ -1132,7 +1139,7 @@ function TeamOrgNode({ broker, isRoot, initialChildren, subTeams, expandedTeam, 
     <div className="flex flex-col items-center">
       <TeamNodeCard broker={broker} isRoot={isRoot} isExpanded={isExpanded}
         earned={downlineEarnings[broker.id] || 0}
-        customerCount={downlineCustomers?.[broker.id] || 0}
+        customers={downlineCustomers?.[broker.id] || []}
         loaded={isRoot ? true : Array.isArray(childrenLoaded)}
         childCount={Array.isArray(childrenLoaded) ? childrenLoaded.length : null}
         onToggle={() => !isRoot && onToggle(broker.id)}
@@ -1168,8 +1175,10 @@ function TeamOrgNode({ broker, isRoot, initialChildren, subTeams, expandedTeam, 
   )
 }
 
-function TeamNodeCard({ broker, isRoot, isExpanded, earned, customerCount = 0, loaded, childCount, onToggle }: any) {
+function TeamNodeCard({ broker, isRoot, isExpanded, earned, customers = [], loaded, childCount, onToggle }: any) {
   const clickable = !isRoot
+  const customerCount = customers.length
+  const [showCustomers, setShowCustomers] = useState(false)
   return (
     <div
       onClick={clickable ? onToggle : undefined}
@@ -1199,10 +1208,35 @@ function TeamNodeCard({ broker, isRoot, isExpanded, earned, customerCount = 0, l
         <div className="mt-2 flex items-center justify-center gap-1 flex-wrap">
           {isRoot && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-900 text-white">You</span>}
           {customerCount > 0 && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100 font-medium inline-flex items-center gap-0.5">
+            <button
+              onClick={e => { e.stopPropagation(); setShowCustomers(s => !s) }}
+              className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium inline-flex items-center gap-0.5 transition
+                ${showCustomers ? 'bg-blue-100 text-blue-800 border-blue-200' : 'bg-blue-50 text-blue-700 border-blue-100 hover:border-blue-200'}`}
+              title={showCustomers ? 'Hide customers' : 'Show customers'}
+            >
               <Users size={9}/>{customerCount}
-            </span>
+              <ChevronRight size={9} className={`transition-transform ${showCustomers ? 'rotate-90' : ''}`}/>
+            </button>
           )}
+        </div>
+      )}
+
+      {showCustomers && customerCount > 0 && (
+        <div className="mt-2 -mx-1 px-1 py-1.5 rounded-lg bg-blue-50/60 border border-blue-100">
+          <div className="max-h-32 overflow-y-auto divide-y divide-blue-100">
+            {customers.map((c: any) => (
+              <Link
+                key={c.id}
+                to={`/customer-history?customer=${c.id}`}
+                onClick={e => e.stopPropagation()}
+                className="block py-1 text-[11px] text-blue-900 hover:text-blue-700 truncate"
+                title={c.name}
+              >
+                <span className="font-medium">{c.name}</span>
+                {c.code && <span className="ml-1 font-mono text-[9px] text-blue-400">[{c.code}]</span>}
+              </Link>
+            ))}
+          </div>
         </div>
       )}
 

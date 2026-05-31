@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { formatINR } from '@/lib/utils'
 import {
@@ -87,23 +87,29 @@ export default function BrokerTree() {
     },
   })
 
-  // Customer counts per broker so each card surfaces how many people the broker has
-  // actually brought in via bookings.  This answers questions like "did Nisha land
-  // anyone today?" without forcing admin to drill into each broker dashboard.
-  const { data: customersByBroker = {} } = useQuery<Record<string, number>>({
-    queryKey: ['team_tree_customer_counts'],
+  // Customers per broker — full list, not just a count, so each card can pop open and
+  // show the actual names ("Nisha brought Nidhi") instead of an opaque "1 customer" pill.
+  const { data: customersByBroker = {} } = useQuery<Record<string, { id: string; name: string; code: string }[]>>({
+    queryKey: ['team_tree_customers_full'],
     queryFn: async () => {
       const { data } = await supabase
         .from('bp_bookings')
-        .select('broker_id, customer_id')
+        .select('broker_id, customer_id, bp_customers(id, name, customer_code)')
         .not('broker_id', 'is', null)
         .not('customer_id', 'is', null)
       const seen: Record<string, Set<string>> = {}
+      const out: Record<string, { id: string; name: string; code: string }[]> = {}
       for (const r of (data || []) as any[]) {
-        (seen[r.broker_id] ??= new Set()).add(r.customer_id)
+        if (!r.bp_customers) continue
+        const set = (seen[r.broker_id] ??= new Set())
+        if (set.has(r.customer_id)) continue
+        set.add(r.customer_id)
+        ;(out[r.broker_id] ??= []).push({
+          id:   r.bp_customers.id,
+          name: r.bp_customers.name || '—',
+          code: r.bp_customers.customer_code || '',
+        })
       }
-      const out: Record<string, number> = {}
-      for (const k in seen) out[k] = seen[k].size
       return out
     },
   })
@@ -308,7 +314,7 @@ function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, cust
   const subtree = tree.subtreeSize[broker.id] || 0
   const ownEarned = earnings[broker.id]?.earned || 0
   const teamEarned = (aggregateEarnings[broker.id] || 0) - ownEarned
-  const customerCount = customers[broker.id] || 0
+  const customerList = (customers?.[broker.id] || []) as { id: string; name: string; code: string }[]
   const isMatched = matchedIds.has(broker.id)
 
   return (
@@ -323,7 +329,7 @@ function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, cust
         subtree={subtree}
         ownEarned={ownEarned}
         teamEarned={teamEarned}
-        customerCount={customerCount}
+        customers={customerList}
         onToggle={() => hasChildren && onToggle(broker.id)}
       />
 
@@ -355,7 +361,12 @@ function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, cust
   )
 }
 
-function NodeCard({ broker, isRoot, isMatched, hasChildren, isCollapsed, directCount, subtree, ownEarned, teamEarned, customerCount = 0, onToggle }: any) {
+function NodeCard({ broker, isRoot, isMatched, hasChildren, isCollapsed, directCount, subtree, ownEarned, teamEarned, customers = [], onToggle }: any) {
+  // Tap the customer pill to reveal the actual customer names inline on the card.
+  // Solves the original report — admin saw "1 customer" on Nisha's card but couldn't
+  // see who that customer was (Nidhi) without leaving the tree.
+  const [showCustomers, setShowCustomers] = useState(false)
+  const customerCount = customers.length
   return (
     <div
       onClick={hasChildren ? onToggle : undefined}
@@ -386,9 +397,15 @@ function NodeCard({ broker, isRoot, isMatched, hasChildren, isCollapsed, directC
       <div className="mt-2 flex items-center justify-center gap-1 flex-wrap text-[10px]">
         {isRoot && <span className="px-1.5 py-0.5 rounded-full bg-gray-900 text-white">Root</span>}
         {customerCount > 0 && (
-          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100 font-medium">
+          <button
+            onClick={e => { e.stopPropagation(); setShowCustomers(s => !s) }}
+            className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full border font-medium transition
+              ${showCustomers ? 'bg-blue-100 text-blue-800 border-blue-200' : 'bg-blue-50 text-blue-700 border-blue-100 hover:border-blue-200'}`}
+            title={showCustomers ? 'Hide customers' : 'Show customers'}
+          >
             <Users size={9}/>{customerCount} {customerCount === 1 ? 'customer' : 'customers'}
-          </span>
+            <ChevronRight size={9} className={`transition-transform ${showCustomers ? 'rotate-90' : ''}`}/>
+          </button>
         )}
         {broker.kyc_status !== 'approved' && (
           <span className="text-amber-700 inline-flex items-center gap-0.5"><AlertCircle size={9}/>KYC</span>
@@ -397,6 +414,26 @@ function NodeCard({ broker, isRoot, isMatched, hasChildren, isCollapsed, directC
           <span className="text-gray-400 italic">{broker.status}</span>
         )}
       </div>
+
+      {/* Expanded customer list — names of every customer this broker has brought in. */}
+      {showCustomers && customerCount > 0 && (
+        <div className="mt-2 -mx-1 px-1 py-1.5 rounded-lg bg-blue-50/60 border border-blue-100">
+          <div className="max-h-32 overflow-y-auto divide-y divide-blue-100">
+            {customers.map((c: any) => (
+              <Link
+                key={c.id}
+                to={`/customer-history?customer=${c.id}`}
+                onClick={e => e.stopPropagation()}
+                className="block py-1 text-[11px] text-blue-900 hover:text-blue-700 truncate"
+                title={c.name}
+              >
+                <span className="font-medium">{c.name}</span>
+                {c.code && <span className="ml-1 font-mono text-[9px] text-blue-400">[{c.code}]</span>}
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* contact + earnings */}
       <div className="mt-2 pt-2 border-t border-gray-100 text-[11px] text-gray-500 space-y-1">
