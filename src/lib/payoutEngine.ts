@@ -423,11 +423,25 @@ export async function distributePaymentCommission(opts: {
 }
 
 /**
- * Reverse a single payment's commissions. The DB trigger already clears + rebuilds on payment
- * delete, but this is kept for explicit callers; safe to call (idempotent delete).
+ * Reverse a single payment's commissions.  Refuses if any of the payment's distributions
+ * are already part of a closed cycle — admin must reopen that cycle first.  Otherwise
+ * silently deletes unbatched rows (the DB trigger has the same logic for the auto path).
  */
 export async function reversePaymentCommission(paymentId: string): Promise<void> {
-  await supabase.from('payout_distributions').delete().eq('payment_id', paymentId)
+  const { data: cycled } = await supabase
+    .from('payout_distributions')
+    .select('id, cycle_id')
+    .eq('payment_id', paymentId)
+    .not('cycle_id', 'is', null)
+    .limit(1)
+  if (cycled && cycled.length > 0) {
+    throw new Error('This payment is already part of a closed payout cycle. Reopen the cycle on /payout-cycles first.')
+  }
+  await supabase
+    .from('payout_distributions')
+    .delete()
+    .eq('payment_id', paymentId)
+    .is('cycle_id', null)
 }
 
 // ── Config Loader ─────────────────────────────────────────────────────────────
