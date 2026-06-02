@@ -202,8 +202,8 @@ export function computeDifferentialDistribution(
 
   const rows: DistributionRow[] = []
 
-  // Full chain: [direct_broker, L1_sponsor, L2_sponsor, …]
-  const fullChain = [directBrokerId, ...uplineChain].slice(0, cfg.max_levels + 1)
+  // Cap upline walk to max_levels (direct broker is level 0, separate from chain).
+  const cappedUpline = uplineChain.slice(0, cfg.max_levels)
 
   // ── Direct broker commission (level 0) ───────────────────────────────────
   // The selling broker earns their own rank % directly on the deposited amount.
@@ -231,18 +231,18 @@ export function computeDifferentialDistribution(
 
   // ── Upline differential commission (level 1, 2, …) ───────────────────────
   // uplineChain[0] is L1 (direct sponsor), uplineChain[1] is L2, etc.
-  // "downline" for each upline member = the person one level below them in fullChain.
-  for (let i = 0; i < uplineChain.length; i++) {
-    const uplineBrokerId = uplineChain[i]
-    const downlineBrokerId = fullChain[i] // person directly below this upline
-
+  // belowPct tracks the highest commission % already paid downstream — it only ever
+  // rises.  A lower-rank intermediate upline (rank reversal) cannot reset the floor
+  // and let a higher upline over-claim the differential.
+  let belowPct = rankMap.get(directBrokerId)?.commission_pct ?? 0
+  for (let i = 0; i < cappedUpline.length; i++) {
+    const uplineBrokerId = cappedUpline[i]
     const uplineRank = rankMap.get(uplineBrokerId)
-    const downlineRank = rankMap.get(downlineBrokerId)
+    if (!uplineRank) continue
 
-    if (!uplineRank || !downlineRank) continue
-
-    // Business Plan Rule #4: equal rank or superseded → no payout
-    const differential = round2(uplineRank.commission_pct - downlineRank.commission_pct)
+    const uplinePct = uplineRank.commission_pct
+    const differential = round2(uplinePct - belowPct)
+    belowPct = Math.max(belowPct, uplinePct)
     if (differential <= 0) continue
 
     const gross = round2((baseAmount * differential) / 100)
@@ -255,8 +255,8 @@ export function computeDifferentialDistribution(
       beneficiary_broker_id: uplineBrokerId,
       level: i + 1,
       base_amount: baseAmount,
-      upline_rank_pct: uplineRank.commission_pct,
-      downline_rank_pct: downlineRank.commission_pct,
+      upline_rank_pct: uplinePct,
+      downline_rank_pct: differential > 0 ? uplinePct - differential : belowPct,
       differential_pct: differential,
       gross_payout: gross,
       tds_amount: tds,
