@@ -37,7 +37,6 @@ type DistributionRow = {
 export default function PayoutCycles() {
   const qc = useQueryClient()
   const [closureFor, setClosureFor] = useState<{ cycle: any; action: 'close' | 'reopen' } | null>(null)
-  const [showPreview, setShowPreview] = useState(false)
   // On-demand closing — admin closes whatever's currently unbatched, anytime.
   // No more month-anchor: a "cycle" is any settlement run, not a calendar boundary.
   // Optional slice mode lets admin limit the close to a custom date range.
@@ -237,7 +236,6 @@ export default function PayoutCycles() {
           : 'Settlement closed — payout transactions generated'
       )
       setClosureFor(null)
-      setShowPreview(false)
     },
     onError: (e: any) => toast.error(e.message),
   })
@@ -312,103 +310,120 @@ export default function PayoutCycles() {
 
   const toggleExpand = (id: string) => setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
 
+  const nothingToClose = totals.distributions === 0
+
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-indigo-50 rounded-lg"><CalendarRange size={20} className="text-indigo-600"/></div>
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">Payout Cycles</h1>
-            <p className="text-sm text-gray-500">Monthly broker payout closing · TDS {tdsPct}% · Admin {adminPct}%</p>
-          </div>
-        </div>
+      <div className="mb-8">
+        <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Settle broker commissions</h1>
+        <p className="text-sm text-gray-500 mt-1">One step.  Close pending earnings into a paid batch.</p>
       </div>
 
-      <div className="bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-100 rounded-2xl p-5 mb-6">
-        <div className="flex items-start justify-between mb-4 flex-wrap gap-3">
-          <div>
-            <div className="text-xs font-semibold text-indigo-600 uppercase tracking-wider mb-1">Pending settlement</div>
-            <div className="text-lg font-bold text-gray-900">
-              {totals.distributions === 0
-                ? 'Nothing to close · all commissions are batched'
-                : `${totals.distributions} distribution${totals.distributions === 1 ? '' : 's'} ready to close`}
+      {/* The hero.  Calm.  One number, one sentence, one button.  Anything else lives
+          behind the small "Details" disclosure below — never in front of the admin. */}
+      <div className="rounded-3xl bg-white border border-gray-200 shadow-[0_1px_3px_rgba(0,0,0,0.04)] px-8 py-12 mb-6 text-center">
+        {nothingToClose ? (
+          <>
+            <div className="text-5xl mb-3">✓</div>
+            <div className="text-lg font-semibold text-gray-900">All caught up</div>
+            <div className="text-sm text-gray-500 mt-1">New commissions land here automatically as customers pay.</div>
+          </>
+        ) : (
+          <>
+            <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-[0.18em] mb-3">Ready to pay</div>
+            <div className="text-5xl sm:text-6xl font-bold text-gray-900 tabular-nums tracking-tight">{formatINR(totals.net)}</div>
+            <div className="text-sm text-gray-500 mt-3">
+              across {totals.brokers} broker{totals.brokers === 1 ? '' : 's'}
+              {' · '}{totals.distributions} earning{totals.distributions === 1 ? '' : 's'}
             </div>
-            <div className="text-xs text-gray-500 mt-0.5">
-              Real-time MLM commissions accumulate here until you settle them.  Close whenever
-              you're ready to issue the bank transfers — no monthly schedule required.
+            <button
+              onClick={() => setClosureFor({ cycle: { period_label: 'New settlement' }, action: 'close' })}
+              className="mt-7 inline-flex items-center gap-2 px-7 py-3 rounded-full bg-gray-900 text-white font-semibold hover:bg-black active:scale-[0.98] transition shadow-sm"
+            >
+              <Lock size={15}/>Close &amp; queue payouts
+            </button>
+            <div className="mt-4 text-[11px] text-gray-400">
+              You can still review and edit each broker's payout on the next page before paying.
             </div>
-            {/* Optional slice — narrow the close to a specific date range */}
-            <div className="mt-2 flex items-center gap-2 text-xs flex-wrap">
-              <span className="text-gray-500">Scope:</span>
-              <div className="inline-flex bg-white rounded-full border border-indigo-200 p-0.5">
+          </>
+        )}
+      </div>
+
+      {/* Details disclosure — everything advanced lives here. */}
+      {!nothingToClose && (
+        <details className="mb-6 rounded-2xl bg-white border border-gray-200">
+          <summary className="cursor-pointer list-none px-5 py-3 flex items-center justify-between text-sm font-medium text-gray-700 hover:bg-gray-50 rounded-2xl">
+            <span className="inline-flex items-center gap-2">
+              <span>Show breakdown</span>
+              <span className="text-xs text-gray-400">gross / TDS / admin / scope</span>
+            </span>
+            <span className="text-gray-400 text-xs">tap to expand</span>
+          </summary>
+          <div className="px-5 pb-5 pt-2 space-y-4 border-t border-gray-100">
+            {/* TDS / Admin / Gross breakdown */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+              <Leader label="Gross"        value={formatINR(totals.gross)} accent="text-gray-900"/>
+              <Leader label={`TDS ${tdsPct}%`}   value={`−${formatINR(totals.tds)}`}   accent="text-rose-600"/>
+              <Leader label={`Admin ${adminPct}%`} value={`−${formatINR(totals.admin)}`} accent="text-amber-700"/>
+              <Leader label="Net payable"   value={formatINR(totals.net)}   accent="text-emerald-700"/>
+            </div>
+
+            {/* Scope: default closes everything unbatched.  Custom range hidden behind toggle. */}
+            <div className="flex items-center gap-2 text-xs flex-wrap pt-2 border-t border-gray-100">
+              <span className="text-gray-500">Settling:</span>
+              <div className="inline-flex bg-gray-100 rounded-full p-0.5">
                 <button onClick={() => setSliceMode('all')}
-                  className={`px-3 py-0.5 rounded-full transition ${sliceMode === 'all' ? 'bg-indigo-600 text-white font-semibold' : 'text-gray-600'}`}>All unbatched</button>
+                  className={`px-3 py-1 rounded-full transition ${sliceMode === 'all' ? 'bg-white shadow text-gray-900 font-medium' : 'text-gray-500'}`}>Everything pending</button>
                 <button onClick={() => setSliceMode('range')}
-                  className={`px-3 py-0.5 rounded-full transition ${sliceMode === 'range' ? 'bg-indigo-600 text-white font-semibold' : 'text-gray-600'}`}>Date range</button>
+                  className={`px-3 py-1 rounded-full transition ${sliceMode === 'range' ? 'bg-white shadow text-gray-900 font-medium' : 'text-gray-500'}`}>Specific dates</button>
               </div>
               {sliceMode === 'range' && (
                 <>
                   <input type="date" value={sliceFrom} onChange={e => setSliceFrom(e.target.value)}
-                    className="bg-white border border-indigo-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-indigo-400"/>
+                    className="bg-white border border-gray-200 rounded-full px-3 py-1 text-xs focus:outline-none focus:border-gray-400"/>
                   <span className="text-gray-400">→</span>
                   <input type="date" value={sliceTo} onChange={e => setSliceTo(e.target.value)}
-                    className="bg-white border border-indigo-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-indigo-400"/>
+                    className="bg-white border border-gray-200 rounded-full px-3 py-1 text-xs focus:outline-none focus:border-gray-400"/>
                 </>
               )}
             </div>
-          </div>
-          <div className="flex gap-2 self-end">
-            <Button variant="secondary" onClick={() => setShowPreview(s => !s)} disabled={totals.distributions === 0}>{showPreview ? 'Hide preview' : 'Preview totals'}</Button>
-            <Button onClick={() => setClosureFor({ cycle: { period_label: 'New settlement' }, action: 'close' })} disabled={totals.distributions === 0}>
-              <Lock size={14}/>Close now
-            </Button>
-          </div>
-        </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-          <Stat icon={<TrendingUp size={14}/>}   label={`Distributions`}   value={String(totals.distributions)} />
-          <Stat icon={<Users size={14}/>}        label="Brokers"           value={String(totals.brokers)} />
-          <Stat icon={<IndianRupee size={14}/>}  label="Gross commission"  value={formatINR(totals.gross)} accent="text-gray-900" />
-          <Stat icon={<IndianRupee size={14}/>}  label={`TDS (${tdsPct}%)`} value={formatINR(totals.tds)} accent="text-rose-700" />
-          <Stat icon={<IndianRupee size={14}/>}  label={`Admin (${adminPct}%)`} value={formatINR(totals.admin)} accent="text-amber-700" />
-          <Stat icon={<Banknote size={14}/>}     label="Net payable"       value={formatINR(totals.net)} accent="text-emerald-700" />
-        </div>
-
-        {totals.distributions === 0 && (
-          <div className="mt-4 text-xs text-gray-500">
-            {sliceMode === 'range'
-              ? 'No unbatched distributions in this date range.'
-              : 'All commissions have been batched into closed cycles. New distributions land here automatically when customers pay.'}
+            {/* Per-broker preview */}
+            {perBroker.length > 0 && (
+              <div className="rounded-xl border border-gray-200 overflow-hidden">
+                <div className="px-4 py-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wide bg-gray-50 border-b border-gray-100">
+                  Each broker will receive
+                </div>
+                <div className="max-h-72 overflow-y-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-white sticky top-0">
+                      <tr className="text-gray-400 border-b border-gray-100">
+                        <th className="px-3 py-2 text-left font-medium">Broker</th>
+                        <th className="px-3 py-2 text-left font-medium">Earnings</th>
+                        <th className="px-3 py-2 text-right font-medium">Net</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {perBroker.map(b => (
+                        <tr key={b.broker_id} className="hover:bg-gray-50/50">
+                          <td className="px-3 py-2">
+                            <div className="font-medium text-gray-900">{b.broker_name}</div>
+                            <div className="text-[10px] text-gray-400 font-mono">[{b.broker_code}]</div>
+                          </td>
+                          <td className="px-3 py-2 text-gray-500">
+                            {b.distributions} · {b.bookings} booking{b.bookings !== 1 ? 's' : ''}
+                          </td>
+                          <td className="px-3 py-2 text-right font-bold text-emerald-700 tabular-nums">{formatINR(b.net)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
-        )}
-
-        {showPreview && perBroker.length > 0 && (
-          <div className="mt-4 bg-white rounded-xl border border-indigo-100 overflow-hidden">
-            <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide border-b border-gray-100">Per-broker breakdown ({perBroker.length})</div>
-            <div className="max-h-72 overflow-y-auto">
-              <table className="w-full text-xs">
-                <thead className="bg-gray-50 sticky top-0">
-                  <tr>{['Broker','Code','Distributions','Bookings','Gross','TDS','Admin','Net'].map(h => <th key={h} className="px-3 py-2 text-left text-gray-500 font-semibold">{h}</th>)}</tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {perBroker.map(b => (
-                    <tr key={b.broker_id}>
-                      <td className="px-3 py-2 font-medium">{b.broker_name}</td>
-                      <td className="px-3 py-2 font-mono text-gray-500">{b.broker_code}</td>
-                      <td className="px-3 py-2">{b.distributions}</td>
-                      <td className="px-3 py-2">{b.bookings}</td>
-                      <td className="px-3 py-2 font-semibold">{formatINR(b.gross)}</td>
-                      <td className="px-3 py-2 text-rose-700">{formatINR(b.tds)}</td>
-                      <td className="px-3 py-2 text-amber-700">{formatINR(b.admin)}</td>
-                      <td className="px-3 py-2 font-bold text-emerald-700">{formatINR(b.net)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-      </div>
+        </details>
+      )}
 
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
         <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between gap-2 flex-wrap">
@@ -517,6 +532,15 @@ export default function PayoutCycles() {
         }}
         submitting={closeCycle.isPending || reopenCycle.isPending}
       />
+    </div>
+  )
+}
+
+function Leader({ label, value, accent = 'text-gray-900' }: { label: string; value: string; accent?: string }) {
+  return (
+    <div>
+      <div className="text-[10px] text-gray-500 uppercase tracking-wider">{label}</div>
+      <div className={`text-base font-bold tabular-nums ${accent}`}>{value}</div>
     </div>
   )
 }
