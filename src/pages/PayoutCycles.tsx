@@ -314,6 +314,9 @@ export default function PayoutCycles() {
 
   return (
     <div>
+      <Link to="/payouts" className="text-xs text-gray-500 hover:text-gray-900 inline-flex items-center gap-1 mb-4">
+        ← Back to Pay brokers
+      </Link>
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Settle broker commissions</h1>
         <p className="text-sm text-gray-500 mt-1">One step.  Close pending earnings into a paid batch.</p>

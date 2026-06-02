@@ -28,10 +28,10 @@ const NAV = [
     {to:'/commission-ranks',icon:Trophy,label:'Rank Slabs'},
   ]},
   { group:'Commissions & Payouts', items:[
-    {to:'/payouts',icon:Banknote,label:'Broker Payouts'},
-    {to:'/payout-cycles',icon:CalendarRange,label:'Payout Cycles'},
-    {to:'/withdrawals',icon:Wallet,label:'Withdrawals'},
-    {to:'/payout-terms',icon:ScrollText,label:'Payout Terms'},
+    // One door to everything broker-payout-related.  Cycles, withdrawals and settings are
+    // all reachable from /payouts via the action buttons in its header — no admin should
+    // need to remember which of four sidebar entries to click for a payout action.
+    {to:'/payouts',icon:Banknote,label:'Pay brokers'},
   ]},
   { group:'Programs', items:[
     {to:'/achievers-club',icon:Star,label:'Achievers Club'},
@@ -45,6 +45,7 @@ const NAV = [
   { group:'Admin', items:[
     {to:'/roles',icon:ShieldCheck,label:'Roles & Perms'},
     {to:'/bank-accounts',icon:Landmark,label:'Bank Accounts'},
+    {to:'/payout-terms',icon:ScrollText,label:'Payout Settings'},
     {to:'/reports',icon:FileText,label:'Reports'},
     {to:'/settings',icon:Settings,label:'Settings'},
   ]},
