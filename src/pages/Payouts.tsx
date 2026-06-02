@@ -326,19 +326,40 @@ export default function Payouts() {
   const clearLedgerFilters = () => { setSearch(''); setLedgerKind(''); setLedgerFrom(''); setLedgerTo('') }
   const ledgerFiltersActive = !!(search || ledgerKind || ledgerFrom || ledgerTo)
 
+  // Live counts of admin's two recurring actions so the CTAs read as "you have N to do"
+  // rather than "click here to maybe find work".
+  const pendingWdCount = (allWithdrawals as any[]).filter(w => w.status === 'pending' || w.status === 'approved').length
+  const unbatchedEarnings = aggregated.reduce((s: number, r: any) => s + (r.earned - r.paid - r.approved_payout - r.pending_payout), 0)
+
   return (
     <div className="p-3 md:p-6 space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-2">
+      {/* Header + quick actions.  This page is the one door to everything broker-payout-related;
+          the two big actions live here so admin doesn't need to hunt for /payout-cycles or
+          /withdrawals in the sidebar. */}
+      <div className="flex items-start justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-emerald-50 rounded-lg"><Banknote size={20} className="text-emerald-600"/></div>
           <div>
-            <h1 className="text-xl font-bold text-gray-900">Broker Payouts</h1>
-            <p className="text-sm text-gray-500">Earned · Approved · Paid · Owed — per broker. Click any broker to see their commission history and active payout requests.</p>
+            <h1 className="text-xl font-bold text-gray-900">Pay brokers</h1>
+            <p className="text-sm text-gray-500">Everything broker-payable in one place.</p>
           </div>
         </div>
-        <span className="text-[11px] text-gray-400 inline-flex items-center gap-1" title="Commissions auto-recompute whenever a payment changes">
-          <RefreshCw size={12}/>Auto-synced on every payment
-        </span>
+        <div className="flex flex-wrap gap-2 items-center">
+          <Link to="/payout-cycles"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-gray-900 text-white text-sm font-medium hover:bg-black shadow-sm">
+            Settle pending earnings
+            {unbatchedEarnings > 0 && (
+              <span className="text-[10px] bg-white/20 rounded-full px-1.5 py-0.5 tabular-nums">{formatINR(unbatchedEarnings)}</span>
+            )}
+          </Link>
+          <Link to="/withdrawals"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white border border-gray-200 text-gray-800 text-sm font-medium hover:border-gray-300">
+            Withdrawal requests
+            {pendingWdCount > 0 && (
+              <span className="text-[10px] bg-amber-100 text-amber-800 rounded-full px-1.5 py-0.5 tabular-nums">{pendingWdCount}</span>
+            )}
+          </Link>
+        </div>
       </div>
 
       {/* KPIs */}

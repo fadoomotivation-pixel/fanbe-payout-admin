@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
 import { computeWithdrawal, loadPayoutConfig, loadBrokerWallets, type PayoutConfig, type BrokerWallet } from '@/lib/payoutEngine'
@@ -200,6 +201,9 @@ export default function Withdrawals() {
 
   return (
     <div className="p-3 md:p-6 space-y-4">
+      <Link to="/payouts" className="text-xs text-gray-500 hover:text-gray-900 inline-flex items-center gap-1">
+        ← Back to Pay brokers
+      </Link>
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h1 className="text-2xl font-semibold">Withdrawal Requests</h1>
