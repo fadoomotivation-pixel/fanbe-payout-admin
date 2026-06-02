@@ -346,17 +346,17 @@ export default function Payouts() {
         </div>
         <div className="flex flex-wrap gap-2 items-center">
           <Link to="/payout-cycles"
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-gray-900 text-white text-sm font-medium hover:bg-black shadow-sm">
+            className="relative z-10 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-gray-900 text-white text-sm font-medium hover:bg-black active:scale-[0.98] shadow-sm cursor-pointer transition">
             Settle pending earnings
             {unbatchedEarnings > 0 && (
-              <span className="text-[10px] bg-white/20 rounded-full px-1.5 py-0.5 tabular-nums">{formatINR(unbatchedEarnings)}</span>
+              <span className="pointer-events-none text-[10px] bg-white/20 rounded-full px-1.5 py-0.5 tabular-nums">{formatINR(unbatchedEarnings)}</span>
             )}
           </Link>
           <Link to="/withdrawals"
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white border border-gray-200 text-gray-800 text-sm font-medium hover:border-gray-300">
+            className="relative z-10 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white border border-gray-200 text-gray-800 text-sm font-medium hover:border-gray-300 active:scale-[0.98] cursor-pointer transition">
             Withdrawal requests
             {pendingWdCount > 0 && (
-              <span className="text-[10px] bg-amber-100 text-amber-800 rounded-full px-1.5 py-0.5 tabular-nums">{pendingWdCount}</span>
+              <span className="pointer-events-none text-[10px] bg-amber-100 text-amber-800 rounded-full px-1.5 py-0.5 tabular-nums">{pendingWdCount}</span>
             )}
           </Link>
         </div>
@@ -364,11 +364,11 @@ export default function Payouts() {
 
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <Kpi icon={<Coins size={16}/>}      label="Total earned"   value={formatINR(kpis.totalEarned)}   sub={`${kpis.brokerCount} brokers`} tint="bg-emerald-50 border-emerald-200 text-emerald-700"/>
+        <Kpi icon={<Coins size={16}/>}      label="Total earned"   value={formatINR(kpis.totalEarned)}   sub={`${kpis.brokerCount} brokers · view`}     tint="bg-emerald-50 border-emerald-200 text-emerald-700" onClick={() => setView('per_broker')}/>
         <Kpi icon={<Wallet size={16}/>}     label="Paid out"        value={formatINR(kpis.totalPaid)}     sub="lifetime"                      tint="bg-blue-50 border-blue-200 text-blue-700"/>
-        <Kpi icon={<TrendingUp size={16}/>} label="Approved (queued)" value={formatINR(kpis.totalApproved)} sub="ready to pay"                tint="bg-amber-50 border-amber-200 text-amber-700"/>
-        <Kpi icon={<Filter size={16}/>}     label="Pending review"  value={formatINR(kpis.totalPending)}  sub="awaiting approval"             tint="bg-orange-50 border-orange-200 text-orange-700"/>
-        <Kpi icon={<AlertCircle size={16}/>}label="Owed to brokers" value={formatINR(filtered.reduce((s, r) => s + r.balance, 0))} sub="earned − paid − queued" tint="bg-rose-50 border-rose-200 text-rose-700"/>
+        <Kpi icon={<TrendingUp size={16}/>} label="Approved (queued)" value={formatINR(kpis.totalApproved)} sub="ready to pay → manage"        tint="bg-amber-50 border-amber-200 text-amber-700"   href="/withdrawals"/>
+        <Kpi icon={<Filter size={16}/>}     label="Pending review"  value={formatINR(kpis.totalPending)}  sub="awaiting approval → review"     tint="bg-orange-50 border-orange-200 text-orange-700" href="/withdrawals"/>
+        <Kpi icon={<AlertCircle size={16}/>}label="Owed to brokers" value={formatINR(filtered.reduce((s, r) => s + r.balance, 0))} sub="earned − paid − queued"  tint="bg-rose-50 border-rose-200 text-rose-700"      onClick={() => setView('per_broker')}/>
       </div>
 
       {/* View toggle — same broker money-out data, two perspectives. */}
@@ -641,9 +641,10 @@ export default function Payouts() {
   )
 }
 
-function Kpi({ icon, label, value, sub, tint }: any) {
-  return (
-    <div className={`rounded-xl border p-3 ${tint}`}>
+function Kpi({ icon, label, value, sub, tint, href, onClick }: any) {
+  const interactive = !!(href || onClick)
+  const body = (
+    <div className={`rounded-xl border p-3 ${tint} ${interactive ? 'hover:shadow-sm hover:brightness-[1.02] active:scale-[0.98] cursor-pointer transition' : ''}`}>
       <div className="flex items-center justify-between mb-0.5">
         {icon}<div className="text-base md:text-lg font-bold">{value}</div>
       </div>
@@ -651,4 +652,7 @@ function Kpi({ icon, label, value, sub, tint }: any) {
       {sub && <div className="text-[10px] text-gray-400">{sub}</div>}
     </div>
   )
+  if (href) return <Link to={href}>{body}</Link>
+  if (onClick) return <button type="button" onClick={onClick} className="text-left w-full">{body}</button>
+  return body
 }
