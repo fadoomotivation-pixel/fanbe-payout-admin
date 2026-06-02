@@ -43,6 +43,9 @@ export default function Payouts() {
   const [statusF, setStatusF] = useState('')
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  // New: sort + action-only filter for the Per Broker view
+  const [sortBy, setSortBy] = useState<'earned' | 'owed' | 'paid' | 'pending'>('owed')
+  const [actionOnly, setActionOnly] = useState(false)
   const [ledgerKind, setLedgerKind] = useState('')
   const [ledgerFrom, setLedgerFrom] = useState('')
   const [ledgerTo, setLedgerTo] = useState('')
@@ -178,12 +181,37 @@ export default function Payouts() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
-    if (!q) return aggregated
-    return aggregated.filter(r =>
-      (r.broker?.name || '').toLowerCase().includes(q) ||
-      (r.broker?.broker_id || '').toLowerCase().includes(q)
-    )
-  }, [aggregated, search])
+    let rows = aggregated
+    if (q) {
+      rows = rows.filter(r =>
+        (r.broker?.name || '').toLowerCase().includes(q) ||
+        (r.broker?.broker_id || '').toLowerCase().includes(q)
+      )
+    }
+    // "Action needed" = broker has pending or approved txn waiting on admin,
+    // or is over-allocated (commitments > earnings).  Hides everything settled
+    // so admin sees only their actual queue.
+    if (actionOnly) {
+      rows = rows.filter(r => {
+        const committed = r.paid + r.approved_payout + r.pending_payout
+        const overAllocated = committed > r.earned + 0.01
+        return r.pending_payout > 0 || r.approved_payout > 0 || overAllocated
+      })
+    }
+    // Sort by admin's chosen axis.  Default is "owed" so the brokers admin most
+    // needs to act on float to the top.
+    const sorted = [...rows]
+    sorted.sort((a: any, b: any) => {
+      switch (sortBy) {
+        case 'owed':    return b.balance - a.balance
+        case 'earned':  return b.earned  - a.earned
+        case 'paid':    return b.paid    - a.paid
+        case 'pending': return (b.pending_payout + b.approved_payout) - (a.pending_payout + a.approved_payout)
+        default:        return 0
+      }
+    })
+    return sorted
+  }, [aggregated, search, sortBy, actionOnly])
 
   // ── Manage transaction modal ────────────────────────────────────
   const [selected, setSelected] = useState<any>(null)
@@ -399,9 +427,26 @@ export default function Payouts() {
             className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-300"/>
         </div>
         {view === 'per_broker' && (
-          <select value={statusF} onChange={e => setStatusF(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none">
-            {['','pending','approved','paid','rejected','hold'].map(s => <option key={s} value={s}>{s ? `Txn status: ${s}` : 'All txn statuses'}</option>)}
-          </select>
+          <>
+            <select value={sortBy} onChange={e => setSortBy(e.target.value as any)} className="border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none">
+              <option value="owed">Sort: Owed</option>
+              <option value="pending">Sort: In flight</option>
+              <option value="earned">Sort: Earned</option>
+              <option value="paid">Sort: Paid</option>
+            </select>
+            <select value={statusF} onChange={e => setStatusF(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none">
+              {['','pending','approved','paid','rejected','hold'].map(s => <option key={s} value={s}>{s ? `Txn status: ${s}` : 'All txn statuses'}</option>)}
+            </select>
+            <button
+              onClick={() => setActionOnly(a => !a)}
+              className={`text-xs px-3 py-2 rounded-full border transition ${
+                actionOnly ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
+              }`}
+              title="Show only brokers with pending or approved payouts admin needs to act on"
+            >
+              Action needed
+            </button>
+          </>
         )}
         {view === 'activity' && (
           <>
@@ -521,6 +566,23 @@ export default function Payouts() {
                         <div className={`font-bold ${overAllocated ? 'text-rose-700' : r.balance > 0 ? 'text-rose-700' : 'text-gray-400'}`}>{formatINR(r.balance)}</div>
                       </div>
                     </>
+                  )
+                })()}
+                {/* Inline quick-pay.  If this broker has any txn in pending/approved
+                    status, surface a "Pay" button on the row so admin doesn't have to
+                    expand → scroll → find the txn → tap manage.  Picks the most
+                    urgent: approved first (already signed off), then pending. */}
+                {(() => {
+                  const nextTxn = [...(r.txns as any[])].find(t => t.status === 'approved') || (r.txns as any[]).find(t => t.status === 'pending')
+                  if (!nextTxn) return null
+                  return (
+                    <button
+                      onClick={e => { e.stopPropagation(); openTxn(nextTxn) }}
+                      className="ml-2 inline-flex items-center gap-1 text-xs px-3 py-1 rounded-md bg-emerald-600 text-white hover:bg-emerald-700 font-semibold"
+                      title={`Pay this broker's ${nextTxn.status} cycle payout`}
+                    >
+                      Pay {formatINR(nextTxn.net_amount || nextTxn.amount || 0)}
+                    </button>
                   )
                 })()}
                 <Link to={`/broker/dashboard?broker_id=${r.broker_id}`}
