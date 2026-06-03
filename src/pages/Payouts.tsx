@@ -7,7 +7,7 @@ import { Input, Select, Textarea } from '@/components/ui/Input.tsx'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate, PAYOUT_STATUS_COLORS } from '@/lib/utils'
-import { ArrowUpRight, ArrowDownRight, Banknote, Coins, Wallet, ChevronRight, Search, Filter, ExternalLink, TrendingUp, AlertCircle, RefreshCw, Users, Download } from 'lucide-react'
+import { ArrowUpRight, ArrowDownRight, ChevronRight, Search, ExternalLink, AlertCircle, Download } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 /**
@@ -43,9 +43,10 @@ export default function Payouts() {
   const [statusF, setStatusF] = useState('')
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  // New: sort + action-only filter for the Per Broker view
+  // Default sort = most owed first.  Action-only ON by default so admin lands on
+  // their actual queue, not the full broker list.
   const [sortBy, setSortBy] = useState<'earned' | 'owed' | 'paid' | 'pending'>('owed')
-  const [actionOnly, setActionOnly] = useState(false)
+  const [actionOnly, setActionOnly] = useState(true)
   const [ledgerKind, setLedgerKind] = useState('')
   const [ledgerFrom, setLedgerFrom] = useState('')
   const [ledgerTo, setLedgerTo] = useState('')
@@ -359,83 +360,71 @@ export default function Payouts() {
   const pendingWdCount = (allWithdrawals as any[]).filter(w => w.status === 'pending' || w.status === 'approved').length
   const unbatchedEarnings = aggregated.reduce((s: number, r: any) => s + (r.earned - r.paid - r.approved_payout - r.pending_payout), 0)
 
+  const owedTotal = aggregated.reduce((s, r) => s + r.balance, 0)
+  const owedBrokerCount = aggregated.filter(r => r.balance > 0).length
+  const allCaughtUp = owedTotal === 0 && unbatchedEarnings === 0 && pendingWdCount === 0
+
   return (
-    <div className="p-3 md:p-6 space-y-4">
-      {/* Header + quick actions.  This page is the one door to everything broker-payout-related;
-          the two big actions live here so admin doesn't need to hunt for /payout-cycles or
-          /withdrawals in the sidebar. */}
-      <div className="flex items-start justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-emerald-50 rounded-lg"><Banknote size={20} className="text-emerald-600"/></div>
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">Pay brokers</h1>
-            <p className="text-sm text-gray-500">Everything broker-payable in one place.</p>
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-2 items-center">
-          <Link to="/payout-cycles"
-            className="relative z-10 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-gray-900 text-white text-sm font-medium hover:bg-black active:scale-[0.98] shadow-sm cursor-pointer transition">
-            Settle pending earnings
+    <div className="p-3 md:p-6 space-y-6 max-w-4xl mx-auto">
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Pay brokers</h1>
+        <p className="text-sm text-gray-500 mt-1">
+          {kpis.brokerCount} earning · {formatINR(kpis.totalEarned)} earned · {formatINR(kpis.totalPaid)} paid
+        </p>
+      </div>
+
+      {/* The hero.  One number, one action.  Everything else is detail behind
+          progressive disclosure.  This is the answer to "what do I need to do?" */}
+      <div className="rounded-3xl bg-white border border-gray-200 shadow-[0_1px_3px_rgba(0,0,0,0.04)] px-6 sm:px-10 py-10 text-center">
+        {allCaughtUp ? (
+          <>
+            <div className="text-5xl mb-3">✓</div>
+            <div className="text-lg font-semibold text-gray-900">All caught up</div>
+            <div className="text-sm text-gray-500 mt-1">Nothing owed, nothing pending.</div>
+          </>
+        ) : (
+          <>
+            <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-[0.18em] mb-3">Owed to brokers</div>
+            <div className="text-5xl sm:text-6xl font-bold text-gray-900 tabular-nums tracking-tight">{formatINR(owedTotal)}</div>
+            <div className="text-sm text-gray-500 mt-3">
+              {owedBrokerCount > 0 ? `across ${owedBrokerCount} broker${owedBrokerCount === 1 ? '' : 's'}` : 'queued for payout'}
+            </div>
+
+            {/* Primary action — only one, the one admin needs most. */}
             {unbatchedEarnings > 0 && (
-              <span className="pointer-events-none text-[10px] bg-white/20 rounded-full px-1.5 py-0.5 tabular-nums">{formatINR(unbatchedEarnings)}</span>
+              <Link to="/payout-cycles"
+                className="mt-7 inline-flex items-center gap-2 px-6 py-3 rounded-full bg-gray-900 text-white text-sm font-semibold hover:bg-black active:scale-[0.98] shadow-sm transition">
+                Settle {formatINR(unbatchedEarnings)} in pending earnings
+              </Link>
             )}
-          </Link>
-          <Link to="/withdrawals"
-            className="relative z-10 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white border border-gray-200 text-gray-800 text-sm font-medium hover:border-gray-300 active:scale-[0.98] cursor-pointer transition">
-            Withdrawal requests
+
+            {/* Secondary — quieter link, not a button.  Only appears if there's a queue. */}
             {pendingWdCount > 0 && (
-              <span className="pointer-events-none text-[10px] bg-amber-100 text-amber-800 rounded-full px-1.5 py-0.5 tabular-nums">{pendingWdCount}</span>
+              <div className="mt-4 text-sm">
+                <Link to="/withdrawals" className="text-blue-600 hover:underline">
+                  {pendingWdCount} withdrawal request{pendingWdCount === 1 ? '' : 's'} waiting →
+                </Link>
+              </div>
             )}
-          </Link>
-        </div>
-      </div>
-
-      {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <Kpi icon={<Coins size={16}/>}      label="Total earned"   value={formatINR(kpis.totalEarned)}   sub={`${kpis.brokerCount} brokers · view`}     tint="bg-emerald-50 border-emerald-200 text-emerald-700" onClick={() => setView('per_broker')}/>
-        <Kpi icon={<Wallet size={16}/>}     label="Paid out"        value={formatINR(kpis.totalPaid)}     sub="lifetime"                      tint="bg-blue-50 border-blue-200 text-blue-700"/>
-        <Kpi icon={<TrendingUp size={16}/>} label="Approved (queued)" value={formatINR(kpis.totalApproved)} sub="ready to pay → manage"        tint="bg-amber-50 border-amber-200 text-amber-700"   href="/withdrawals"/>
-        <Kpi icon={<Filter size={16}/>}     label="Pending review"  value={formatINR(kpis.totalPending)}  sub="awaiting approval → review"     tint="bg-orange-50 border-orange-200 text-orange-700" href="/withdrawals"/>
-        <Kpi icon={<AlertCircle size={16}/>}label="Owed to brokers" value={formatINR(filtered.reduce((s, r) => s + r.balance, 0))} sub="earned − paid − queued"  tint="bg-rose-50 border-rose-200 text-rose-700"      onClick={() => setView('per_broker')}/>
-      </div>
-
-      {/* View toggle — same broker money-out data, two perspectives. */}
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="inline-flex rounded-full bg-gray-100 p-1 text-sm">
-          <button onClick={() => setView('per_broker')}
-            className={`px-4 py-1.5 rounded-full inline-flex items-center gap-1.5 transition ${view === 'per_broker' ? 'bg-white shadow text-gray-900 font-semibold' : 'text-gray-500 hover:text-gray-700'}`}>
-            <Users size={13}/>Per Broker
-          </button>
-          <button onClick={() => setView('activity')}
-            className={`px-4 py-1.5 rounded-full inline-flex items-center gap-1.5 transition ${view === 'activity' ? 'bg-white shadow text-gray-900 font-semibold' : 'text-gray-500 hover:text-gray-700'}`}>
-            <Filter size={13}/>Activity Log
-          </button>
-        </div>
-        {view === 'activity' && (
-          <Button variant="secondary" onClick={exportLedgerCSV} disabled={ledgerRowsWithBalance.length === 0}>
-            <Download size={14}/>Export CSV
-          </Button>
+          </>
         )}
       </div>
 
       {/* Filters — shared search + per-view extras */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-3 flex flex-wrap gap-2 items-center">
+      <div className="flex flex-wrap gap-2 items-center">
         <div className="relative flex-1 min-w-[200px]">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
+          <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400"/>
           <input value={search} onChange={e => setSearch(e.target.value)}
-            placeholder={view === 'per_broker' ? 'Search broker name or code...' : 'Search broker, code, reference...'}
-            className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-300"/>
+            placeholder={view === 'per_broker' ? 'Search broker…' : 'Search broker, code, ref…'}
+            className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-gray-200 rounded-full focus:outline-none focus:border-gray-400"/>
         </div>
         {view === 'per_broker' && (
           <>
-            <select value={sortBy} onChange={e => setSortBy(e.target.value as any)} className="border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none">
-              <option value="owed">Sort: Owed</option>
-              <option value="pending">Sort: In flight</option>
-              <option value="earned">Sort: Earned</option>
-              <option value="paid">Sort: Paid</option>
-            </select>
-            <select value={statusF} onChange={e => setStatusF(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none">
-              {['','pending','approved','paid','rejected','hold'].map(s => <option key={s} value={s}>{s ? `Txn status: ${s}` : 'All txn statuses'}</option>)}
+            <select value={sortBy} onChange={e => setSortBy(e.target.value as any)} className="bg-white border border-gray-200 rounded-full px-3 py-2 text-sm focus:outline-none focus:border-gray-400">
+              <option value="owed">Most owed</option>
+              <option value="pending">In flight</option>
+              <option value="earned">Earned</option>
+              <option value="paid">Paid</option>
             </select>
             <button
               onClick={() => setActionOnly(a => !a)}
@@ -444,7 +433,7 @@ export default function Payouts() {
               }`}
               title="Show only brokers with pending or approved payouts admin needs to act on"
             >
-              Action needed
+              {actionOnly ? 'Showing: action needed' : 'Show: all brokers'}
             </button>
           </>
         )}
@@ -667,6 +656,25 @@ export default function Payouts() {
         })}
       </div>
       )}
+
+      {/* Activity log access — quiet footer link, not a top-of-page toggle.  Admin who
+          wants the ledger gets here; everyone else doesn't see ledger-related clutter. */}
+      <div className="text-center pt-2">
+        <button
+          onClick={() => setView(view === 'activity' ? 'per_broker' : 'activity')}
+          className="text-xs text-gray-500 hover:text-gray-900 inline-flex items-center gap-1"
+        >
+          {view === 'activity' ? '← Back to broker list' : 'View full ledger history →'}
+        </button>
+        {view === 'activity' && ledgerRowsWithBalance.length > 0 && (
+          <button
+            onClick={exportLedgerCSV}
+            className="text-xs text-gray-500 hover:text-gray-900 inline-flex items-center gap-1 ml-4"
+          >
+            <Download size={12}/>Export CSV
+          </button>
+        )}
+      </div>
 
       {/* Manage transaction modal */}
       <Modal open={modal} onClose={() => setModal(false)} title="Manage Payout Transaction">
