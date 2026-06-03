@@ -22,14 +22,14 @@ const NAV = [
   ]},
   { group: 'Sales Pipeline', items: [
     { to: '/inquiries',       icon: Inbox,    label: 'Inquiries' },
-    { to: '/members',         icon: UserPlus, label: 'Members & Customers' },
+    { to: '/members',         icon: UserPlus, label: 'Customer Registry' },
     { to: '/customer-history',icon: History,  label: 'Customer History' },
   ]},
   { group: 'Real Estate', items: [
     { to: '/projects',          icon: Building2,  label: 'Projects' },
     { to: '/plots',             icon: Map,        label: 'Plots' },
-    { to: '/bookings',          icon: BookOpen,   label: 'Bookings' },
     { to: '/customer-pipeline', icon: Users,      label: 'Customer Pipeline' },
+    { to: '/bookings',          icon: BookOpen,   label: 'New Booking' },
     { to: '/payments',          icon: CreditCard, label: 'Payments' },
   ]},
   { group: 'Broker Network', items: [
