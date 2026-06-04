@@ -102,6 +102,21 @@ export default function Brokers() {
     onError: (e: any) => toast.error(e.message || 'Failed to create login'),
   })
 
+  // Reset password on an existing broker login.  Calls the reset-broker-password edge
+  // function (deployed alongside create-broker-login) which uses the service role to call
+  // auth.admin.updateUserById.  Supabase stores passwords as bcrypt hashes, so this is
+  // the only way for admin to give a broker who lost their password a way back in —
+  // there is no path to "see" the existing password.
+  const resetPassword = useMutation({
+    mutationFn: async (params: { broker_id: string; password?: string }) => {
+      const { data, error } = await supabase.functions.invoke('reset-broker-password', { body: params })
+      if (error) throw error
+      if (data?.error) throw new Error(data.error)
+      return data
+    },
+    onError: (e: any) => toast.error(e.message || 'Failed to reset password'),
+  })
+
   const [modal, setModal] = useState(false)
   const [editing, setEditing] = useState<any>(null)
   const [form, setForm] = useState<any>(EMPTY)
@@ -189,6 +204,24 @@ export default function Brokers() {
     } catch {}
   }
 
+  // Reset password for an existing broker.  Uses editPassword if admin typed one (>= 6
+  // chars), otherwise lets the edge function generate a random one and returns it.
+  const submitPasswordReset = async (mode: 'custom' | 'random') => {
+    if (!editing?.id || !editing.auth_user_id) return
+    if (mode === 'custom' && (!editPassword || editPassword.length < 6)) {
+      toast.error('Password must be at least 6 characters'); return
+    }
+    try {
+      const lr = await resetPassword.mutateAsync({
+        broker_id: editing.id,
+        password: mode === 'custom' ? editPassword : undefined,
+      })
+      setLoginResult(lr)
+      setEditPassword('')
+      toast.success('Password reset · share the new password below')
+    } catch {}
+  }
+
   const cols = [
     { header: 'Broker ID', render: (r: any) => <span className="font-mono text-xs bg-gray-100 px-2 py-0.5 rounded">{r.broker_id}</span> },
     { header: 'Name', render: (r: any) => <Link to={`/brokers/${r.id}`} className="font-medium text-blue-700 hover:underline">{r.name}</Link> },
@@ -214,7 +247,12 @@ export default function Brokers() {
     { header: 'Sponsor', render: (r: any) => r.sponsor?.name ? <span className="text-xs text-gray-600">{r.sponsor.name} <span className="text-gray-400">[{r.sponsor.broker_id}]</span></span> : <span className="text-xs text-gray-400">—</span> },
     { header: 'KYC', render: (r: any) => <Badge label={r.kyc_status || 'pending'} className={KYC_COLORS[r.kyc_status] || 'bg-gray-100 text-gray-600'} /> },
     { header: 'Login', render: (r: any) => r.auth_user_id
-        ? <span className="text-xs text-green-700 inline-flex items-center gap-1"><KeyRound size={11}/>linked</span>
+        ? (
+          <div className="leading-tight">
+            <div className="text-xs text-green-700 inline-flex items-center gap-1"><KeyRound size={11}/>linked</div>
+            <div className="text-[10px] text-gray-500 font-mono truncate max-w-[160px]" title={r.email || ''}>{r.email || '—'}</div>
+          </div>
+        )
         : <span className="text-xs text-gray-400">not linked</span> },
     { header: 'Status', render: (r: any) => <Badge label={r.status} className={r.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'} /> },
     {
@@ -237,12 +275,64 @@ export default function Brokers() {
   const loginSection = () => {
     if (editing?.auth_user_id) {
       return (
-        <div className="mt-2 p-3 bg-emerald-50 rounded-lg text-sm text-emerald-900 flex items-center gap-2">
-          ✓ Login already created. Broker signs in at <code className="bg-white px-1 py-0.5 rounded font-mono text-xs">/broker/login</code> with email <b>{editing.email}</b>.
-          <button onClick={() => copy(`${window.location.origin}/broker/login`, 'login-url')} className="ml-auto inline-flex items-center gap-1 text-emerald-700 hover:underline text-xs">
-            {copiedKey === 'login-url' ? <Check size={11}/> : <Copy size={11}/>}
-            {copiedKey === 'login-url' ? 'Copied' : 'Copy login URL'}
-          </button>
+        <div className="mt-2 space-y-2">
+          {/* Existing login summary — email is the login identifier; password is stored as a
+              bcrypt hash by Supabase Auth so admin can't see it, only reset it. */}
+          <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-sm">
+            <div className="flex items-center gap-2 text-emerald-900">
+              <KeyRound size={14}/>Login linked
+            </div>
+            <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+              <div className="bg-white rounded px-2.5 py-1.5 border border-emerald-100">
+                <div className="text-[10px] uppercase tracking-wide text-gray-500">Login email</div>
+                <div className="flex items-center gap-1 mt-0.5">
+                  <span className="font-mono text-gray-900 truncate">{editing.email || '—'}</span>
+                  {editing.email && (
+                    <button onClick={() => copy(editing.email, 'login-email')} className="text-gray-400 hover:text-gray-700" title="Copy email">
+                      {copiedKey === 'login-email' ? <Check size={11}/> : <Copy size={11}/>}
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="bg-white rounded px-2.5 py-1.5 border border-emerald-100">
+                <div className="text-[10px] uppercase tracking-wide text-gray-500">Sign-in URL</div>
+                <div className="flex items-center gap-1 mt-0.5">
+                  <span className="font-mono text-gray-900 truncate text-[11px]">{`${window.location.origin}/broker/login`}</span>
+                  <button onClick={() => copy(`${window.location.origin}/broker/login`, 'login-url')} className="text-gray-400 hover:text-gray-700" title="Copy URL">
+                    {copiedKey === 'login-url' ? <Check size={11}/> : <Copy size={11}/>}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Password reset — admin can either type a new password or have one generated. */}
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+            <div className="flex items-center gap-2 text-amber-900 mb-2">
+              <KeyRound size={13}/><b className="text-xs">Reset password</b>
+              <span className="text-[10px] text-amber-700 ml-auto">Stored as bcrypt hash — the existing password can't be retrieved, only replaced.</span>
+            </div>
+            <div className="flex gap-2 flex-wrap">
+              <div className="flex-1 min-w-[200px] relative">
+                <input
+                  type={showEditPassword ? 'text' : 'password'}
+                  value={editPassword}
+                  onChange={e => setEditPassword(e.target.value)}
+                  placeholder="New password (min 6 chars), or click Generate"
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 pr-16 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white"
+                />
+                <button type="button" onClick={() => setShowEditPassword(s => !s)} className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-700">
+                  {showEditPassword ? 'Hide' : 'Show'}
+                </button>
+              </div>
+              <Button size="sm" onClick={() => submitPasswordReset('custom')} loading={resetPassword.isPending} disabled={editPassword.length < 6}>
+                Set password
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => submitPasswordReset('random')} loading={resetPassword.isPending}>
+                Generate
+              </Button>
+            </div>
+          </div>
         </div>
       )
     }
@@ -352,11 +442,12 @@ export default function Brokers() {
         </div>
       </Modal>
 
-      <Modal open={!!loginResult} onClose={() => setLoginResult(null)} title="Broker login created">
+      <Modal open={!!loginResult} onClose={() => setLoginResult(null)} title={loginResult?.message?.toLowerCase().includes('reset') ? 'Password reset · share new credentials' : 'Broker login created'}>
         {loginResult && (
           <div className="space-y-3">
             <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900">
               Share these credentials with the broker. They sign in at <b>/broker/login</b>.
+              {loginResult.message?.toLowerCase().includes('reset') && ' This password is shown once — copy it now.'}
             </div>
             <div className="space-y-2">
               <Field label="Email"        value={loginResult.email}    copyKey="email"    copiedKey={copiedKey} onCopy={copy}/>
