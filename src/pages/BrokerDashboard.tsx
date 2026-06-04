@@ -6,7 +6,7 @@ import {
   ChevronRight, EyeOff, BarChart3, Coins, Receipt, CalendarDays, Send,
   ShieldCheck, Crown, Phone, MessageCircle, Edit3, Building, Settings as Cog,
   Activity, CheckCircle2, XCircle, Lock, Unlock, Banknote, FileText, Printer,
-  UserPlus, Loader2,
+  UserPlus, Loader2, Upload, FileCheck2, Clock,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -54,6 +54,12 @@ export default function BrokerDashboard() {
   const [savingProfile, setSavingProfile] = useState(false)
   const [savingBank, setSavingBank]       = useState(false)
   const [savingKyc, setSavingKyc]         = useState(false)
+  // ── Broker self-KYC upload (admin-side equivalent lives at /kyc).  Until now the
+  // "Complete KYC" CTA in the hero pointed nowhere — admin saw "0/0 docs" on the
+  // review page because brokers had no way to actually submit anything.
+  const [kycDocsModal, setKycDocsModal] = useState(false)
+  const [myKycDocs,    setMyKycDocs]    = useState<any[]>([])
+  const [uploadingDoc, setUploadingDoc] = useState<string | null>(null)
   // ── Multi-level team ──
   const [expandedTeam, setExpandedTeam] = useState<Set<string>>(new Set())
   const [subTeams, setSubTeams]         = useState<Record<string, any[]>>({})
@@ -85,7 +91,7 @@ export default function BrokerDashboard() {
     }
     setBroker(b)
 
-    const [rk, dl, po, wd, bk, cycleTx] = await Promise.all([
+    const [rk, dl, po, wd, bk, cycleTx, kyc] = await Promise.all([
       supabase.from('commission_ranks').select('*').eq('active', true).order('level', { ascending: true }),
       supabase.from('brokers').select('id, name, broker_id, rank, phone, status').eq('sponsor_id', b.id),
       supabase.from('payout_distributions').select('*, bp_bookings(booking_no, bp_customers(name), bp_plots(plot_no))').eq('beneficiary_broker_id', b.id).order('created_at', { ascending: false }).limit(200),
@@ -98,6 +104,9 @@ export default function BrokerDashboard() {
       // Cycle-batch payouts for this broker — must count toward "paid out" and reduce "available"
       // so the broker can't withdraw money admin already paid via a Payout Cycle batch.
       supabase.from('bp_payout_transactions').select('id, net_amount, amount, status, paid_date, payout_type, utr_ref, cycle_id, created_at').eq('broker_id', b.id),
+      // Broker's own KYC docs — feeds the upload modal so they can see what's already been
+      // submitted and verified by admin without having to ask.
+      supabase.from('bp_broker_kyc').select('*').eq('broker_id', b.id).order('created_at', { ascending: false }),
     ])
     setRanks(rk.data || [])
     setDownline(dl.data || [])
@@ -105,6 +114,7 @@ export default function BrokerDashboard() {
     setWithdrawals(wd.data || [])
     setCycleTxns(cycleTx.data || [])
     setBookings(bk.data || [])
+    setMyKycDocs(kyc.data || [])
 
     // Downline earnings (their commissions)
     const dlIds = (dl.data || []).map((d: any) => d.id)
@@ -490,6 +500,44 @@ export default function BrokerDashboard() {
     }
   }
 
+  // ── KYC document upload (broker → admin) ───────────────────────────
+  // Drop a file into Supabase Storage under `documents/kyc/{broker_id}/...`, then create a
+  // bp_broker_kyc row so the admin's KYC review page picks it up.  Re-upload of the same
+  // doc_type replaces (or rather adds a new row — admin can verify the latest).
+  const uploadKycDoc = async (docType: string, docLabel: string, file: File) => {
+    if (adminShadow) { toast.error('Shadow mode is read-only'); return }
+    if (!broker?.id) return
+    setUploadingDoc(docType)
+    try {
+      const ext  = (file.name.split('.').pop() || 'bin').toLowerCase()
+      const path = `kyc/${broker.id}/${docType}-${Date.now()}.${ext}`
+      const { error: upErr } = await supabase.storage.from('documents').upload(path, file, { cacheControl: '3600', upsert: false })
+      if (upErr) throw upErr
+      const { data: pub } = supabase.storage.from('documents').getPublicUrl(path)
+      const { error: insErr } = await supabase.from('bp_broker_kyc').insert({
+        broker_id: broker.id,
+        doc_type:  docType,
+        doc_label: docLabel,
+        file_url:  pub.publicUrl,
+        file_name: file.name,
+        verified:  false,
+      })
+      if (insErr) throw insErr
+      // If broker had been rejected, flip back to pending so admin sees the resubmission.
+      if (broker.kyc_status === 'rejected') {
+        await supabase.from('brokers').update({ kyc_status: 'pending' }).eq('id', broker.id)
+        setBroker({ ...broker, kyc_status: 'pending' })
+      }
+      const { data: refreshed } = await supabase.from('bp_broker_kyc').select('*').eq('broker_id', broker.id).order('created_at', { ascending: false })
+      setMyKycDocs(refreshed || [])
+      toast.success(`${docLabel} uploaded — admin will review`)
+    } catch (e: any) {
+      toast.error(e.message || 'Upload failed')
+    } finally {
+      setUploadingDoc(null)
+    }
+  }
+
   const submitWithdrawal = async () => {
     if (adminShadow) { toast.error('Shadow mode is read-only'); return }
     const amount = Number(wdAmount) || 0
@@ -568,9 +616,9 @@ export default function BrokerDashboard() {
                 <Send size={14}/>Request Withdrawal
               </button>
               {broker?.kyc_status !== 'approved' && (
-                <Link to="#" className="inline-flex items-center gap-1.5 bg-white/10 text-white text-sm px-4 py-2 rounded-lg hover:bg-white/20">
-                  <ShieldCheck size={14}/>Complete KYC
-                </Link>
+                <button onClick={() => setKycDocsModal(true)} className="inline-flex items-center gap-1.5 bg-white/10 text-white text-sm px-4 py-2 rounded-lg hover:bg-white/20">
+                  <ShieldCheck size={14}/>{broker?.kyc_status === 'rejected' ? 'Re-submit KYC' : 'Complete KYC'}
+                </button>
               )}
             </div>
           )}
@@ -578,11 +626,27 @@ export default function BrokerDashboard() {
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-6 space-y-6">
-        {broker?.kyc_status !== 'approved' && (
+        {broker?.kyc_status !== 'approved' && !adminShadow && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
+            <AlertCircle size={18} className="text-amber-600 mt-0.5 shrink-0"/>
+            <div className="flex-1">
+              <div className="text-sm text-amber-900">
+                <b>KYC {broker?.kyc_status || 'pending'}</b> — payouts will be released after admin approves your KYC.
+                {myKycDocs.length === 0 && ' Upload your documents to get started.'}
+                {myKycDocs.length > 0 && ` ${myKycDocs.filter(d => d.verified).length}/${myKycDocs.length} documents verified by admin.`}
+              </div>
+            </div>
+            <button onClick={() => setKycDocsModal(true)} className="shrink-0 text-xs font-semibold bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg inline-flex items-center gap-1">
+              <Upload size={12}/>{myKycDocs.length === 0 ? 'Upload docs' : 'Manage docs'}
+            </button>
+          </div>
+        )}
+        {broker?.kyc_status !== 'approved' && adminShadow && (
           <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
             <AlertCircle size={18} className="text-amber-600 mt-0.5"/>
             <div className="text-sm text-amber-900">
-              <b>KYC {broker?.kyc_status || 'pending'}</b> — payouts will be released after admin approves your KYC.
+              <b>KYC {broker?.kyc_status || 'pending'}</b> — {myKycDocs.length} document{myKycDocs.length === 1 ? '' : 's'} on file
+              {myKycDocs.length > 0 && `, ${myKycDocs.filter(d => d.verified).length} verified`}. Review via <Link to="/kyc" className="underline font-semibold">/kyc</Link>.
             </div>
           </div>
         )}
@@ -1008,6 +1072,16 @@ export default function BrokerDashboard() {
         )}
       </main>
 
+      {kycDocsModal && broker && (
+        <KycDocsModal
+          docs={myKycDocs}
+          status={broker.kyc_status || 'pending'}
+          uploading={uploadingDoc}
+          onClose={() => setKycDocsModal(false)}
+          onUpload={uploadKycDoc}
+        />
+      )}
+
       {wdModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4" onClick={() => setWdModal(false)}>
           <div onClick={e => e.stopPropagation()} className="bg-white rounded-2xl max-w-md w-full p-5 space-y-4">
@@ -1382,3 +1456,117 @@ function TeamNodeCard({ broker, isRoot, isExpanded, earned, customers = [], load
     </div>
   )
 }
+
+// ── KYC document upload modal (broker side) ──────────────────────────────────
+// The matching admin view lives at /kyc — admin sees the same `bp_broker_kyc` rows this
+// modal writes, and can Verify / Reject each one.  Required-doc list mirrors the DOC_LABEL
+// map in src/pages/KYC.tsx so doc_type strings line up with what admin expects to see.
+const REQUIRED_DOCS: { type: string; label: string; hint: string }[] = [
+  { type: 'aadhaar', label: 'Aadhaar',          hint: 'Clear photo of front + back, or PDF' },
+  { type: 'pan',     label: 'PAN card',         hint: 'Photo or PDF of your PAN card' },
+  { type: 'photo',   label: 'Passport photo',   hint: 'Recent passport-size photo, JPG/PNG' },
+  { type: 'bank_passbook', label: 'Bank passbook / Cancelled cheque', hint: 'For payouts — name, account no., IFSC visible' },
+  { type: 'address_proof', label: 'Address proof', hint: 'Utility bill, rent agreement, or passport' },
+]
+
+function KycDocsModal({ docs, status, uploading, onClose, onUpload }: {
+  docs: any[]
+  status: string
+  uploading: string | null
+  onClose: () => void
+  onUpload: (docType: string, docLabel: string, file: File) => void | Promise<void>
+}) {
+  // Latest-per-type so re-uploads show the new copy, but keep the array unique by doc_type.
+  const latestByType = new Map<string, any>()
+  for (const d of docs) {
+    if (!latestByType.has(d.doc_type)) latestByType.set(d.doc_type, d)
+  }
+  const verifiedCount = docs.filter(d => d.verified).length
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4 py-6 overflow-y-auto" onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} className="bg-white rounded-2xl max-w-2xl w-full p-5 my-auto">
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <h3 className="text-lg font-bold text-gray-900 inline-flex items-center gap-2"><ShieldCheck size={18} className="text-amber-600"/>KYC documents</h3>
+            <p className="text-xs text-gray-500 mt-0.5">Upload your identity, photo, and bank proof. Admin will verify each one.</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 text-lg">✕</button>
+        </div>
+
+        <div className={`rounded-lg p-3 text-xs flex items-center gap-2 mb-4 ${
+          status === 'approved' ? 'bg-emerald-50 text-emerald-900 border border-emerald-200'
+          : status === 'rejected' ? 'bg-rose-50 text-rose-900 border border-rose-200'
+          : 'bg-amber-50 text-amber-900 border border-amber-200'
+        }`}>
+          {status === 'approved' ? <CheckCircle2 size={14}/> : status === 'rejected' ? <XCircle size={14}/> : <Clock size={14}/>}
+          <span>
+            Status: <b className="capitalize">{status}</b> · {docs.length} document{docs.length === 1 ? '' : 's'} on file
+            {docs.length > 0 && ` · ${verifiedCount} verified by admin`}.
+          </span>
+        </div>
+
+        <div className="space-y-2.5">
+          {REQUIRED_DOCS.map(d => {
+            const existing = latestByType.get(d.type)
+            const isUploading = uploading === d.type
+            return (
+              <div key={d.type} className={`rounded-xl border p-3 flex items-start gap-3 ${
+                existing?.verified ? 'border-emerald-200 bg-emerald-50/40'
+                : existing ? 'border-amber-200 bg-amber-50/40'
+                : 'border-gray-200 bg-white'
+              }`}>
+                <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                  existing?.verified ? 'bg-emerald-100 text-emerald-700'
+                  : existing ? 'bg-amber-100 text-amber-700'
+                  : 'bg-gray-100 text-gray-500'
+                }`}>
+                  {existing?.verified ? <FileCheck2 size={16}/> : <FileText size={16}/>}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-gray-900">{d.label}</div>
+                  <div className="text-[11px] text-gray-500">{d.hint}</div>
+                  {existing && (
+                    <div className="mt-1 text-[11px] text-gray-600 inline-flex items-center gap-1.5">
+                      {existing.verified ? (
+                        <span className="inline-flex items-center gap-0.5 text-emerald-700"><CheckCircle2 size={11}/>Verified by admin</span>
+                      ) : (
+                        <span className="inline-flex items-center gap-0.5 text-amber-700"><Clock size={11}/>Awaiting verification</span>
+                      )}
+                      {existing.file_url && <a href={existing.file_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline truncate max-w-[180px]">{existing.file_name || 'View'}</a>}
+                      {existing.notes && <span className="text-rose-700">· {existing.notes}</span>}
+                    </div>
+                  )}
+                </div>
+                <label className={`shrink-0 text-xs font-medium px-3 py-1.5 rounded-lg cursor-pointer inline-flex items-center gap-1 ${
+                  isUploading ? 'bg-gray-100 text-gray-400 cursor-wait'
+                  : existing ? 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'
+                  : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                }`}>
+                  {isUploading ? <Loader2 size={12} className="animate-spin"/> : <Upload size={12}/>}
+                  {isUploading ? 'Uploading…' : existing ? 'Replace' : 'Upload'}
+                  <input
+                    type="file"
+                    accept="image/*,application/pdf"
+                    className="hidden"
+                    disabled={!!uploading}
+                    onChange={e => {
+                      const f = e.target.files?.[0]
+                      if (f) onUpload(d.type, d.label, f)
+                      e.target.value = ''
+                    }}
+                  />
+                </label>
+              </div>
+            )
+          })}
+        </div>
+
+        <div className="mt-5 pt-4 border-t border-gray-100 flex items-center justify-between text-[11px] text-gray-500">
+          <span>Files go directly to admin. Aadhaar / PAN images are stored privately.</span>
+          <button onClick={onClose} className="text-blue-600 hover:underline font-medium">Done</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
