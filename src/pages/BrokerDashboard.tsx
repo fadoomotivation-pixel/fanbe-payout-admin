@@ -268,7 +268,11 @@ export default function BrokerDashboard() {
     return { totalEarned, earnedThisMonth, paidOut, availableBalance, totalVolume, teamVolume, confirmedCount: confirmed.length, promisedTotal, promisedPending }
   }, [bookings, withdrawals, downlineEarnings, payouts, cycleTxns])
 
-  // Last 6 months earnings bar chart
+  // Last 6 months earnings bar chart.  MUST use the same source as the "Earned (distributed)"
+  // hero card — payout_distributions — so the chart total equals the hero number.  Previously
+  // this summed bookings.commission_amount (the *promised* total), so a broker who'd been
+  // promised ₹4.5L but only had ₹27k actually distributed saw two wildly different numbers
+  // on the same screen.  Money pages can't disagree with themselves.
   const monthlyEarnings = useMemo(() => {
     const out: { key: string; label: string; value: number }[] = []
     const now = new Date()
@@ -276,14 +280,14 @@ export default function BrokerDashboard() {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
       out.push({ key: monthKey(d), label: shortMonth(monthKey(d)), value: 0 })
     }
-    for (const b of bookings) {
-      if (b.stage !== 'booking_done' || !b.application_date) continue
-      const k = monthKey(new Date(b.application_date))
+    for (const p of payouts) {
+      if (!p.created_at) continue
+      const k = monthKey(new Date(p.created_at))
       const slot = out.find(o => o.key === k); if (!slot) continue
-      slot.value += Number(b.commission_amount || 0)
+      slot.value += Number(p.net_payout || 0)
     }
     return out
-  }, [bookings])
+  }, [payouts])
   const maxMonthly = Math.max(1, ...monthlyEarnings.map(m => m.value))
 
   // Rank progression
@@ -687,22 +691,30 @@ export default function BrokerDashboard() {
             </Section>
 
             <Section title="Recent commissions" icon={<Coins size={14}/>}>
-              {bookings.filter((b:any) => b.stage === 'booking_done').slice(0,5).length === 0 ? (
-                <p className="text-sm text-gray-500">No confirmed commissions yet.</p>
+              {/* Was per-booking with b.commission_amount (the PROMISED total — e.g. ₹90,300
+                  on a booking even though only a slice has actually been distributed).
+                  Switched to per-distribution rows from payout_distributions so each line
+                  is a real cash credit the broker received, matching the Earned hero card. */}
+              {payouts.length === 0 ? (
+                <p className="text-sm text-gray-500">No commissions distributed yet.</p>
               ) : (
                 <div className="divide-y divide-gray-100 text-sm">
-                  {bookings.filter((b:any) => b.stage === 'booking_done').slice(0,5).map((b: any) => (
-                    <div key={b.id} className="py-2 flex items-center justify-between">
-                      <div>
-                        <div className="font-mono text-xs text-blue-700">{b.booking_no}</div>
-                        <div className="text-xs text-gray-500">{b.bp_customers?.name} · {b.scheme_name || b.bp_projects?.name || '—'}</div>
+                  {payouts.slice(0,5).map((p: any) => {
+                    const lvl = Number(p.level ?? 0)
+                    const label = p.income_type === 'direct' || lvl === 0 ? 'Direct' : `Upline L${lvl}`
+                    return (
+                      <div key={p.id} className="py-2 flex items-center justify-between">
+                        <div>
+                          <div className="font-mono text-xs text-blue-700">{p.bp_bookings?.booking_no || '—'}</div>
+                          <div className="text-xs text-gray-500">{p.bp_bookings?.bp_customers?.name || '—'} · {label}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-semibold text-emerald-700">{formatINR(p.net_payout)}</div>
+                          <div className="text-[10px] text-gray-400">{formatDate(p.created_at)}</div>
+                        </div>
                       </div>
-                      <div className="text-right">
-                        <div className="font-semibold text-emerald-700">{formatINR(b.commission_amount)}</div>
-                        <div className="text-[10px] text-gray-400">{formatDate(b.application_date)}</div>
-                      </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </Section>
