@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { Button } from '@/components/ui/Button.tsx'
 import { Input, Select } from '@/components/ui/Input.tsx'
@@ -39,6 +39,12 @@ const SEARCH_DEBOUNCE_MS = 300
 export default function CustomerPipeline() {
   const qc = useQueryClient()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  // Customer focus — when present, the page renders a customer-aggregate header at the
+  // top and filters the bookings list to just this customer's deals.  This is the entry
+  // point that replaces the deleted /customer-history page; old /customer-history?customer=X
+  // links redirect here in App.tsx.
+  const customerFocusId = searchParams.get('customer')
   const [tab, setTab] = useState<Tab>('all')
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -49,6 +55,52 @@ export default function CustomerPipeline() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [emiBooking, setEmiBooking] = useState<any>(null)
   const [payFor, setPayFor] = useState<{ booking: any; type: 'token' | 'booking' } | null>(null)
+
+  // Fetch the focused customer's profile + aggregate stats across ALL their bookings.
+  // This is the data that used to live on the deleted /customer-history page — it gives
+  // admin a "total picture" of the customer (cost, paid, outstanding, overdue) so they
+  // don't have to mentally sum across multiple booking rows.
+  const { data: customerFocus } = useQuery({
+    queryKey: ['cp_customer_focus', customerFocusId],
+    enabled: !!customerFocusId,
+    queryFn: async () => {
+      const today = new Date().toISOString().slice(0, 10)
+      const [{ data: c }, { data: bks }] = await Promise.all([
+        supabase.from('bp_customers').select('id, customer_code, name, phone, email, address, father_or_husband_name, pan, dob, nominee_name, nominee_relation').eq('id', customerFocusId!).maybeSingle(),
+        supabase.from('bp_bookings').select('id, booking_no, total_amount, plot_total_price, total_collected, stage').eq('customer_id', customerFocusId!),
+      ])
+      const bookingIds = (bks || []).map((b: any) => b.id)
+      const [{ data: pays }, { data: emis }] = await Promise.all([
+        bookingIds.length
+          ? supabase.from('bp_payments').select('amount, verification_status, booking_id').in('booking_id', bookingIds)
+          : Promise.resolve({ data: [] as any[] }),
+        bookingIds.length
+          ? supabase.from('emi_installments').select('amount, paid_amount, status, due_date, booking_id').in('booking_id', bookingIds)
+          : Promise.resolve({ data: [] as any[] }),
+      ])
+      const totalCost   = (bks || []).reduce((s, b: any) => s + Number(b.total_amount || b.plot_total_price || 0), 0)
+      const paid        = (pays || []).filter((p: any) => p.verification_status === 'verified').reduce((s, p: any) => s + Number(p.amount || 0), 0)
+      const overdueAmt  = (emis || []).filter((e: any) => e.status !== 'paid' && (e.due_date || '') <= today)
+                                       .reduce((s, e: any) => s + Math.max(0, Number(e.amount || 0) - Number(e.paid_amount || 0)), 0)
+      const overdueCnt  = (emis || []).filter((e: any) => e.status !== 'paid' && (e.due_date || '') <= today).length
+      return {
+        customer: c,
+        bookingCount: (bks || []).length,
+        totalCost,
+        paid,
+        outstanding: Math.max(0, totalCost - paid),
+        collectionPct: totalCost > 0 ? Math.round((paid / totalCost) * 100) : 0,
+        overdueAmt,
+        overdueCnt,
+      }
+    },
+  })
+
+  const clearCustomerFocus = () => {
+    const next = new URLSearchParams(searchParams)
+    next.delete('customer')
+    setSearchParams(next, { replace: true })
+  }
 
   // Debounce the search input so we don't fire a query on every keystroke.
   useEffect(() => {
@@ -90,7 +142,7 @@ export default function CustomerPipeline() {
   })
 
   // Build the bookings query: server-side filter + sort + range pagination + count.
-  const bookingsQueryKey = useMemo(() => ['cp_bookings_page', tab, debouncedSearch, searchScope, filterBroker, filterProject, page, searchTargets], [tab, debouncedSearch, searchScope, filterBroker, filterProject, page, searchTargets])
+  const bookingsQueryKey = useMemo(() => ['cp_bookings_page', tab, debouncedSearch, searchScope, filterBroker, filterProject, page, searchTargets, customerFocusId], [tab, debouncedSearch, searchScope, filterBroker, filterProject, page, searchTargets, customerFocusId])
   const { data: pageResult, isLoading } = useQuery({
     queryKey: bookingsQueryKey,
     queryFn: async () => {
@@ -109,6 +161,9 @@ export default function CustomerPipeline() {
         .not('stage', 'eq', 'cancelled')
         .order('created_at', { ascending: false })
 
+      // Customer focus narrows the list to one customer's deals (replaces the deleted
+      // /customer-history page).  Applied before any other filter.
+      if (customerFocusId) q = q.eq('customer_id', customerFocusId)
       if (filterBroker)  q = q.eq('broker_id',  filterBroker)
       if (filterProject) q = q.eq('project_id', filterProject)
 
@@ -428,6 +483,44 @@ export default function CustomerPipeline() {
         <p className="text-sm text-gray-500 mt-1">Every deal · clean. One tap to do the next thing.</p>
       </div>
 
+      {/* Customer focus header — present when ?customer= is in the URL.  Replaces the
+          deleted /customer-history page: shows the customer profile + aggregate totals
+          across ALL their bookings, then narrows the list below to just this customer. */}
+      {customerFocusId && customerFocus?.customer && (
+        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-5 shadow-sm">
+          <div className="flex items-start gap-4 flex-wrap">
+            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center text-lg font-bold shrink-0">
+              {(customerFocus.customer.name || '?').charAt(0).toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-lg font-bold text-gray-900">{customerFocus.customer.name || '—'}</h2>
+                <span className="font-mono text-[11px] text-gray-500">[{customerFocus.customer.customer_code || '—'}]</span>
+                <span className="text-[10px] uppercase tracking-wide font-semibold bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">Customer view</span>
+              </div>
+              <div className="text-xs text-gray-600 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+                {customerFocus.customer.phone && <span>📞 {customerFocus.customer.phone}</span>}
+                {customerFocus.customer.email && <span>✉️ {customerFocus.customer.email}</span>}
+                {customerFocus.customer.pan && <span>PAN: <span className="font-mono">{customerFocus.customer.pan}</span></span>}
+                {customerFocus.customer.father_or_husband_name && <span>S/o {customerFocus.customer.father_or_husband_name}</span>}
+              </div>
+              {customerFocus.customer.address && <div className="text-xs text-gray-500 mt-0.5 truncate">📍 {customerFocus.customer.address}</div>}
+            </div>
+            <button onClick={clearCustomerFocus} className="text-xs text-blue-700 hover:text-blue-900 underline shrink-0">
+              Clear filter →
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mt-4">
+            <CustomerStat label="Bookings"        value={String(customerFocus.bookingCount)} sub="lifetime"/>
+            <CustomerStat label="Total cost"      value={formatINR(customerFocus.totalCost)} sub="all bookings"/>
+            <CustomerStat label="Paid"            value={formatINR(customerFocus.paid)} sub={`${customerFocus.collectionPct}% collected`} tone="emerald"/>
+            <CustomerStat label="Outstanding"     value={formatINR(customerFocus.outstanding)} sub="still due" tone={customerFocus.outstanding > 0 ? 'amber' : 'gray'}/>
+            <CustomerStat label="Overdue EMI"     value={formatINR(customerFocus.overdueAmt)} sub={`${customerFocus.overdueCnt} past-due`} tone={customerFocus.overdueAmt > 0 ? 'rose' : 'gray'}/>
+          </div>
+        </div>
+      )}
+
       {/* KPI tiles + tabs combined */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <TabTile active={tab==='all'}            onClick={() => setTab('all')}
@@ -534,7 +627,7 @@ export default function CustomerPipeline() {
                   <div className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-full px-2 py-0.5 mb-1">
                     <Users size={10}/>CUSTOMER
                   </div>
-                  <Link to={`/customer-history?customer=${r.customer_id}`} className="text-[17px] font-semibold text-gray-900 hover:text-blue-700 truncate block">
+                  <Link to={`/customer-pipeline?customer=${r.customer_id}`} className="text-[17px] font-semibold text-gray-900 hover:text-blue-700 truncate block">
                     {cust?.name || '—'}
                   </Link>
                   {/* Subline 1: identity (booking_no · plot · project) */}
@@ -815,6 +908,22 @@ function PaymentHistoryList({ booking, customer }: { booking: any; customer: any
           </button>
         ))}
       </div>
+    </div>
+  )
+}
+
+function CustomerStat({ label, value, sub, tone = 'gray' }: { label: string; value: string; sub?: string; tone?: 'gray'|'emerald'|'amber'|'rose' }) {
+  const tones = {
+    gray:    'text-gray-900',
+    emerald: 'text-emerald-700',
+    amber:   'text-amber-700',
+    rose:    'text-rose-700',
+  } as const
+  return (
+    <div className="bg-white/70 backdrop-blur-sm rounded-lg border border-blue-100 px-3 py-2">
+      <div className="text-[10px] uppercase tracking-wide text-gray-500 font-medium">{label}</div>
+      <div className={`text-base font-bold tabular-nums ${tones[tone]}`}>{value}</div>
+      {sub && <div className="text-[10px] text-gray-400 mt-0.5">{sub}</div>}
     </div>
   )
 }

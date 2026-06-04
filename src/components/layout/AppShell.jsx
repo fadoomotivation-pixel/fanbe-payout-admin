@@ -18,11 +18,12 @@ const NAV = [
     { to: '/',               icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/analytics',      icon: BarChart2,        label: 'Analytics' },
     { to: '/reports',        icon: FileText,         label: 'Reports' },
-    { to: '/balance-sheet',  icon: TrendingUp,       label: 'Balance Sheet' },
   ]},
   { group: 'Sales Pipeline', items: [
     { to: '/inquiries',       icon: Inbox,    label: 'Inquiries' },
-    { to: '/customer-history',icon: History,  label: 'Customer History' },
+    // Customer History was a customer-centric reader; that view now lives inside
+    // /customer-pipeline?customer=X (the booking-centric hub got a customer-aggregate
+    // header), so there's just one place to manage a customer's deals.
   ]},
   { group: 'Real Estate', items: [
     { to: '/projects',          icon: Building2,  label: 'Projects' },
@@ -56,7 +57,6 @@ const NAV = [
     { to: '/roles',         icon: ShieldCheck, label: 'Roles & Perms' },
     { to: '/bank-accounts', icon: Landmark,    label: 'Bank Accounts' },
     { to: '/payout-terms',  icon: ScrollText,  label: 'Payout Settings' },
-    { to: '/settings',      icon: Settings,    label: 'Settings' },
   ]},
 ]
 

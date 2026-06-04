@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { AppLayout } from '@/components/layout/AppLayout.tsx'
 import Login from '@/pages/Login'
@@ -16,11 +16,8 @@ import Payments from '@/pages/Payments'
 import KYC from '@/pages/KYC'
 import Analytics from '@/pages/Analytics'
 import Reports from '@/pages/Reports'
-import Settings from '@/pages/Settings'
 import Inquiries from '@/pages/Inquiries'
-import CustomerHistory from '@/pages/CustomerHistory'
 import Expenses from '@/pages/Expenses'
-import BalanceSheet from '@/pages/BalanceSheet'
 import Withdrawals from '@/pages/Withdrawals'
 import Tickets from '@/pages/Tickets'
 import News from '@/pages/News'
@@ -33,6 +30,13 @@ import PayoutTerms from '@/pages/PayoutTerms'
 import PayoutCycles from '@/pages/PayoutCycles'
 import CustomerPipeline from '@/pages/CustomerPipeline'
 import BrokerTree from '@/pages/BrokerTree'
+
+// Preserve search params when redirecting (so old links like
+// /customer-history?customer=X still land on the right customer view).
+function HistoryRedirect(){
+  const loc = useLocation()
+  return <Navigate to={{ pathname: '/customer-pipeline', search: loc.search }} replace/>
+}
 
 function Guard({children}:{children:any}){
   const[session,setSession]=useState<any>(undefined)
@@ -54,7 +58,10 @@ export default function App(){
         <Route path="/inquiries" element={<Inquiries/>}/>
         <Route path="/projects" element={<Projects/>}/>
         <Route path="/plots" element={<Plots/>}/>
-        <Route path="/customer-history" element={<CustomerHistory/>}/>
+        {/* Customer History was folded into Customer Pipeline (which now shows a
+            customer-aggregate header when ?customer= is set).  Redirect preserves
+            the search params so old bookmarks land on the same customer. */}
+        <Route path="/customer-history" element={<HistoryRedirect/>}/>
         <Route path="/bookings" element={<Bookings/>}/>
         <Route path="/customer-pipeline" element={<CustomerPipeline/>}/>
         <Route path="/payments" element={<Payments/>}/>
@@ -73,13 +80,16 @@ export default function App(){
         <Route path="/team-rewards" element={<TeamRewards/>}/>
         <Route path="/payout-terms" element={<PayoutTerms/>}/>
         <Route path="/expenses" element={<Expenses/>}/>
-        <Route path="/balance-sheet" element={<BalanceSheet/>}/>
+        {/* Balance Sheet was a broken 47-line stub that queried a non-existent table
+            and always showed ₹0.  Analytics covers the same financial summary correctly. */}
+        <Route path="/balance-sheet" element={<Navigate to="/analytics" replace/>}/>
         <Route path="/tickets" element={<Tickets/>}/>
         <Route path="/news" element={<News/>}/>
         <Route path="/roles" element={<Roles/>}/>
         <Route path="/bank-accounts" element={<BankAccounts/>}/>
         <Route path="/reports" element={<Reports/>}/>
-        <Route path="/settings" element={<Settings/>}/>
+        {/* Settings page was a 20-line stub that just showed the logged-in user's email. */}
+        <Route path="/settings" element={<Navigate to="/" replace/>}/>
       </Route>
       <Route path="*" element={<Navigate to="/" replace/>}/>
     </Routes>
