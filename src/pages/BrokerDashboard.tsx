@@ -6,6 +6,7 @@ import {
   ChevronRight, EyeOff, BarChart3, Coins, Receipt, CalendarDays, Send,
   ShieldCheck, Crown, Phone, MessageCircle, Edit3, Building, Settings as Cog,
   Activity, CheckCircle2, XCircle, Lock, Unlock, Banknote, FileText, Printer,
+  UserPlus, Loader2,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -431,6 +432,47 @@ export default function BrokerDashboard() {
   }
 
   // ── L2 team expansion ────────────────────────────────────────────
+  // One-click promote a customer to a broker, sponsored by whichever broker brought
+  // them in.  Mirrors the same flow on /team-tree so admin gets the action wherever
+  // they're already looking at the customer leaf.
+  const [promoting, setPromoting] = useState(false)
+  const promoteCustomerToBroker = async (customerId: string, sponsorId: string) => {
+    setPromoting(true)
+    try {
+      const [{ data: cust }, { data: ranks }, { data: existing }] = await Promise.all([
+        supabase.from('bp_customers').select('id, name, phone, email').eq('id', customerId).single(),
+        supabase.from('commission_ranks').select('rank_name, level').eq('active', true).order('level', { ascending: true }).limit(1),
+        supabase.from('brokers').select('broker_id').ilike('broker_id', 'FNB-%').order('broker_id', { ascending: false }).limit(1),
+      ])
+      if (!cust) throw new Error('Customer not found')
+      let nextNum = 6000
+      const lastCode = (existing as any[])?.[0]?.broker_id || ''
+      const m = lastCode.match(/(\d+)\s*$/)
+      if (m) nextNum = Number(m[1]) + 1
+      const broker_id = `FNB-${String(nextNum).padStart(5, '0')}`
+      const rank = (ranks as any[])?.[0]?.rank_name || null
+      const { error } = await supabase.from('brokers').insert({
+        broker_id,
+        name:        (cust as any).name,
+        phone:       (cust as any).phone || null,
+        email:       (cust as any).email || null,
+        sponsor_id:  sponsorId,
+        rank,
+        status:      'active',
+        kyc_status:  'pending',
+      })
+      if (error) throw error
+      toast.success(`Promoted to broker · ${broker_id}`)
+      // Refresh downline + customer maps so the new broker shows up immediately.
+      const { data: dl } = await supabase.from('brokers').select('id, name, broker_id, rank, phone, status').eq('sponsor_id', broker?.id || sponsorId)
+      if (dl) setDownline(dl)
+    } catch (e: any) {
+      toast.error(e.message || 'Failed to promote')
+    } finally {
+      setPromoting(false)
+    }
+  }
+
   const toggleTeam = async (id: string) => {
     const next = new Set(expandedTeam)
     if (next.has(id)) { next.delete(id); setExpandedTeam(next); return }
@@ -759,6 +801,8 @@ export default function BrokerDashboard() {
                     downlineEarnings={downlineEarnings}
                     downlineCustomers={downlineCustomers}
                     onToggle={toggleTeam}
+                    onPromote={promoteCustomerToBroker}
+                    isPromoting={promoting}
                   />
                 </div>
               </div>
@@ -1133,7 +1177,7 @@ function WdBadge({ status }: { status: string }) {
 // its direct downline is pre-loaded.  Deeper levels lazy-load via onToggle (which fetches
 // brokers where sponsor_id = id and caches the result in subTeams).  Visual skeleton
 // matches /team-tree: vertical descender → horizontal sibling bar → risers into each child.
-function TeamOrgNode({ broker, isRoot, initialChildren, subTeams, expandedTeam, downlineEarnings, downlineCustomers, onToggle }: any) {
+function TeamOrgNode({ broker, isRoot, initialChildren, subTeams, expandedTeam, downlineEarnings, downlineCustomers, onToggle, onPromote, isPromoting }: any) {
   if (!broker) return null
   const customerList = (downlineCustomers?.[broker.id] || []) as { id: string; name: string; code: string }[]
   const subBrokersLoaded: any[] = isRoot ? (initialChildren || []) : (subTeams[broker.id] || [])
@@ -1175,9 +1219,10 @@ function TeamOrgNode({ broker, isRoot, initialChildren, subTeams, expandedTeam, 
                   <div className="absolute top-0 left-1/2 -translate-x-1/2 w-px h-6 bg-gray-300" />
                   {c.kind === 'broker' ? (
                     <TeamOrgNode broker={c.data} initialChildren={null} subTeams={subTeams}
-                      expandedTeam={expandedTeam} downlineEarnings={downlineEarnings} downlineCustomers={downlineCustomers} onToggle={onToggle}/>
+                      expandedTeam={expandedTeam} downlineEarnings={downlineEarnings} downlineCustomers={downlineCustomers} onToggle={onToggle}
+                      onPromote={onPromote} isPromoting={isPromoting}/>
                   ) : (
-                    <CustomerLeaf customer={c.data}/>
+                    <CustomerLeaf customer={c.data} sponsorBrokerId={broker.id} onPromote={onPromote} isPromoting={isPromoting}/>
                   )}
                 </div>
               )
@@ -1198,21 +1243,60 @@ function TeamOrgNode({ broker, isRoot, initialChildren, subTeams, expandedTeam, 
 
 // Terminal leaf node for a customer.  Identical footprint to TeamNodeCard so the org chart
 // stays aligned, but visually distinct (amber + dashed + "CUSTOMER" badge) so customers
-// can't be confused with brokers.  Click → jumps to that customer's history page.
-function CustomerLeaf({ customer }: { customer: { id: string; name: string; code: string } }) {
+// can't be confused with brokers.  Card body links to the customer's history; the
+// "Make broker" action sits at the bottom and promotes the customer under the same sponsor.
+function CustomerLeaf({ customer, sponsorBrokerId, onPromote, isPromoting }: {
+  customer: { id: string; name: string; code: string }
+  sponsorBrokerId?: string
+  onPromote?: (customerId: string, sponsorId: string) => void
+  isPromoting?: boolean
+}) {
+  const [confirming, setConfirming] = useState(false)
   return (
-    <Link
-      to={`/customer-history?customer=${customer.id}`}
-      onClick={e => e.stopPropagation()}
-      className="w-[150px] sm:w-[170px] rounded-2xl border-2 border-dashed border-amber-200 bg-amber-50/40 px-3 py-3 shadow-sm hover:border-amber-300 hover:bg-amber-50 transition flex flex-col items-center"
-    >
-      <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold mb-1.5 bg-gradient-to-br from-amber-400 to-orange-500 text-white">
-        {(customer.name || '?').charAt(0).toUpperCase()}
-      </div>
-      <div className="text-[13px] font-semibold text-gray-900 truncate max-w-full text-center">{customer.name || '—'}</div>
-      <div className="text-[10px] font-mono text-gray-400 mt-0.5">[{customer.code || '—'}]</div>
-      <span className="mt-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">CUSTOMER</span>
-    </Link>
+    <div className="w-[150px] sm:w-[170px] rounded-2xl border-2 border-dashed border-amber-200 bg-amber-50/40 px-3 py-3 shadow-sm hover:border-amber-300 hover:bg-amber-50 transition flex flex-col items-center">
+      <Link
+        to={`/customer-history?customer=${customer.id}`}
+        onClick={e => e.stopPropagation()}
+        className="flex flex-col items-center w-full"
+      >
+        <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold mb-1.5 bg-gradient-to-br from-amber-400 to-orange-500 text-white">
+          {(customer.name || '?').charAt(0).toUpperCase()}
+        </div>
+        <div className="text-[13px] font-semibold text-gray-900 truncate max-w-full text-center">{customer.name || '—'}</div>
+        <div className="text-[10px] font-mono text-gray-400 mt-0.5">[{customer.code || '—'}]</div>
+        <span className="mt-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">CUSTOMER</span>
+      </Link>
+
+      {onPromote && sponsorBrokerId && (
+        <div className="mt-2 pt-2 w-full border-t border-amber-100">
+          {confirming ? (
+            <div className="flex gap-1">
+              <button
+                onClick={e => { e.stopPropagation(); onPromote(customer.id, sponsorBrokerId); setConfirming(false) }}
+                disabled={isPromoting}
+                className="flex-1 text-[10px] py-1 rounded-full bg-emerald-600 text-white font-medium hover:bg-emerald-700 disabled:opacity-50 inline-flex items-center justify-center gap-0.5"
+              >
+                {isPromoting ? <Loader2 size={10} className="animate-spin"/> : 'Yes'}
+              </button>
+              <button
+                onClick={e => { e.stopPropagation(); setConfirming(false) }}
+                className="flex-1 text-[10px] py-1 rounded-full bg-gray-100 text-gray-600 font-medium hover:bg-gray-200"
+              >
+                No
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={e => { e.stopPropagation(); setConfirming(true) }}
+              className="w-full text-[10px] py-1 rounded-full bg-white border border-amber-300 text-amber-800 font-medium hover:bg-amber-100 inline-flex items-center justify-center gap-1"
+              title="Promote this customer to a broker under the same sponsor"
+            >
+              <UserPlus size={10}/>Make broker
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 

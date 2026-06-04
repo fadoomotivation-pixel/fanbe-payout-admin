@@ -22,7 +22,6 @@ const NAV = [
   ]},
   { group: 'Sales Pipeline', items: [
     { to: '/inquiries',       icon: Inbox,    label: 'Inquiries' },
-    { to: '/members',         icon: UserPlus, label: 'Customer Registry' },
     { to: '/customer-history',icon: History,  label: 'Customer History' },
   ]},
   { group: 'Real Estate', items: [

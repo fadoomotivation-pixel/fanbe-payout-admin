@@ -422,16 +422,14 @@ function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, cust
 
 // Terminal leaf node for a customer.  Same footprint as a broker NodeCard so the org
 // chart stays aligned, but visually distinct (amber + "CUSTOMER" badge + dashed border)
-// so admin can tell brokers from customers at a glance.  Clicking jumps to the
-// customer's history page.
+// so admin can tell brokers from customers at a glance.  Card body links to the
+// customer's history; the "Make broker" action lives in its own button at the bottom.
 function CustomerLeaf({ customer, sponsorBrokerId, onPromote, isPromoting }: {
   customer: { id: string; name: string; code: string }
   sponsorBrokerId?: string
   onPromote?: (customerId: string, sponsorId: string) => void
   isPromoting?: boolean
 }) {
-  // Inline confirm: tap once → "Confirm?" with Yes/No.  Avoids a heavyweight modal for
-  // an action that's already adjacent to the customer's card.
   const [confirming, setConfirming] = useState(false)
   return (
     <div className="w-[180px] sm:w-[200px] rounded-2xl border-2 border-dashed border-amber-200 bg-amber-50/40 px-3 py-3 shadow-sm hover:border-amber-300 hover:bg-amber-50 transition flex flex-col items-center">
