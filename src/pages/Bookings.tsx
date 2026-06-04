@@ -12,6 +12,7 @@ import { printApplicationForm } from '@/lib/printTemplates'
 import { logClosure, getCurrentUserId } from '@/lib/closure'
 import { ClosureDialog } from '@/components/ClosureDialog'
 import { distributePaymentCommission, reverseBookingCommission } from '@/lib/payoutEngine'
+import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
 import EmiPanel from '@/components/EmiPanel'
 import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info, Banknote, IndianRupee, Lock, Unlock, Search, Download, X, Filter, ChevronDown, Users } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -223,11 +224,20 @@ export default function Bookings() {
   // Returns { paymentId, distributedRows } so callers can surface a toast.
   async function recordPaymentRow(p: any): Promise<{ paymentId: string | null; distributed: number }> {
     if (p.amount <= 0) return { paymentId: null, distributed: 0 }
+    // UTR uniqueness — single chokepoint for token / booking / full_payment / extra payments.
+    // The booking form lets admin enter the same UTR across separate payment_type buckets,
+    // which would create duplicates in bp_payments.  Bail before insert so the trigger
+    // doesn't fire on a payment that will need to be reversed.
+    const trimmedUtr = (p.utr_ref || '').trim()
+    if (trimmedUtr) {
+      const conflict = await findUtrConflict(trimmedUtr)
+      if (conflict) throw new Error(utrConflictMessage(conflict))
+    }
     const { data: rn } = await supabase.rpc('next_receipt_no')
     const { data: inserted, error } = await supabase.from('bp_payments').insert({
       booking_id: p.booking_id, customer_id: p.customer_id,
       payment_type: p.payment_type, amount: p.amount, payment_mode: p.payment_mode,
-      utr_ref: p.utr_ref || null, payment_date: p.payment_date,
+      utr_ref: trimmedUtr || null, payment_date: p.payment_date,
       verification_status: 'verified', verified_at: new Date().toISOString(),
       receipt_no: rn || null,
       drawn_on_bank: p.drawn_on_bank || (p.payment_mode === 'cash' ? 'Cash' : null),

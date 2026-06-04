@@ -8,6 +8,7 @@ import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate, PAYOUT_STATUS_COLORS } from '@/lib/utils'
 import { ArrowUpRight, ArrowDownRight, ChevronRight, Search, ExternalLink, AlertCircle, Download } from 'lucide-react'
+import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
 import toast from 'react-hot-toast'
 
 /**
@@ -228,9 +229,17 @@ export default function Payouts() {
     setModal(true)
   }
   const save = async () => {
+    // UTR uniqueness — if the admin set a UTR (or changed it), make sure it's not already in
+    // use elsewhere.  Excluding this row so editing a saved record doesn't false-positive
+    // on its own current UTR.
+    const trimmedUtr = (form.utr_ref || '').trim()
+    if (trimmedUtr) {
+      const conflict = await findUtrConflict(trimmedUtr, { payoutTxn: selected.id })
+      if (conflict) { toast.error(utrConflictMessage(conflict)); return }
+    }
     await update.mutateAsync({
       id: selected.id,
-      data: { ...form, tds_amount: form.tds_amount ? Number(form.tds_amount) : null, net_amount: form.net_amount ? Number(form.net_amount) : null }
+      data: { ...form, utr_ref: trimmedUtr || null, tds_amount: form.tds_amount ? Number(form.tds_amount) : null, net_amount: form.net_amount ? Number(form.net_amount) : null }
     })
     setModal(false)
   }

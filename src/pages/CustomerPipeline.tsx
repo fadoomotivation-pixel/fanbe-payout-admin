@@ -8,6 +8,7 @@ import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import { distributePaymentCommission } from '@/lib/payoutEngine'
+import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
 import { printApplicationForm, printPaymentReceipt } from '@/lib/printTemplates'
 import EmiPanel from '@/components/EmiPanel'
 import {
@@ -291,6 +292,13 @@ export default function CustomerPipeline() {
   const recordPay = useMutation({
     mutationFn: async (p: { booking: any; type: 'token' | 'booking'; amount: number; mode: string; date: string; utr: string; drawn_on: string; branch: string; expected_booking_amount?: number }) => {
       if (!p.amount || p.amount <= 0) throw new Error('Amount required')
+      // UTR uniqueness — bail before inserting the row so the commission trigger doesn't
+      // fire on a payment that will need to be reversed.
+      const trimmedUtr = (p.utr || '').trim()
+      if (trimmedUtr) {
+        const conflict = await findUtrConflict(trimmedUtr)
+        if (conflict) throw new Error(utrConflictMessage(conflict))
+      }
       const { data: rn } = await supabase.rpc('next_receipt_no')
       const { data: payment, error } = await supabase.from('bp_payments').insert({
         booking_id: p.booking.id, customer_id: p.booking.customer_id,
@@ -298,7 +306,7 @@ export default function CustomerPipeline() {
         payment_date: p.date, verification_status: 'verified',
         verified_at: new Date().toISOString(),
         receipt_no: rn || null,
-        utr_ref: p.utr || null,
+        utr_ref: trimmedUtr || null,
         drawn_on_bank: p.drawn_on || (p.mode === 'cash' ? 'Cash' : null),
         branch: p.branch || null,
         sponsor_name: p.booking.brokers?.name || null,

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
 import { computeWithdrawal, loadPayoutConfig, loadBrokerWallets, type PayoutConfig, type BrokerWallet } from '@/lib/payoutEngine'
+import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
 import { logClosure, getCurrentUserId } from '@/lib/closure'
 import { ClosureDialog } from '@/components/ClosureDialog'
 import { Lock, Unlock, Plus, Search, Wallet, Banknote, Send, AlertCircle, X } from 'lucide-react'
@@ -290,7 +291,26 @@ export default function Withdrawals() {
                       <button onClick={() => act(r.id, 'rejected', { rejection_reason: prompt('Reason?') || '' })} className="text-xs bg-rose-600 text-white px-2 py-1 rounded">Reject</button>
                     </>)}
                     {!locked && r.status === 'approved' && (
-                      <button onClick={() => { const utr = prompt('UTR?'); if (utr) act(r.id, 'paid', { utr, paid_at: new Date().toISOString() }) }} className="text-xs bg-blue-600 text-white px-2 py-1 rounded">Mark Paid</button>
+                      <button
+                        onClick={async () => {
+                          // KYC gate — a broker whose KYC isn't approved cannot be paid out, full stop.
+                          // The broker portal already shows "payouts will hold until approved" — this
+                          // is the matching enforcement on the admin side.
+                          const b = brokerLookup[r.broker_id]
+                          if (b && b.kyc_status !== 'approved') {
+                            toast.error(`KYC ${b.kyc_status || 'pending'} for ${b.name} — approve KYC before paying out.`)
+                            return
+                          }
+                          const utr = prompt('UTR?')
+                          if (!utr) return
+                          // UTR must be globally unique — see src/lib/utr.ts.  Excluding this row
+                          // so a re-submit of the same UTR on the same record doesn't false-positive.
+                          const conflict = await findUtrConflict(utr, { withdrawal: r.id })
+                          if (conflict) { toast.error(utrConflictMessage(conflict)); return }
+                          act(r.id, 'paid', { utr: utr.trim(), paid_at: new Date().toISOString() })
+                        }}
+                        className="text-xs bg-blue-600 text-white px-2 py-1 rounded"
+                      >Mark Paid</button>
                     )}
                     {!locked && r.status === 'paid' && (
                       <button onClick={() => setClosureFor({ row: r, action: 'close' })} className="text-xs bg-slate-800 text-white px-2 py-1 rounded inline-flex items-center gap-1">

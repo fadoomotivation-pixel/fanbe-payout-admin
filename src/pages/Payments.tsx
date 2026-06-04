@@ -9,6 +9,7 @@ import { Modal } from '@/components/ui/Modal.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import { printPaymentReceipt } from '@/lib/printTemplates'
 import { distributePaymentCommission, reversePaymentCommission } from '@/lib/payoutEngine'
+import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
 import { Plus, CheckCircle, XCircle, Printer, Clock } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -155,8 +156,15 @@ export default function Payments() {
 
   const save = async () => {
     const amt = Number(form.amount) || 0
+    // UTR uniqueness — same bail-before-insert pattern used at every other UTR write path.
+    const trimmedUtr = (form.utr_ref || '').trim()
+    if (trimmedUtr) {
+      const conflict = await findUtrConflict(trimmedUtr)
+      if (conflict) { toast.error(utrConflictMessage(conflict)); return }
+    }
     const payload = {
       ...form,
+      utr_ref: trimmedUtr || null,
       amount: amt,
       instalment_no: form.instalment_no ? Number(form.instalment_no) : null,
       rupees_in_words: form.rupees_in_words || toWordsINR(amt),

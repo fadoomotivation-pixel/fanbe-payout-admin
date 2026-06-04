@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { formatINR, formatDate } from '@/lib/utils'
 import { distributePaymentCommission } from '@/lib/payoutEngine'
+import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
 import { Modal } from '@/components/ui/Modal.tsx'
 import toast from 'react-hot-toast'
 import {
@@ -93,8 +94,15 @@ export default function PaymentQueue() {
   // ── Mutations ─────────────────────────────────────────────────────────────
   const submitMutation = useMutation({
     mutationFn: async () => {
+      // UTR uniqueness — check before the row even enters the queue, so the same UTR
+      // can't be approved twice via parallel queue entries.
+      const trimmedUtr = (form.utr_ref || '').trim()
+      if (trimmedUtr) {
+        const conflict = await findUtrConflict(trimmedUtr)
+        if (conflict) throw new Error(utrConflictMessage(conflict))
+      }
       const { error } = await supabase.from('bp_payment_queue').insert({
-        ...form, amount: Number(form.amount), status: 'pending',
+        ...form, utr_ref: trimmedUtr || null, amount: Number(form.amount), status: 'pending',
       })
       if (error) throw error
     },
@@ -110,6 +118,14 @@ export default function PaymentQueue() {
 
   const approveMutation = useMutation({
     mutationFn: async (item: any) => {
+      // UTR uniqueness re-check at approval — submit-time validation could be bypassed if
+      // the same UTR ended up in two parallel queue entries (race) or via another channel
+      // (broker dashboard / Bookings) between submit and approval.  Catches it here.
+      const trimmedUtr = (item.utr_ref || '').trim()
+      if (trimmedUtr) {
+        const conflict = await findUtrConflict(trimmedUtr)
+        if (conflict) throw new Error(utrConflictMessage(conflict))
+      }
       const receiptNo = `RCP-${Date.now().toString().slice(-8)}`
       const now = new Date().toISOString()
 
