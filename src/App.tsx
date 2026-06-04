@@ -18,7 +18,6 @@ import Analytics from '@/pages/Analytics'
 import Reports from '@/pages/Reports'
 import Settings from '@/pages/Settings'
 import Inquiries from '@/pages/Inquiries'
-import Members from '@/pages/Members'
 import CustomerHistory from '@/pages/CustomerHistory'
 import Expenses from '@/pages/Expenses'
 import BalanceSheet from '@/pages/BalanceSheet'
@@ -55,7 +54,6 @@ export default function App(){
         <Route path="/inquiries" element={<Inquiries/>}/>
         <Route path="/projects" element={<Projects/>}/>
         <Route path="/plots" element={<Plots/>}/>
-        <Route path="/members" element={<Members/>}/>
         <Route path="/customer-history" element={<CustomerHistory/>}/>
         <Route path="/bookings" element={<Bookings/>}/>
         <Route path="/customer-pipeline" element={<CustomerPipeline/>}/>
