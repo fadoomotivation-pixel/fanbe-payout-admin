@@ -3,10 +3,11 @@ import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
 import { computeWithdrawal, loadPayoutConfig, loadBrokerWallets, type PayoutConfig, type BrokerWallet } from '@/lib/payoutEngine'
+import { formatINR } from '@/lib/utils'
 import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
 import { logClosure, getCurrentUserId } from '@/lib/closure'
 import { ClosureDialog } from '@/components/ClosureDialog'
-import { Lock, Unlock, Plus, Search, Wallet, Banknote, Send, AlertCircle, X } from 'lucide-react'
+import { Lock, Unlock, Plus, Search, Wallet, Banknote, Send, AlertCircle, X, HelpCircle, CheckCircle2, ArrowRight } from 'lucide-react'
 
 type Row = {
   id: string
@@ -40,6 +41,7 @@ export default function Withdrawals() {
   const [submitting, setSubmitting] = useState(false)
   const [filter, setFilter] = useState<'all'|'pending'|'approved'|'paid'|'rejected'|'closed'>('all')
   const [search, setSearch] = useState('')
+  const [showHelp, setShowHelp] = useState(false)
 
   // ── Create-new modal ──
   const [createOpen, setCreateOpen] = useState(false)
@@ -157,14 +159,19 @@ export default function Withdrawals() {
     setCreateOpen(false); load()
   }
 
+  // Status labels rewritten in plain English — "Pending" stays, but "approved" reads as
+  // "OK to pay", "paid" as "Money sent", "closed" as "Locked".  Matches the 4-step
+  // pipeline shown above the table.
   const statusPill = (s: string) => {
-    const cls =
-      s === 'approved' ? 'bg-emerald-100 text-emerald-700' :
-      s === 'rejected' ? 'bg-rose-100 text-rose-700' :
-      s === 'paid'     ? 'bg-blue-100 text-blue-700' :
-      s === 'closed'   ? 'bg-slate-200 text-slate-800' :
-                         'bg-amber-100 text-amber-700'
-    return <span className={`text-xs px-2 py-1 rounded-full capitalize ${cls}`}>{s}</span>
+    const cfgMap: Record<string, { label: string; cls: string }> = {
+      pending:  { label: 'Awaiting decision', cls: 'bg-amber-100 text-amber-700' },
+      approved: { label: "OK to pay",         cls: 'bg-emerald-100 text-emerald-700' },
+      paid:     { label: 'Money sent',         cls: 'bg-blue-100 text-blue-700' },
+      closed:   { label: 'Locked',             cls: 'bg-slate-200 text-slate-800' },
+      rejected: { label: 'Rejected',           cls: 'bg-rose-100 text-rose-700' },
+    }
+    const c = cfgMap[s] || { label: s, cls: 'bg-amber-100 text-amber-700' }
+    return <span className={`text-xs px-2 py-1 rounded-full font-medium ${c.cls}`}>{c.label}</span>
   }
 
   // Stats + filter
@@ -207,34 +214,63 @@ export default function Withdrawals() {
       </Link>
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <h1 className="text-2xl font-semibold">Withdrawal Requests</h1>
-          {cfg && <p className="text-xs text-slate-500">Admin {cfg.admin_charge_pct}% · TDS {cfg.tds_pct}% · Min ₹{cfg.min_withdrawal}</p>}
+          <h1 className="text-2xl font-semibold">Withdrawals</h1>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Money out to brokers in 3 steps · {cfg ? `Admin ${cfg.admin_charge_pct}% · TDS ${cfg.tds_pct}% · Min ₹${cfg.min_withdrawal}` : ''}
+          </p>
         </div>
         <div className="flex items-center gap-2">
+          <button onClick={() => setShowHelp(!showHelp)} className="inline-flex items-center gap-1 px-3 py-2 text-xs rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-700">
+            <HelpCircle size={13}/>How it works
+          </button>
           <button onClick={openCreate} className="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 font-semibold">
             <Plus size={14}/>New withdrawal
           </button>
         </div>
       </div>
 
-      {/* Stat tiles */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        {[
-          { k: 'all',      label: 'Total',    value: rows.length, color: 'bg-white border-gray-200', accent: 'text-gray-900' },
-          { k: 'pending',  label: 'Pending',  value: stats.pending, color: 'bg-amber-50 border-amber-200', accent: 'text-amber-700' },
-          { k: 'approved', label: 'Approved', value: stats.approved, color: 'bg-emerald-50 border-emerald-200', accent: 'text-emerald-700' },
-          { k: 'paid',     label: 'Paid',     value: stats.paid, color: 'bg-blue-50 border-blue-200', accent: 'text-blue-700' },
-          { k: 'closed',   label: 'Closed',   value: stats.closed, color: 'bg-slate-100 border-slate-200', accent: 'text-slate-700' },
-        ].map(s => {
-          const active = filter === s.k
-          return (
-            <button key={s.k} onClick={() => setFilter(s.k as any)}
-              className={`text-left rounded-xl border p-3 transition ${s.color} ${active ? 'ring-2 ring-indigo-400' : ''}`}>
-              <div className={`text-2xl font-bold ${s.accent}`}>{s.value}</div>
-              <div className="text-xs text-gray-500">{s.label}</div>
-            </button>
-          )
-        })}
+      {/* "How it works" — collapsible explainer.  Admin can re-open any time from the
+          help button above.  The whole reason this page is being redesigned is that the
+          previous version showed 5 statuses + 4 button shapes with no story.  Now there
+          is a story: 3 steps + an optional 4th lock for audit. */}
+      {showHelp && (
+        <div className="bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-200 rounded-xl p-4">
+          <div className="flex items-start justify-between mb-3">
+            <h3 className="text-sm font-semibold text-indigo-900 inline-flex items-center gap-1.5">
+              <HelpCircle size={14}/>How a withdrawal flows
+            </h3>
+            <button onClick={() => setShowHelp(false)} className="text-indigo-400 hover:text-indigo-700"><X size={14}/></button>
+          </div>
+          <ol className="space-y-2 text-sm text-gray-800">
+            <li className="flex items-start gap-2"><span className="shrink-0 w-5 h-5 rounded-full bg-amber-500 text-white text-[11px] font-bold flex items-center justify-center">1</span><div><b>Broker requests</b> — appears here as <i>Pending</i>. Check the broker's bank details and the requested amount.</div></li>
+            <li className="flex items-start gap-2"><span className="shrink-0 w-5 h-5 rounded-full bg-emerald-500 text-white text-[11px] font-bold flex items-center justify-center">2</span><div><b>You approve</b> — moves to <i>Approved</i>. The money isn't out yet, this just says "I've decided to pay it".</div></li>
+            <li className="flex items-start gap-2"><span className="shrink-0 w-5 h-5 rounded-full bg-blue-500 text-white text-[11px] font-bold flex items-center justify-center">3</span><div><b>You send the money</b> via NEFT/IMPS, then record the bank's UTR here. Moves to <i>Money sent</i>.</div></li>
+            <li className="flex items-start gap-2"><span className="shrink-0 w-5 h-5 rounded-full bg-slate-500 text-white text-[11px] font-bold flex items-center justify-center">4</span><div><b>Lock (optional)</b> — once you've verified the bank statement matches, lock the record. After lock, no edits without an admin reopen. Use this for closed accounting periods.</div></li>
+          </ol>
+          <p className="mt-3 text-[11px] text-indigo-700">Most withdrawals only need steps 1–3. Locking (step 4) is for end-of-month audit only.</p>
+        </div>
+      )}
+
+      {/* 4-step pipeline — tap any step to filter the list.  Replaces the old row of 5
+          equally-weighted stat tiles, which gave no sense of direction.  Arrows make the
+          progression read left-to-right; the current filter highlights its tile. */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-3 overflow-x-auto">
+        <div className="flex items-stretch gap-2 min-w-fit">
+          <PipeStep step={1} label="Awaiting decision" sub="Broker requested" count={stats.pending} tone="amber" active={filter === 'pending'} onClick={() => setFilter('pending')}/>
+          <PipeArrow/>
+          <PipeStep step={2} label="OK'd to pay"        sub="Send money next"  count={stats.approved} tone="emerald" active={filter === 'approved'} onClick={() => setFilter('approved')}/>
+          <PipeArrow/>
+          <PipeStep step={3} label="Money sent"          sub={`Total ${formatINR(stats.totalPaid)}`} count={stats.paid} tone="blue" active={filter === 'paid'} onClick={() => setFilter('paid')}/>
+          <PipeArrow/>
+          <PipeStep step={4} label="Locked"              sub="Audit complete" count={stats.closed} tone="slate" active={filter === 'closed'} onClick={() => setFilter('closed')}/>
+          <button
+            onClick={() => setFilter('all')}
+            className={`shrink-0 px-3 py-2 rounded-lg text-xs font-medium ${filter === 'all' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+            title="Show everything"
+          >
+            All<br/><span className="text-[10px] opacity-70">({rows.length})</span>
+          </button>
+        </div>
       </div>
 
       {/* Search */}
@@ -285,44 +321,61 @@ export default function Withdrawals() {
                       )}
                     </div>
                   </td>
-                  <td className="p-3 space-x-1 whitespace-nowrap">
-                    {!locked && r.status === 'pending' && (<>
-                      <button onClick={() => act(r.id, 'approved')} className="text-xs bg-emerald-600 text-white px-2 py-1 rounded">Approve</button>
-                      <button onClick={() => act(r.id, 'rejected', { rejection_reason: prompt('Reason?') || '' })} className="text-xs bg-rose-600 text-white px-2 py-1 rounded">Reject</button>
-                    </>)}
+                  <td className="p-3 whitespace-nowrap">
+                    {/* One primary "next step" button per status, in plain English so admin
+                        knows exactly what'll happen on tap.  Secondary actions (Reject,
+                        Unlock) get a smaller treatment so they don't compete with the
+                        primary CTA. */}
+                    {!locked && r.status === 'pending' && (
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => act(r.id, 'approved')} className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded font-semibold inline-flex items-center gap-1">
+                          <CheckCircle2 size={11}/>OK to pay
+                        </button>
+                        <button onClick={() => act(r.id, 'rejected', { rejection_reason: prompt('Reason for rejection?') || '' })} className="text-xs text-rose-700 hover:bg-rose-50 px-2 py-1.5 rounded">
+                          Reject
+                        </button>
+                      </div>
+                    )}
                     {!locked && r.status === 'approved' && (
                       <button
                         onClick={async () => {
                           // KYC gate — a broker whose KYC isn't approved cannot be paid out, full stop.
-                          // The broker portal already shows "payouts will hold until approved" — this
-                          // is the matching enforcement on the admin side.
                           const b = brokerLookup[r.broker_id]
                           if (b && b.kyc_status !== 'approved') {
                             toast.error(`KYC ${b.kyc_status || 'pending'} for ${b.name} — approve KYC before paying out.`)
                             return
                           }
-                          const utr = prompt('UTR?')
+                          const utr = prompt(`Enter UTR / reference number from your bank for ₹${Number(r.net_amount).toLocaleString('en-IN')} payment to ${b?.name || 'this broker'}:`)
                           if (!utr) return
-                          // UTR must be globally unique — see src/lib/utr.ts.  Excluding this row
-                          // so a re-submit of the same UTR on the same record doesn't false-positive.
+                          // UTR must be globally unique — see src/lib/utr.ts.
                           const conflict = await findUtrConflict(utr, { withdrawal: r.id })
                           if (conflict) { toast.error(utrConflictMessage(conflict)); return }
                           act(r.id, 'paid', { utr: utr.trim(), paid_at: new Date().toISOString() })
                         }}
-                        className="text-xs bg-blue-600 text-white px-2 py-1 rounded"
-                      >Mark Paid</button>
+                        className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded font-semibold inline-flex items-center gap-1"
+                        title="You send the money via NEFT/IMPS and record the bank's UTR here"
+                      >
+                        <Send size={11}/>Send money & record UTR
+                      </button>
                     )}
                     {!locked && r.status === 'paid' && (
-                      <button onClick={() => setClosureFor({ row: r, action: 'close' })} className="text-xs bg-slate-800 text-white px-2 py-1 rounded inline-flex items-center gap-1">
-                        <Lock size={11}/>Close
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setClosureFor({ row: r, action: 'close' })}
+                          className="text-xs bg-slate-800 hover:bg-slate-900 text-white px-3 py-1.5 rounded font-semibold inline-flex items-center gap-1"
+                          title="Lock this record so it can't be edited — use once you've reconciled the bank statement"
+                        >
+                          <Lock size={11}/>Lock for audit
+                        </button>
+                        <span className="text-[10px] text-gray-400">Optional</span>
+                      </div>
                     )}
                     {locked && (
-                      <button onClick={() => setClosureFor({ row: r, action: 'reopen' })} className="text-xs bg-white border border-slate-300 text-slate-700 px-2 py-1 rounded inline-flex items-center gap-1 hover:bg-slate-50">
-                        <Unlock size={11}/>Reopen
+                      <button onClick={() => setClosureFor({ row: r, action: 'reopen' })} className="text-xs text-slate-600 hover:bg-slate-100 px-2 py-1 rounded inline-flex items-center gap-1">
+                        <Unlock size={11}/>Unlock
                       </button>
                     )}
-                    {r.utr && <span className="text-xs text-slate-500">UTR {r.utr}</span>}
+                    {r.utr && <div className="text-[10px] text-slate-500 mt-1 font-mono">UTR {r.utr}</div>}
                   </td>
                 </tr>
               )
@@ -339,8 +392,8 @@ export default function Withdrawals() {
         action={closureFor?.action === 'reopen' ? 'reopen' : 'close'}
         entityLabel={`withdrawal of ₹${closureFor ? Number(closureFor.row.net_amount).toLocaleString() : ''}`}
         description={closureFor?.action === 'close'
-          ? 'Closing a paid withdrawal locks the amount against the broker wallet. The broker cannot dispute it without an admin reopen.'
-          : undefined}
+          ? "Lock this record after you've checked your bank statement and the payment matches. After locking, no one can edit the amount, UTR or status without an admin unlock. Use this once a month at audit time — it's NOT required to call the payment done."
+          : "Unlock so the record can be edited again. The reason will appear in the audit log."}
         reasonRequired={closureFor?.action === 'reopen'}
         onClose={() => setClosureFor(null)}
         onConfirm={handleClosure}
@@ -495,4 +548,37 @@ function Mini({ label, value, accent, highlight }: any) {
       <div className={`text-sm font-bold ${accent}`}>{value}</div>
     </div>
   )
+}
+
+// One step in the 4-step withdrawal pipeline at the top of the page.  Doubles as a filter
+// toggle — tap to scope the list to that stage.  Colour matches the stage's pill colour
+// so admin learns the visual language as they go.
+function PipeStep({ step, label, sub, count, tone, active, onClick }: {
+  step: number; label: string; sub: string; count: number; tone: 'amber'|'emerald'|'blue'|'slate'; active: boolean; onClick: () => void
+}) {
+  const tones = {
+    amber:   { ring: 'border-amber-300',   bg: 'bg-amber-50',   num: 'bg-amber-500',   text: 'text-amber-900' },
+    emerald: { ring: 'border-emerald-300', bg: 'bg-emerald-50', num: 'bg-emerald-500', text: 'text-emerald-900' },
+    blue:    { ring: 'border-blue-300',    bg: 'bg-blue-50',    num: 'bg-blue-500',    text: 'text-blue-900' },
+    slate:   { ring: 'border-slate-300',   bg: 'bg-slate-100',  num: 'bg-slate-500',   text: 'text-slate-900' },
+  } as const
+  const t = tones[tone]
+  return (
+    <button
+      onClick={onClick}
+      className={`shrink-0 text-left flex items-center gap-2.5 px-3 py-2 rounded-lg border-2 transition ${active ? `${t.ring} ${t.bg}` : 'border-gray-200 bg-white hover:border-gray-300'}`}
+    >
+      <div className={`w-7 h-7 rounded-full ${t.num} text-white text-xs font-bold flex items-center justify-center shrink-0`}>{step}</div>
+      <div>
+        <div className="text-[10px] uppercase tracking-wide font-semibold text-gray-500">{sub}</div>
+        <div className={`text-xs font-bold ${active ? t.text : 'text-gray-900'}`}>
+          {label} <span className="tabular-nums">({count})</span>
+        </div>
+      </div>
+    </button>
+  )
+}
+
+function PipeArrow() {
+  return <ArrowRight size={14} className="self-center text-gray-300 shrink-0"/>
 }
