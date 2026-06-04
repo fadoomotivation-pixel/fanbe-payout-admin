@@ -6,8 +6,9 @@ import {
   ChevronRight, EyeOff, BarChart3, Coins, Receipt, CalendarDays, Send,
   ShieldCheck, Crown, Phone, MessageCircle, Edit3, Building, Settings as Cog,
   Activity, CheckCircle2, XCircle, Lock, Unlock, Banknote, FileText, Printer,
-  UserPlus, Loader2, Upload, FileCheck2, Clock,
+  UserPlus, Loader2, Upload, FileCheck2, Clock, MapPin, Calendar, Hash,
 } from 'lucide-react'
+import { printPaymentReceipt } from '@/lib/printTemplates'
 import toast from 'react-hot-toast'
 
 function formatINR(n: number) {
@@ -98,7 +99,7 @@ export default function BrokerDashboard() {
       supabase.from('withdrawal_requests').select('*').eq('broker_id', b.id).order('created_at', { ascending: false }).limit(20),
       supabase
         .from('bp_bookings')
-        .select('id, booking_no, customer_id, plot_total_price, total_amount, booking_amount, commission_amount, stage, scheme_name, application_date, bp_customers(id,customer_code,name,phone,father_or_husband_name), bp_plots(plot_no,size_sqyd), bp_projects(name)')
+        .select('id, booking_no, customer_id, plot_total_price, total_amount, booking_amount, commission_amount, stage, scheme_name, application_date, closed_at, created_at, bp_customers(id,customer_code,name,phone,email,address,father_or_husband_name,pan,dob), bp_plots(plot_no,size_sqyd,sector,block), bp_projects(id,name,location)')
         .eq('broker_id', b.id)
         .order('created_at', { ascending: false }),
       // Cycle-batch payouts for this broker — must count toward "paid out" and reduce "available"
@@ -158,41 +159,57 @@ export default function BrokerDashboard() {
       setDownlineCustomers(custMap)
     }
 
-    // Group bookings by customer + aggregate paid/overdue
+    // Group bookings by customer + aggregate paid/overdue.  Per booking we ALSO keep the
+    // full payments list and EMI schedule so the customers tab can render minute details
+    // (payment-by-payment receipts, EMI seq-by-seq dues) without re-fetching.
     const grouped: Record<string, any> = {}
     for (const r of (bk.data || []) as any[]) {
       const cid = r.customer_id; if (!cid) continue
       if (!grouped[cid]) grouped[cid] = { customer: r.bp_customers, bookings: [], totalCost: 0, totalPaid: 0, outstanding: 0, overdueCount: 0, nextDue: null }
+      // payments / emi populated below
+      r.payments = []
+      r.emi = []
+      r.totalPaid = 0
+      r.outstanding = Number(r.total_amount || r.plot_total_price || 0)
       grouped[cid].bookings.push(r)
       grouped[cid].totalCost += Number(r.total_amount || r.plot_total_price || 0)
     }
     const allBookingIds = (bk.data || []).map((x: any) => x.id)
     if (allBookingIds.length) {
       const [{ data: payments }, { data: scheds }] = await Promise.all([
-        supabase.from('bp_payments').select('booking_id, amount').in('booking_id', allBookingIds).eq('verification_status', 'verified'),
+        // Need the full payment row (not just amount) so we can print receipts and show UTR,
+        // payment_type, mode, instalment_no, etc. in the customers tab.
+        supabase.from('bp_payments').select('id, booking_id, payment_type, amount, payment_mode, utr_ref, payment_date, receipt_no, instalment_no, drawn_on_bank, branch, sponsor_name, rupees_in_words, verification_status, created_at').in('booking_id', allBookingIds).order('payment_date', { ascending: false }),
         supabase.from('emi_schedules').select('id, booking_id').in('booking_id', allBookingIds),
       ])
+      const bookingsById: Record<string, any> = {}
+      for (const r of (bk.data || []) as any[]) bookingsById[r.id] = r
       for (const p of (payments || []) as any[]) {
-        const row = (bk.data || []).find((x: any) => x.id === p.booking_id) as any
-        if (!row) continue
-        grouped[row.customer_id].totalPaid += Number(p.amount || 0)
+        const row = bookingsById[p.booking_id]; if (!row) continue
+        row.payments.push(p)
+        if (p.verification_status === 'verified') {
+          row.totalPaid += Number(p.amount || 0)
+          grouped[row.customer_id].totalPaid += Number(p.amount || 0)
+        }
       }
       const schedIds = (scheds || []).map((s: any) => s.id)
       if (schedIds.length) {
-        const { data: insts } = await supabase.from('emi_installments').select('schedule_id, due_date, amount, status, seq').in('schedule_id', schedIds)
+        const { data: insts } = await supabase.from('emi_installments').select('id, schedule_id, due_date, amount, paid_amount, status, seq').in('schedule_id', schedIds).order('seq', { ascending: true })
         const schedToBooking: Record<string, string> = {}
         for (const s of (scheds || []) as any[]) schedToBooking[s.id] = s.booking_id
         for (const i of (insts || []) as any[]) {
           const bid = schedToBooking[i.schedule_id]; if (!bid) continue
-          const row = (bk.data || []).find((x: any) => x.id === bid) as any; if (!row) continue
+          const row = bookingsById[bid]; if (!row) continue
+          row.emi.push(i)
           const cid = row.customer_id
           if (i.status !== 'paid' && new Date(i.due_date) < new Date()) grouped[cid].overdueCount++
           if (i.status !== 'paid') {
             const nd = grouped[cid].nextDue
-            if (!nd || i.due_date < nd.due_date) grouped[cid].nextDue = i
+            if (!nd || i.due_date < nd.due_date) grouped[cid].nextDue = { ...i, booking_no: row.booking_no, customer_name: row.bp_customers?.name, customer_phone: row.bp_customers?.phone, customer_id: cid }
           }
         }
       }
+      for (const r of (bk.data || []) as any[]) r.outstanding = Math.max(0, Number(r.total_amount || r.plot_total_price || 0) - r.totalPaid)
     }
     Object.values(grouped).forEach((g: any) => g.outstanding = Math.max(0, g.totalCost - g.totalPaid))
     setCustomers(Object.values(grouped))
@@ -302,6 +319,39 @@ export default function BrokerDashboard() {
     return out
   }, [payouts])
   const maxMonthly = Math.max(1, ...monthlyEarnings.map(m => m.value))
+
+  // Upcoming + overdue EMIs across ALL of this broker's bookings.  Lets them see at a
+  // glance which customers to nudge today — chronologically ordered, with overdue items
+  // floated to the top.  Drives a new "Chase customers" section on the overview tab.
+  const upcomingEmis = useMemo(() => {
+    const todayStr = new Date().toISOString().slice(0, 10)
+    const horizon = new Date(); horizon.setDate(horizon.getDate() + 30)
+    const horizonStr = horizon.toISOString().slice(0, 10)
+    const out: any[] = []
+    for (const g of customers) {
+      for (const b of g.bookings) {
+        for (const e of (b.emi || [])) {
+          if (e.status === 'paid') continue
+          if ((e.due_date || '') > horizonStr) continue
+          const overdue = (e.due_date || '') < todayStr
+          out.push({
+            ...e,
+            booking_no: b.booking_no,
+            customer_id: g.customer.id,
+            customer_name: g.customer.name,
+            customer_phone: g.customer.phone,
+            project: b.bp_projects?.name,
+            plot: b.bp_plots?.plot_no,
+            overdue,
+            daysDelta: Math.round((new Date(e.due_date).getTime() - new Date(todayStr).getTime()) / (1000 * 60 * 60 * 24)),
+            outstandingForRow: Math.max(0, Number(e.amount || 0) - Number(e.paid_amount || 0)),
+          })
+        }
+      }
+    }
+    out.sort((a, b) => (a.due_date || '').localeCompare(b.due_date || ''))
+    return out
+  }, [customers])
 
   // Rank progression
   const rankProgress = useMemo(() => {
@@ -805,53 +855,78 @@ export default function BrokerDashboard() {
                 )
               })()}
             </Section>
+
+            {/* Chase customers — the broker's collection inbox.  Lists EMIs that are overdue
+                or due in the next 30 days, with one-tap Call / WhatsApp actions so the
+                broker can nudge customers from the same place they see what's pending. */}
+            <Section
+              title={`Chase customers · ${upcomingEmis.length}`}
+              icon={<AlertCircle size={14}/>}
+              right={upcomingEmis.length > 0 ? <span className="text-[11px] text-gray-400">{upcomingEmis.filter(e => e.overdue).length} overdue · {upcomingEmis.filter(e => !e.overdue).length} due ≤30d</span> : undefined}
+            >
+              {upcomingEmis.length === 0 ? (
+                <p className="text-sm text-gray-500">No EMIs overdue or due in the next 30 days. Nice.</p>
+              ) : (
+                <div className="divide-y divide-gray-100 -mx-2">
+                  {upcomingEmis.slice(0, 8).map((e: any) => {
+                    const msg = encodeURIComponent(`Hi ${e.customer_name || ''}, this is a reminder for EMI #${e.seq} of ₹${Number(e.outstandingForRow).toLocaleString('en-IN')} on booking ${e.booking_no}${e.overdue ? ' which is overdue' : ` due on ${new Date(e.due_date).toLocaleDateString('en-IN')}`}. Please arrange the payment at the earliest. — Fanbe Group`)
+                    const cleanPhone = (e.customer_phone || '').replace(/[^0-9]/g, '')
+                    return (
+                      <div key={e.id} className="px-2 py-2.5 flex items-center gap-3">
+                        <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${e.overdue ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-700'}`}>
+                          <Calendar size={14}/>
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-semibold text-gray-900 truncate">{e.customer_name || '—'}</div>
+                          <div className="text-[11px] text-gray-500 truncate">
+                            <span className="font-mono text-blue-700">{e.booking_no}</span> · EMI #{e.seq}
+                            {e.project && ` · ${e.project}`}
+                            {e.plot && ` · Plot ${e.plot}`}
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className={`text-sm font-bold ${e.overdue ? 'text-rose-700' : 'text-gray-900'}`}>{formatINR(e.outstandingForRow)}</div>
+                          <div className="text-[10px] text-gray-500">
+                            {e.overdue
+                              ? `Overdue ${Math.abs(e.daysDelta)}d · due ${new Date(e.due_date).toLocaleDateString('en-IN')}`
+                              : e.daysDelta === 0 ? 'Due today' : `Due in ${e.daysDelta}d`}
+                          </div>
+                        </div>
+                        {cleanPhone && (
+                          <div className="flex gap-1 shrink-0">
+                            <a href={`tel:${cleanPhone}`} className="w-7 h-7 rounded-full bg-blue-50 hover:bg-blue-100 text-blue-700 flex items-center justify-center" title="Call customer">
+                              <Phone size={12}/>
+                            </a>
+                            <a href={`https://wa.me/${cleanPhone}?text=${msg}`} target="_blank" rel="noreferrer" className="w-7 h-7 rounded-full bg-emerald-50 hover:bg-emerald-100 text-emerald-700 flex items-center justify-center" title="WhatsApp reminder">
+                              <MessageCircle size={12}/>
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              {upcomingEmis.length > 8 && (
+                <button onClick={() => setTab('customers')} className="mt-2 text-xs text-blue-600 hover:underline">See all in Customers tab →</button>
+              )}
+            </Section>
           </div>
         )}
 
         {tab === 'customers' && (
           <Section title={`My Customers (${customers.length})`}>
             {customers.length === 0 ? <p className="text-sm text-gray-500">No customers attached to your bookings yet.</p> : (
-              <div className="divide-y divide-gray-100">
-                {customers.map((g: any) => {
-                  const open = expandedCust === g.customer.id
-                  return (
-                    <div key={g.customer.id}>
-                      <button onClick={() => setExpandedCust(open ? null : g.customer.id)} className="w-full text-left py-3 flex items-center justify-between hover:bg-gray-50 rounded-lg px-2">
-                        <div>
-                          <div className="font-mono text-[11px] text-gray-500">{g.customer.customer_code || '—'}</div>
-                          <div className="font-semibold text-sm">{g.customer.name}</div>
-                          <div className="text-xs text-gray-500">{g.customer.phone}{g.customer.father_or_husband_name ? ` · S/o ${g.customer.father_or_husband_name}` : ''}</div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-xs text-gray-500">Cost / Paid</div>
-                          <div className="text-sm font-semibold">{formatINR(g.totalCost)} <span className="text-green-700">· {formatINR(g.totalPaid)}</span></div>
-                          {g.overdueCount > 0 && <div className="text-[10px] text-red-700 font-semibold">{g.overdueCount} overdue</div>}
-                          {g.nextDue && g.overdueCount === 0 && <div className="text-[10px] text-amber-700">Next due {formatDate(g.nextDue.due_date)}</div>}
-                        </div>
-                        <ChevronRight size={14} className={`ml-2 text-gray-400 transition-transform ${open ? 'rotate-90' : ''}`}/>
-                      </button>
-                      {open && (
-                        <div className="px-2 pb-3 space-y-2">
-                          {g.bookings.map((b: any) => (
-                            <div key={b.id} className="bg-gray-50 rounded-lg p-3 text-xs">
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <div className="font-mono text-blue-700 font-semibold">{b.booking_no}</div>
-                                  <div>{b.scheme_name || b.bp_projects?.name || '—'} · Plot {b.bp_plots?.plot_no || '—'} ({b.bp_plots?.size_sqyd || '—'} sq)</div>
-                                  <div className="text-gray-500">Stage: <span className="capitalize">{b.stage?.replace(/_/g,' ')}</span> · Booking amt {formatINR(b.booking_amount)}</div>
-                                </div>
-                                <div className="text-right">
-                                  <div className="font-semibold text-green-700">{formatINR(b.total_amount || b.plot_total_price)}</div>
-                                  <div className="text-[10px] text-emerald-700">Comm {formatINR(b.commission_amount || 0)}</div>
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
+              <div className="space-y-2">
+                {customers.map((g: any) => (
+                  <CustomerCard
+                    key={g.customer.id}
+                    group={g}
+                    expanded={expandedCust === g.customer.id}
+                    onToggle={() => setExpandedCust(expandedCust === g.customer.id ? null : g.customer.id)}
+                    broker={broker}
+                  />
+                ))}
               </div>
             )}
           </Section>
@@ -1252,6 +1327,274 @@ function Section({ title, icon, right, children }: any) {
       </div>
       {children}
     </section>
+  )
+}
+
+// Rich per-customer detail card.  Used in the Customers tab so the broker can drill from
+// "5 customers" headline into the minute details: profile, every booking, every payment
+// receipt (with print), the EMI schedule (with print on paid rows), and outreach buttons.
+function CustomerCard({ group, expanded, onToggle, broker }: { group: any; expanded: boolean; onToggle: () => void; broker: any }) {
+  const g = group
+  const c = g.customer
+  const cleanPhone = (c?.phone || '').replace(/[^0-9]/g, '')
+  const collectionPct = g.totalCost > 0 ? Math.round((g.totalPaid / g.totalCost) * 100) : 0
+  // Pre-build a generic WhatsApp template the broker can fire off — overridable per row in
+  // the chase section, but the customer-level one says "hi, here's where you stand".
+  const generalMsg = encodeURIComponent(
+    `Hi ${c?.name || ''}, hope you're well.  Here's your latest account snapshot from Fanbe Group:\n` +
+    `• Bookings: ${g.bookings.length}\n` +
+    `• Total cost: ₹${Number(g.totalCost).toLocaleString('en-IN')}\n` +
+    `• Paid so far: ₹${Number(g.totalPaid).toLocaleString('en-IN')} (${collectionPct}%)\n` +
+    `• Outstanding: ₹${Number(g.outstanding).toLocaleString('en-IN')}\n` +
+    (g.overdueCount > 0 ? `• ${g.overdueCount} EMI${g.overdueCount === 1 ? '' : 's'} overdue — please clear at your earliest.\n` : '') +
+    `\nFor any questions feel free to reach out. — ${broker?.name || 'Your broker'}`
+  )
+
+  return (
+    <div className="border border-gray-100 rounded-xl overflow-hidden">
+      <button onClick={onToggle} className="w-full text-left px-3 py-3 flex items-center gap-3 hover:bg-gray-50">
+        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center text-sm font-bold shrink-0">
+          {(c?.name || '?').charAt(0).toUpperCase()}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="font-mono text-[11px] text-gray-500">{c?.customer_code || '—'}</div>
+          <div className="font-semibold text-sm text-gray-900 truncate">{c?.name || '—'}</div>
+          <div className="text-[11px] text-gray-500 truncate">
+            {c?.phone || '—'}{c?.father_or_husband_name ? ` · S/o ${c.father_or_husband_name}` : ''}
+            {g.bookings.length > 1 ? ` · ${g.bookings.length} bookings` : ''}
+          </div>
+        </div>
+        <div className="text-right shrink-0">
+          <div className="text-xs text-gray-500">Cost / Paid</div>
+          <div className="text-sm font-semibold text-gray-900">{formatINR(g.totalCost)} <span className="text-emerald-700">· {formatINR(g.totalPaid)}</span></div>
+          <div className="text-[10px]">
+            {g.overdueCount > 0 ? <span className="text-rose-700 font-semibold">{g.overdueCount} overdue</span>
+             : g.nextDue ? <span className="text-amber-700">Next {formatDate(g.nextDue.due_date)}</span>
+             : <span className="text-gray-400">{collectionPct}% collected</span>}
+          </div>
+        </div>
+        <ChevronRight size={14} className={`ml-1 text-gray-400 transition-transform ${expanded ? 'rotate-90' : ''}`}/>
+      </button>
+
+      {expanded && (
+        <div className="bg-gray-50/60 border-t border-gray-100">
+          {/* Customer profile + outreach */}
+          <div className="px-3 py-3 grid grid-cols-1 md:grid-cols-3 gap-2 text-[11px]">
+            <DetailField label="Phone"   value={c?.phone || '—'}/>
+            <DetailField label="Email"   value={c?.email || '—'}/>
+            <DetailField label="PAN"     value={c?.pan || '—'}/>
+            <DetailField label="DOB"     value={c?.dob ? formatDate(c.dob) : '—'}/>
+            <DetailField label="Father / Husband" value={c?.father_or_husband_name || '—'}/>
+            <DetailField label="Address" value={c?.address || '—'} wide/>
+          </div>
+
+          {cleanPhone && (
+            <div className="px-3 pb-3 flex flex-wrap gap-2">
+              <a href={`tel:${cleanPhone}`} className="inline-flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-full bg-blue-600 hover:bg-blue-700 text-white">
+                <Phone size={12}/>Call {c?.name?.split(' ')[0] || ''}
+              </a>
+              <a href={`https://wa.me/${cleanPhone}?text=${generalMsg}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white">
+                <MessageCircle size={12}/>WhatsApp statement
+              </a>
+            </div>
+          )}
+
+          {/* Per booking — full payment ledger + EMI schedule */}
+          <div className="px-3 pb-3 space-y-3">
+            {g.bookings.map((b: any) => (
+              <BookingDetail key={b.id} booking={b} customer={c} broker={broker}/>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DetailField({ label, value, wide }: { label: string; value: string; wide?: boolean }) {
+  return (
+    <div className={`bg-white rounded-md border border-gray-100 px-2.5 py-1.5 ${wide ? 'md:col-span-3' : ''}`}>
+      <div className="text-[9px] uppercase tracking-wide text-gray-400">{label}</div>
+      <div className="text-xs text-gray-800 truncate" title={value}>{value}</div>
+    </div>
+  )
+}
+
+// One booking row inside the customer card — shows plot info, money breakdown, payments
+// list (each printable), and the EMI schedule (each instalment printable if paid).
+function BookingDetail({ booking, customer, broker }: { booking: any; customer: any; broker: any }) {
+  const b = booking
+  const paidPct = (Number(b.total_amount || b.plot_total_price) || 0) > 0
+    ? Math.round((b.totalPaid / Number(b.total_amount || b.plot_total_price)) * 100)
+    : 0
+  // For the print helper we synthesize lightweight ctx objects (customer / booking / project
+  // / plot) the way printPaymentReceipt expects.  Each payment row reuses this ctx with
+  // its own payment record.
+  const ctx = {
+    customer,
+    booking: { booking_no: b.booking_no, application_date: b.application_date, total_amount: b.total_amount, plot_total_price: b.plot_total_price, booking_amount: b.booking_amount, broker },
+    project: b.bp_projects,
+    plot: b.bp_plots,
+  }
+  const sortedEmi = [...(b.emi || [])].sort((a, b) => (a.seq || 0) - (b.seq || 0))
+  const paidPayments = (b.payments || []).filter((p: any) => p.verification_status === 'verified')
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-100 p-3 space-y-2.5">
+      {/* Booking header */}
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <div className="font-mono text-sm text-blue-700 font-semibold">{b.booking_no}</div>
+          <div className="text-xs text-gray-700">
+            {b.bp_projects?.name || b.scheme_name || '—'}
+            {b.bp_plots?.plot_no && ` · Plot ${b.bp_plots.plot_no}`}
+            {b.bp_plots?.size_sqyd && ` · ${b.bp_plots.size_sqyd} sq.yd`}
+            {b.bp_plots?.sector && ` · Sector ${b.bp_plots.sector}`}
+          </div>
+          {(b.bp_projects?.location || b.application_date) && (
+            <div className="text-[10px] text-gray-500 mt-0.5 inline-flex items-center gap-2">
+              {b.bp_projects?.location && <span className="inline-flex items-center gap-0.5"><MapPin size={9}/>{b.bp_projects.location}</span>}
+              {b.application_date && <span className="inline-flex items-center gap-0.5"><Calendar size={9}/>Applied {formatDate(b.application_date)}</span>}
+            </div>
+          )}
+        </div>
+        <span className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full ${
+          b.stage === 'booking_done' ? 'bg-emerald-50 text-emerald-700'
+          : b.stage === 'cancelled' ? 'bg-rose-50 text-rose-700'
+          : 'bg-amber-50 text-amber-700'
+        }`}>{(b.stage || '').replace(/_/g, ' ')}</span>
+      </div>
+
+      {/* Money breakdown */}
+      <div className="grid grid-cols-4 gap-1.5 text-[10px]">
+        <MoneyTile label="Plot cost"     value={formatINR(b.total_amount || b.plot_total_price || 0)}/>
+        <MoneyTile label="Paid"          value={formatINR(b.totalPaid || 0)} tone="emerald"/>
+        <MoneyTile label="Outstanding"   value={formatINR(b.outstanding || 0)} tone={b.outstanding > 0 ? 'amber' : 'gray'}/>
+        <MoneyTile label="My commission" value={formatINR(b.commission_amount || 0)} tone="blue"/>
+      </div>
+      <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+        <div className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400" style={{ width: `${Math.min(100, paidPct)}%` }}/>
+      </div>
+      <div className="text-[10px] text-gray-500 text-right">{paidPct}% paid</div>
+
+      {/* Payments ledger */}
+      {paidPayments.length > 0 && (
+        <div>
+          <div className="text-[11px] font-semibold text-gray-700 mb-1.5 inline-flex items-center gap-1"><Receipt size={11}/>Payments ({paidPayments.length})</div>
+          <div className="overflow-x-auto -mx-3">
+            <table className="w-full text-[11px] min-w-[500px]">
+              <thead>
+                <tr className="text-left text-gray-500 border-b border-gray-100">
+                  <th className="px-3 py-1.5 font-medium">Receipt</th>
+                  <th className="py-1.5 font-medium">Type</th>
+                  <th className="py-1.5 font-medium">Date</th>
+                  <th className="py-1.5 font-medium">Mode</th>
+                  <th className="py-1.5 font-medium">UTR / Ref</th>
+                  <th className="py-1.5 font-medium text-right">Amount</th>
+                  <th className="px-3 py-1.5 font-medium text-right">Receipt</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paidPayments.map((p: any) => (
+                  <tr key={p.id} className="border-b border-gray-50 last:border-0">
+                    <td className="px-3 py-1.5 font-mono text-gray-700">{p.receipt_no || '—'}</td>
+                    <td className="py-1.5 capitalize">{(p.payment_type || '').replace(/_/g, ' ')}{p.instalment_no ? ` #${p.instalment_no}` : ''}</td>
+                    <td className="py-1.5 text-gray-600">{formatDate(p.payment_date)}</td>
+                    <td className="py-1.5 uppercase text-gray-600">{p.payment_mode || '—'}</td>
+                    <td className="py-1.5 font-mono text-[10px] text-gray-600 truncate max-w-[110px]" title={p.utr_ref || ''}>{p.utr_ref || '—'}</td>
+                    <td className="py-1.5 text-right font-semibold text-emerald-700">{formatINR(p.amount)}</td>
+                    <td className="px-3 py-1.5 text-right">
+                      <button
+                        onClick={() => printPaymentReceipt(p, ctx)}
+                        className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 hover:bg-blue-100"
+                        title="Print receipt"
+                      >
+                        <Printer size={9}/>Print
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* EMI schedule */}
+      {sortedEmi.length > 0 && (
+        <div>
+          <div className="text-[11px] font-semibold text-gray-700 mb-1.5 inline-flex items-center gap-1"><CalendarDays size={11}/>EMI schedule ({sortedEmi.length})</div>
+          <div className="overflow-x-auto -mx-3">
+            <table className="w-full text-[11px] min-w-[480px]">
+              <thead>
+                <tr className="text-left text-gray-500 border-b border-gray-100">
+                  <th className="px-3 py-1.5 font-medium">#</th>
+                  <th className="py-1.5 font-medium">Due date</th>
+                  <th className="py-1.5 font-medium text-right">Amount</th>
+                  <th className="py-1.5 font-medium text-right">Paid</th>
+                  <th className="py-1.5 font-medium">Status</th>
+                  <th className="px-3 py-1.5 font-medium text-right">Receipt</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedEmi.map((i: any) => {
+                  const todayStr = new Date().toISOString().slice(0, 10)
+                  const isOverdue = i.status !== 'paid' && (i.due_date || '') < todayStr
+                  // Find the receipt for this instalment (payment with instalment_no === seq)
+                  const receipt = (b.payments || []).find((p: any) => Number(p.instalment_no) === Number(i.seq) && p.verification_status === 'verified')
+                  return (
+                    <tr key={i.id} className="border-b border-gray-50 last:border-0">
+                      <td className="px-3 py-1.5 font-mono text-gray-700">{i.seq}</td>
+                      <td className="py-1.5 text-gray-600">{formatDate(i.due_date)}</td>
+                      <td className="py-1.5 text-right text-gray-700">{formatINR(i.amount)}</td>
+                      <td className="py-1.5 text-right text-emerald-700">{formatINR(i.paid_amount || 0)}</td>
+                      <td className="py-1.5">
+                        <span className={`text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded ${
+                          i.status === 'paid' ? 'bg-emerald-50 text-emerald-700'
+                          : isOverdue ? 'bg-rose-50 text-rose-700'
+                          : i.status === 'partial' ? 'bg-amber-50 text-amber-700'
+                          : 'bg-gray-100 text-gray-600'
+                        }`}>
+                          {isOverdue && i.status !== 'paid' ? 'overdue' : (i.status || 'pending')}
+                        </span>
+                      </td>
+                      <td className="px-3 py-1.5 text-right">
+                        {receipt ? (
+                          <button
+                            onClick={() => printPaymentReceipt(receipt, ctx)}
+                            className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 hover:bg-blue-100"
+                            title="Print EMI receipt"
+                          >
+                            <Printer size={9}/>Print
+                          </button>
+                        ) : (
+                          <span className="text-[10px] text-gray-300">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MoneyTile({ label, value, tone = 'gray' }: { label: string; value: string; tone?: 'gray' | 'emerald' | 'amber' | 'blue' }) {
+  const tones = {
+    gray:    'text-gray-900',
+    emerald: 'text-emerald-700',
+    amber:   'text-amber-700',
+    blue:    'text-blue-700',
+  } as const
+  return (
+    <div className="bg-gray-50 rounded-md px-2 py-1.5">
+      <div className="text-[9px] uppercase tracking-wide text-gray-400">{label}</div>
+      <div className={`text-xs font-bold tabular-nums ${tones[tone]}`}>{value}</div>
+    </div>
   )
 }
 
