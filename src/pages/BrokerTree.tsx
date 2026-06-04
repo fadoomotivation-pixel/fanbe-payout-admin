@@ -530,12 +530,8 @@ function NodeCard({ broker, isRoot, isMatched, hasChildren, isCollapsed, directC
 
       {/* contact + earnings */}
       <div className="mt-2 pt-2 border-t border-gray-100 text-[11px] text-gray-500 space-y-1">
-        {broker.phone && (
-          <div className="flex items-center justify-center gap-2">
-            <a href={`tel:${broker.phone}`} onClick={e => e.stopPropagation()} className="inline-flex items-center gap-0.5 hover:text-blue-700"><Phone size={10}/>{broker.phone}</a>
-            <a href={`https://wa.me/${String(broker.phone).replace(/[^\d]/g,'')}`} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="inline-flex items-center gap-0.5 text-emerald-700 hover:underline"><MessageCircle size={10}/>WA</a>
-          </div>
-        )}
+        {/* Phone / WA links removed: their tap targets overlapped the card body and
+            admin reported "tap to load opens a blank page" when fingers hit tel:. */}
         {(ownEarned > 0 || teamEarned > 0) && (
           <div className="flex items-center justify-center gap-2 tabular-nums">
             {ownEarned > 0 && <span className="font-semibold text-emerald-700">{formatINR(ownEarned)}</span>}

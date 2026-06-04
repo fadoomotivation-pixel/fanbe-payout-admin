@@ -1186,8 +1186,10 @@ function TeamOrgNode({ broker, isRoot, initialChildren, subTeams, expandedTeam, 
         </>
       )}
 
-      {/* Show "no sub-team" hint when expanded but the lazy fetch returned zero. */}
-      {!isRoot && isExpanded && Array.isArray(childrenLoaded) && childrenLoaded.length === 0 && (
+      {/* Show "no sub-team" hint when expanded but the lazy fetch returned zero.  Was
+          referencing the old `childrenLoaded` name and silently never rendering, which is
+          why admin tapping a leaf broker saw no feedback and reported "blank page". */}
+      {!isRoot && isExpanded && Array.isArray(subBrokersLoaded) && subBrokersLoaded.length === 0 && customerList.length === 0 && (
         <div className="mt-3 text-[10px] text-gray-400 italic">no sub-team</div>
       )}
     </div>
@@ -1254,12 +1256,10 @@ function TeamNodeCard({ broker, isRoot, isExpanded, earned, customers = [], load
       )}
 
       <div className="mt-2 pt-2 border-t border-gray-100 text-[11px] text-gray-500 space-y-1">
-        {broker.phone && (
-          <div className="flex items-center justify-center gap-2">
-            <a href={`tel:${broker.phone}`} onClick={e => e.stopPropagation()} className="inline-flex items-center gap-0.5 hover:text-blue-700"><Phone size={10}/>{broker.phone}</a>
-            <a href={`https://wa.me/${String(broker.phone).replace(/[^\d]/g,'')}`} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="inline-flex items-center gap-0.5 text-emerald-700 hover:underline"><MessageCircle size={10}/>WA</a>
-          </div>
-        )}
+        {/* Phone / WA links removed from the compact team card on purpose: their tap
+            targets sit on top of the card body and admin reported "tap to load opens a
+            blank page" when their finger landed on the tel: link instead of the card.
+            Contact details still available on the broker dashboard. */}
         {!isRoot && earned > 0 && (
           <div className="text-center font-semibold text-emerald-700 tabular-nums">{formatINR(earned)}<span className="text-[9px] text-gray-400 font-normal ml-1">earned</span></div>
         )}
