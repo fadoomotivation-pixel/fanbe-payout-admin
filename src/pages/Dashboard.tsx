@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { formatINR, formatDate } from '@/lib/utils'
-import { Users, Briefcase, CalendarClock, ShieldAlert, ArrowRight, Building2, Map, FileText, TrendingUp, TrendingDown, Award } from 'lucide-react'
+import { Users, Briefcase, CalendarClock, ShieldAlert, ArrowRight, Building2, Map, FileText, TrendingUp, TrendingDown, Award, Plus, UserPlus, CreditCard, Banknote, Activity } from 'lucide-react'
 
 // One Dashboard.  The old Dashboard.jsx that lived alongside this file was being picked
 // up by Vite's resolver and rendered instead — every monetary tile read ₹0 because its
@@ -27,7 +27,12 @@ export default function Dashboard() {
   const [topBroker, setTopBroker] = useState<{ id: string; name: string; code: string; rank: string; earned: number } | null>(null)
 
   useEffect(() => {
+    // Wrapped in try/finally so a single bad query (missing table, RLS error, network
+    // hiccup) doesn't strand the dashboard in skeleton state forever.  Real failures
+    // surface as a console error; loading always resolves so the user sees whatever
+    // tiles DID succeed.
     async function load() {
+      try {
       const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0,0,0,0)
       const monthStartISO = monthStart.toISOString()
       const monthStartDay = monthStartISO.slice(0, 10)
@@ -155,7 +160,15 @@ export default function Dashboard() {
       setPlotSegments(segments)
       setDailyGrowth(Object.values(growthMap))
       setTopBroker(topBrokerOut)
-      setLoading(false)
+      } catch (e: any) {
+        // Don't surface to the user — the empty/zero tiles speak for themselves and the
+        // skeleton is the real bug we're protecting against.  Logged so we can debug if
+        // anything stops resolving.
+        // eslint-disable-next-line no-console
+        console.error('Dashboard load failed:', e?.message || e)
+      } finally {
+        setLoading(false)
+      }
     }
     load()
   }, [])
@@ -165,9 +178,18 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-bold text-gray-900">Dashboard</h1>
-        <p className="text-sm text-gray-500">Operational health at a glance</p>
+      <div className="flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">Dashboard</h1>
+          <p className="text-sm text-gray-500">Operational health at a glance · {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' })}</p>
+        </div>
+        {/* Quick actions row — the things admin reaches for most often, one tap each. */}
+        <div className="flex flex-wrap gap-2">
+          <Link to="/bookings"    className="text-xs font-medium px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white inline-flex items-center gap-1"><Plus size={12}/>New booking</Link>
+          <Link to="/brokers"     className="text-xs font-medium px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white inline-flex items-center gap-1"><UserPlus size={12}/>Add broker</Link>
+          <Link to="/payments"    className="text-xs font-medium px-3 py-1.5 rounded-lg bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 inline-flex items-center gap-1"><CreditCard size={12}/>Record payment</Link>
+          <Link to="/payouts"     className="text-xs font-medium px-3 py-1.5 rounded-lg bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 inline-flex items-center gap-1"><Banknote size={12}/>Pay brokers</Link>
+        </div>
       </div>
 
       {/* Follow-ups strip — coloured when there's work waiting */}
@@ -331,42 +353,74 @@ export default function Dashboard() {
           ]}/>
       </div>
 
-      {/* Recent activity */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
-          <div className="flex items-center justify-between mb-3"><h3 className="text-sm font-semibold text-gray-900">Recent Bookings</h3><Link to="/customer-pipeline" className="text-xs text-blue-600 hover:underline">view all</Link></div>
-          {!recentBookings.length ? <p className="text-sm text-gray-400">No bookings yet.</p> : (
+      {/* Recent activity — unified feed of the last bookings + payments interleaved by time
+          so admin sees the live pulse of the business in one column instead of bouncing
+          between two parallel tables. */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-gray-900 inline-flex items-center gap-1.5">
+            <Activity size={14}/>Recent activity
+          </h3>
+          <Link to="/customer-pipeline" className="text-xs text-blue-600 hover:underline">view all bookings</Link>
+        </div>
+        {(() => {
+          type Evt = { at: string; kind: 'booking' | 'payment'; href: string; title: any; sub: string; amount: number; amountColor: string }
+          const evts: Evt[] = []
+          for (const b of recentBookings) {
+            evts.push({
+              at: b.application_date || b.created_at || '',
+              kind: 'booking',
+              href: `/customer-pipeline?search=${encodeURIComponent(b.booking_no || '')}`,
+              title: <span className="font-mono text-xs text-blue-700">{b.booking_no}</span>,
+              sub: `${b.bp_customers?.name || '—'} · ${b.stage}`,
+              amount: Number(b.total_amount || 0),
+              amountColor: 'text-gray-900',
+            })
+          }
+          for (const p of recentPayments) {
+            evts.push({
+              at: p.payment_date || p.created_at || '',
+              kind: 'payment',
+              href: `/customer-pipeline?search=${encodeURIComponent(p.bp_bookings?.booking_no || '')}`,
+              title: <span className="font-mono text-xs text-gray-700">{p.receipt_no || '—'}</span>,
+              sub: `${p.bp_bookings?.booking_no || '—'} · ${p.bp_bookings?.bp_customers?.name || '—'}`,
+              amount: Number(p.amount || 0),
+              amountColor: 'text-green-700',
+            })
+          }
+          evts.sort((a, b) => (b.at || '').localeCompare(a.at || ''))
+          const shown = evts.slice(0, 10)
+          if (shown.length === 0) return <p className="text-sm text-gray-400">No activity yet — once bookings and payments come in they'll show here.</p>
+          return (
             <div className="divide-y divide-gray-50">
-              {recentBookings.map(b => (
-                <Link key={b.id} to={`/customer-pipeline?search=${encodeURIComponent(b.booking_no || '')}`} className="py-2 flex items-center justify-between text-sm hover:bg-gray-50 -mx-2 px-2 rounded">
-                  <div>
-                    <div className="font-mono text-xs text-blue-700">{b.booking_no}</div>
-                    <div className="text-xs text-gray-500">{b.bp_customers?.name || '—'} · {b.stage}</div>
+              {shown.map((e, i) => (
+                <Link key={i} to={e.href} className="py-2 flex items-center gap-3 hover:bg-gray-50 -mx-2 px-2 rounded">
+                  <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                    e.kind === 'booking' ? 'bg-blue-50 text-blue-700' : 'bg-green-50 text-green-700'
+                  }`}>
+                    {e.kind === 'booking' ? <FileText size={13}/> : <CreditCard size={13}/>}
                   </div>
-                  <div className="font-semibold inline-flex items-center gap-1">{formatINR(b.total_amount)}<ArrowRight size={11} className="text-gray-300"/></div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] uppercase tracking-wide font-semibold text-gray-500">{e.kind}</span>
+                      <span className="text-gray-300">·</span>
+                      {e.title}
+                    </div>
+                    <div className="text-xs text-gray-500 truncate">{e.sub}</div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <div className={`font-semibold ${e.amountColor} text-sm inline-flex items-center gap-1`}>
+                      {formatINR(e.amount)}<ArrowRight size={11} className="text-gray-300"/>
+                    </div>
+                    <div className="text-[10px] text-gray-400">{formatDate(e.at)}</div>
+                  </div>
                 </Link>
               ))}
             </div>
-          )}
-        </div>
-
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
-          <div className="flex items-center justify-between mb-3"><h3 className="text-sm font-semibold text-gray-900">Recent Payments</h3><Link to="/payments" className="text-xs text-blue-600 hover:underline">view all</Link></div>
-          {!recentPayments.length ? <p className="text-sm text-gray-400">No payments yet.</p> : (
-            <div className="divide-y divide-gray-50">
-              {recentPayments.map(p => (
-                <Link key={p.id} to={`/customer-pipeline?search=${encodeURIComponent(p.bp_bookings?.booking_no || '')}`} className="py-2 flex items-center justify-between text-sm hover:bg-gray-50 -mx-2 px-2 rounded">
-                  <div>
-                    <div className="font-mono text-xs text-gray-700">{p.receipt_no || '—'}</div>
-                    <div className="text-xs text-gray-500">{p.bp_bookings?.booking_no} · {p.bp_bookings?.bp_customers?.name || '—'}</div>
-                  </div>
-                  <div className="font-semibold text-green-700 inline-flex items-center gap-1">{formatINR(p.amount)}<ArrowRight size={11} className="text-gray-300"/></div>
-                </Link>
-              ))}
-            </div>
-          )}
-        </div>
+          )
+        })()}
       </div>
+
     </div>
   )
 }
