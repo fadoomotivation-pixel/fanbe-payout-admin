@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { formatINR, formatDate } from '@/lib/utils'
-import { Users, Briefcase, CalendarClock, ShieldAlert, ArrowRight, Building2, Map, FileText, TrendingUp } from 'lucide-react'
+import { Users, Briefcase, CalendarClock, ShieldAlert, ArrowRight, Building2, Map, FileText, TrendingUp, TrendingDown, Award } from 'lucide-react'
 
 // One Dashboard.  The old Dashboard.jsx that lived alongside this file was being picked
 // up by Vite's resolver and rendered instead — every monetary tile read ₹0 because its
@@ -10,7 +10,7 @@ import { Users, Briefcase, CalendarClock, ShieldAlert, ArrowRight, Building2, Ma
 // verification_status).  Removed the .jsx and folded its useful visuals (plot donut,
 // monthly tables, growth chart) into this file with the correct queries.
 
-type Tile = { label: string; value: string; sub?: string; color?: string; href?: string }
+type Tile = { label: string; value: string; sub?: string; color?: string; href?: string; delta?: number }
 
 export default function Dashboard() {
   const [loading, setLoading] = useState(true)
@@ -24,6 +24,7 @@ export default function Dashboard() {
   const [newCustomers, setNewCustomers] = useState<any[]>([])
   const [plotSegments, setPlotSegments] = useState<{ label: string; value: number; color: string }[]>([])
   const [dailyGrowth, setDailyGrowth] = useState<{ date: string; label: string; amount: number }[]>([])
+  const [topBroker, setTopBroker] = useState<{ id: string; name: string; code: string; rank: string; earned: number } | null>(null)
 
   useEffect(() => {
     async function load() {
@@ -31,6 +32,8 @@ export default function Dashboard() {
       const monthStartISO = monthStart.toISOString()
       const monthStartDay = monthStartISO.slice(0, 10)
       const today = new Date().toISOString().slice(0, 10)
+      const prevMonthStart = new Date(monthStart); prevMonthStart.setMonth(prevMonthStart.getMonth() - 1)
+      const prevMonthStartDay = prevMonthStart.toISOString().slice(0, 10)
 
       const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6); sevenDaysAgo.setHours(0,0,0,0)
       const sevenDayStart = sevenDaysAgo.toISOString().slice(0, 10)
@@ -48,7 +51,7 @@ export default function Dashboard() {
         supabase.from('bp_projects').select('id', { count: 'exact', head: true }),
         supabase.from('bp_plots').select('id', { count: 'exact', head: true }),
         supabase.from('bp_payments').select('amount,verification_status,payment_date').eq('verification_status', 'verified'),
-        supabase.from('payout_distributions').select('beneficiary_broker_id, net_payout'),
+        supabase.from('payout_distributions').select('beneficiary_broker_id, net_payout, created_at'),
         supabase.from('bp_payout_transactions').select('net_amount, amount, status, paid_date'),
         supabase.from('withdrawal_requests').select('id, status', { count: 'exact' }).in('status', ['pending', 'approved']),
         supabase.from('bp_bookings').select('id, booking_no, application_date, total_amount, stage, customer_id, bp_customers(name)').order('application_date', { ascending: false }).limit(5),
@@ -64,6 +67,11 @@ export default function Dashboard() {
 
       const totalRevenue = (payments.data || []).reduce((s, p) => s + Number(p.amount || 0), 0)
       const revenueThisMonth = (payments.data || []).filter(p => (p.payment_date || '') >= monthStartDay).reduce((s, p) => s + Number(p.amount || 0), 0)
+      const revenuePrevMonth = (payments.data || [])
+        .filter(p => (p.payment_date || '') >= prevMonthStartDay && (p.payment_date || '') < monthStartDay)
+        .reduce((s, p) => s + Number(p.amount || 0), 0)
+      const revenueDelta = revenuePrevMonth === 0 ? (revenueThisMonth > 0 ? 100 : 0)
+        : Math.round(((revenueThisMonth - revenuePrevMonth) / Math.abs(revenuePrevMonth)) * 100)
 
       const earned = (distributions.data || []).reduce((s: number, d: any) => s + Number(d.net_payout || 0), 0)
       const paidThisMonth = (payoutTxns.data || [])
@@ -75,6 +83,22 @@ export default function Dashboard() {
 
       const emiOverdueCount = (emiOverdueQ.data || []).length
       const emiOverdueAmt   = (emiOverdueQ.data || []).reduce((s: number, r: any) => s + Number(r.amount || 0), 0)
+
+      // ── Top broker this month — quick "who's carrying the team" snapshot.  Sums
+      // payout_distributions per broker.id within the current month, then resolves the
+      // winner against the newBrokers fetch first, falling back to a quick lookup so we
+      // can show their name + code + rank even if they aren't in the new-this-month list.
+      const monthlyByBroker = new Map<string, number>()
+      for (const d of (distributions.data || []) as any[]) {
+        if (!d.beneficiary_broker_id || !d.created_at || d.created_at < monthStartISO) continue
+        monthlyByBroker.set(d.beneficiary_broker_id, (monthlyByBroker.get(d.beneficiary_broker_id) || 0) + Number(d.net_payout || 0))
+      }
+      let topBrokerOut: { id: string; name: string; code: string; rank: string; earned: number } | null = null
+      if (monthlyByBroker.size > 0) {
+        const [topId, topAmt] = Array.from(monthlyByBroker.entries()).sort((a, b) => b[1] - a[1])[0]
+        const { data: bInfo } = await supabase.from('brokers').select('id, name, broker_id, rank').eq('id', topId).maybeSingle()
+        if (bInfo) topBrokerOut = { id: bInfo.id, name: bInfo.name, code: bInfo.broker_id, rank: bInfo.rank, earned: topAmt }
+      }
 
       // Plot status breakdown — for the donut.  Categorise by status with friendly colours.
       const statusCounts: Record<string, number> = {}
@@ -104,7 +128,7 @@ export default function Dashboard() {
         { label: 'Active Brokers',     value: String(brokerCount.count || 0), color: 'text-blue-700',     href: '/brokers' },
         { label: 'Total Customers',    value: String(customerCount.count || 0), color: 'text-gray-900',   href: '/customer-pipeline' },
         { label: 'Confirmed Bookings', value: String(bookingDoneCount.count || 0), color: 'text-emerald-700', href: '/customer-pipeline?tab=settled' },
-        { label: 'Revenue (verified)', value: formatINR(totalRevenue), sub: `This month: ${formatINR(revenueThisMonth)}`, color: 'text-green-700', href: '/payments' },
+        { label: 'Revenue (verified)', value: formatINR(totalRevenue), sub: `This month: ${formatINR(revenueThisMonth)}`, color: 'text-green-700', href: '/payments', delta: revenueDelta },
       ])
 
       // Inventory row — projects + plot status, with deep links
@@ -130,6 +154,7 @@ export default function Dashboard() {
       setNewCustomers(newCustomersRes.data || [])
       setPlotSegments(segments)
       setDailyGrowth(Object.values(growthMap))
+      setTopBroker(topBrokerOut)
       setLoading(false)
     }
     load()
@@ -156,11 +181,24 @@ export default function Dashboard() {
       {/* Headline tiles */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {(loading ? skeleton(4) : tiles).map((t, i) => {
+          const hasDelta = typeof t.delta === 'number'
+          const up = (t.delta || 0) >= 0
           const card = (
-            <div key={i} className="bg-white rounded-xl border border-gray-100 p-5 shadow-sm hover:border-gray-300 transition-colors">
-              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">{t.label}</p>
+            <div key={i} className="bg-white rounded-xl border border-gray-100 p-5 shadow-sm hover:border-gray-300 transition-colors h-full">
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">{t.label}</p>
+                {hasDelta && (
+                  <span className={`inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full shrink-0 ${
+                    up ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
+                  }`}>
+                    {up ? <TrendingUp size={10}/> : <TrendingDown size={10}/>}
+                    {up ? '+' : ''}{t.delta}%
+                  </span>
+                )}
+              </div>
               <p className={`text-2xl font-bold mt-1 ${t.color || 'text-gray-900'}`}>{t.value}</p>
               {t.sub && <p className="text-[11px] text-gray-400 mt-1">{t.sub}</p>}
+              {hasDelta && <p className="text-[10px] text-gray-400 mt-0.5">vs last month</p>}
             </div>
           )
           return t.href ? <Link key={i} to={t.href}>{card}</Link> : card
@@ -186,20 +224,54 @@ export default function Dashboard() {
         })}
       </div>
 
-      {/* Broker Payables card */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
-        <div className="flex items-start justify-between mb-3">
-          <div>
-            <h3 className="text-sm font-semibold text-gray-900">Broker Payables</h3>
-            <p className="text-xs text-gray-500">Distributed commission vs. what you've paid out — same numbers brokers see on their dashboards.</p>
+      {/* Broker Payables card + Top broker this month — payables on the left holds 4 small
+          payable tiles, the right column shows who's carrying the team right now so admin
+          has a name+face to associate with the "Earned (Distributed)" number. */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 lg:col-span-2">
+          <div className="flex items-start justify-between mb-3">
+            <div>
+              <h3 className="text-sm font-semibold text-gray-900">Broker Payables</h3>
+              <p className="text-xs text-gray-500">Distributed commission vs. what you've paid out — same numbers brokers see on their dashboards.</p>
+            </div>
+            <Link to="/payouts" className="text-xs text-blue-600 hover:underline">Open Payouts →</Link>
           </div>
-          <Link to="/payouts" className="text-xs text-blue-600 hover:underline">Open Payouts →</Link>
+          <div className="grid grid-cols-2 gap-3">
+            <PayTile label="Earned (Distributed)" value={formatINR(payables.accrued)}        sub={`${payables.brokerCount} brokers`}        color="text-blue-700"/>
+            <PayTile label="Paid (This Month)"    value={formatINR(payables.paidThisMonth)}  sub="cycle batches paid this month"            color="text-green-700"/>
+            <PayTile label="Pending Payout"       value={formatINR(payables.pending)}        sub="earned − paid this month"                 color={payables.pending > 0 ? 'text-orange-700' : 'text-gray-500'}/>
+            <PayTile label="Open Withdrawals"     value={String(payables.openWdCount)}        sub={<Link to="/withdrawals" className="text-blue-600 hover:underline">awaiting approval →</Link>} color="text-gray-900"/>
+          </div>
         </div>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <PayTile label="Earned (Distributed)" value={formatINR(payables.accrued)}        sub={`${payables.brokerCount} brokers`}        color="text-blue-700"/>
-          <PayTile label="Paid (This Month)"    value={formatINR(payables.paidThisMonth)}  sub="cycle batches paid this month"            color="text-green-700"/>
-          <PayTile label="Pending Payout"       value={formatINR(payables.pending)}        sub="earned − paid this month"                 color={payables.pending > 0 ? 'text-orange-700' : 'text-gray-500'}/>
-          <PayTile label="Open Withdrawals"     value={String(payables.openWdCount)}        sub={<Link to="/withdrawals" className="text-blue-600 hover:underline">awaiting approval →</Link>} color="text-gray-900"/>
+
+        <div className="bg-gradient-to-br from-amber-50 to-orange-50 rounded-xl border border-amber-200 shadow-sm p-5 flex flex-col">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-amber-900 inline-flex items-center gap-1.5">
+              <Award size={14}/>Top broker · this month
+            </h3>
+            <Link to="/analytics" className="text-[11px] text-amber-800 hover:underline">all →</Link>
+          </div>
+          {topBroker ? (
+            <Link to={`/brokers/${topBroker.id}`} className="flex flex-col gap-1.5 hover:opacity-90 transition-opacity">
+              <div className="flex items-center gap-2">
+                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 text-white flex items-center justify-center text-base font-bold">
+                  {topBroker.name.charAt(0).toUpperCase()}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-semibold text-gray-900 truncate">{topBroker.name}</div>
+                  <div className="text-[11px] text-amber-800 font-mono truncate">[{topBroker.code}] · {topBroker.rank || '—'}</div>
+                </div>
+              </div>
+              <div className="mt-2 pt-2 border-t border-amber-200">
+                <div className="text-[10px] uppercase tracking-wide text-amber-700 font-medium">Earned this month</div>
+                <div className="text-xl font-bold text-amber-900">{formatINR(topBroker.earned)}</div>
+              </div>
+            </Link>
+          ) : (
+            <div className="text-sm text-gray-500 flex-1 flex items-center justify-center text-center">
+              No commissions distributed yet this month.
+            </div>
+          )}
         </div>
       </div>
 
