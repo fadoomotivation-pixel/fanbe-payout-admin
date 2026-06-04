@@ -434,7 +434,7 @@ function CustomerLeaf({ customer, sponsorBrokerId, onPromote, isPromoting }: {
   return (
     <div className="w-[180px] sm:w-[200px] rounded-2xl border-2 border-dashed border-amber-200 bg-amber-50/40 px-3 py-3 shadow-sm hover:border-amber-300 hover:bg-amber-50 transition flex flex-col items-center">
       <Link
-        to={`/customer-history?customer=${customer.id}`}
+        to={`/customer-pipeline?customer=${customer.id}`}
         onClick={e => e.stopPropagation()}
         className="flex flex-col items-center w-full"
       >

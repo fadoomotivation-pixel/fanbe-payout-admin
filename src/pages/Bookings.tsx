@@ -737,7 +737,7 @@ export default function Bookings() {
         const name = r.bp_customers?.name || '—'
         const sub = `${r.bp_customers?.customer_code ? r.bp_customers.customer_code + ' · ' : ''}${r.bp_customers?.phone || ''}`
         return cid ? (
-          <Link to={`/customer-history?customer=${cid}`} className="block group">
+          <Link to={`/customer-pipeline?customer=${cid}`} className="block group">
             <div className="font-medium text-gray-900 group-hover:text-blue-700 group-hover:underline">{name}</div>
             <div className="text-xs text-gray-400">{sub}</div>
           </Link>
