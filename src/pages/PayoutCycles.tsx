@@ -193,10 +193,16 @@ export default function PayoutCycles() {
 
       const distIds = eligibleDistributions.map(p => p.id)
       if (distIds.length > 0) {
+        // `.is('cycle_id', null)` is the race guard — between the SELECT that built distIds
+        // and this UPDATE, another admin could close a parallel cycle and stamp some of the
+        // same rows.  Adding the IS NULL predicate makes Postgres skip already-stamped rows
+        // instead of overwriting their cycle_id (which would silently move them between
+        // cycles and could double-pay them).
         const { error: updErr } = await supabase
           .from('payout_distributions')
           .update({ cycle_id: cycle.id })
           .in('id', distIds)
+          .is('cycle_id', null)
         if (updErr) throw updErr
       }
 

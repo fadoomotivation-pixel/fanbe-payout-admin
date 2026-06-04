@@ -257,7 +257,10 @@ export default function BrokerDashboard() {
     // "Paid out" + "pending" both pool the two payout channels — self-initiated withdrawals
     // AND admin-initiated cycle-batch transactions — so available balance never double-counts.
     const wdPaid     = withdrawals.filter((w: any) => w.status === 'paid' || w.status === 'closed').reduce((s: number, w: any) => s + Number(w.net_amount || w.amount || 0), 0)
-    const wdPending  = withdrawals.filter((w: any) => w.status === 'pending' || w.status === 'approved').reduce((s: number, w: any) => s + Number(w.amount || 0), 0)
+    // Net (not gross) for pending too — see payoutEngine.loadBrokerWallets for the
+    // full reasoning.  Mixing gross/net across statuses makes Available swing by the TDS
+    // portion as a withdrawal flips between pending and paid.
+    const wdPending  = withdrawals.filter((w: any) => w.status === 'pending' || w.status === 'approved').reduce((s: number, w: any) => s + Number(w.net_amount || w.amount || 0), 0)
     const cyPaid     = (cycleTxns || []).filter((t: any) => t.status === 'paid').reduce((s: number, t: any) => s + Number(t.net_amount || t.amount || 0), 0)
     const cyPending  = (cycleTxns || []).filter((t: any) => t.status === 'pending' || t.status === 'approved').reduce((s: number, t: any) => s + Number(t.net_amount || t.amount || 0), 0)
     const paidOut    = wdPaid + cyPaid
@@ -493,6 +496,10 @@ export default function BrokerDashboard() {
     if (amount <= 0) { toast.error('Enter an amount'); return }
     if (amount > stats.availableBalance) { toast.error('Amount exceeds available balance'); return }
     if (!broker?.bank_name || !broker?.account_no) { toast.error('Bank details missing — ask admin to update your profile'); return }
+    // KYC gate — the soft warning at the top of the portal isn't enough.  Until admin
+    // approves KYC the broker cannot submit a withdrawal request.  Matches the matching
+    // gate on the admin side (Withdrawals.tsx Mark Paid).
+    if (broker.kyc_status !== 'approved') { toast.error(`KYC ${broker.kyc_status || 'pending'} — payouts are held until admin approves your KYC.`); return }
     setWdSubmitting(true)
     const { error } = await supabase.from('withdrawal_requests').insert({
       broker_id: broker.id,

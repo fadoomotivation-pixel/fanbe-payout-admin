@@ -544,7 +544,11 @@ export async function loadBrokerWallets(): Promise<Record<string, BrokerWallet>>
     if (!w.broker_id) continue
     const w_ = ensure(w.broker_id)
     if (w.status === 'paid' || w.status === 'closed')    w_.paid    += Number(w.net_amount || w.amount || 0)
-    if (w.status === 'pending' || w.status === 'approved') w_.pending += Number(w.amount || 0)
+    // Use net_amount for pending too — paid uses net, cycle txns use net (line below); using
+    // gross here would temporarily inflate "pending" by the TDS portion and make Available
+    // drop too far while the withdrawal sits in approval limbo, then jump up by the TDS when
+    // it flips to paid (because the same row now counts as net instead of gross).
+    if (w.status === 'pending' || w.status === 'approved') w_.pending += Number(w.net_amount || w.amount || 0)
   }
   for (const t of (txns || []) as any[]) {
     if (!t.broker_id) continue

@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/Input.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import { distributePaymentCommission } from '@/lib/payoutEngine'
+import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
 import { printPaymentReceipt } from '@/lib/printTemplates'
 import { CheckCircle, Calendar, Wallet, AlertTriangle, Plus, X, IndianRupee, ArrowUpRight, ArrowDownRight } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -147,6 +148,14 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
     const advance = remaining // unallocated after all instalments are settled
     const closes = allocations.filter(a => a.willClose).length
 
+    // UTR uniqueness — bank UTRs are globally unique, so duplicates here mean a typo or
+    // re-entry.  Bail before insert so the trigger doesn't fire on a duplicate.
+    const trimmedUtr = (utr || '').trim()
+    if (trimmedUtr) {
+      const conflict = await findUtrConflict(trimmedUtr)
+      if (conflict) { toast.error(utrConflictMessage(conflict)); return }
+    }
+
     // Insert ONE payment row for the full incoming amount
     const { data: payment, error: pErr } = await supabase.from('bp_payments').insert({
       booking_id: booking.id,
@@ -158,7 +167,7 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
       verified_at: new Date().toISOString(),
       receipt_no,
       instalment_no: firstSeq || null,
-      utr_ref: utr || null,
+      utr_ref: trimmedUtr || null,
       drawn_on_bank: drawnOn || (mode === 'cash' ? 'Cash' : null),
       branch: branch || null,
       sponsor_name: booking.upline_broker_code || '',
