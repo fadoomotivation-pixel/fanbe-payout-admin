@@ -49,11 +49,15 @@ function Guard({children}:{children:any}){
   return children
 }
 
-// Reads app_settings.payout_config.maintenance_mode on mount.  When true, every admin
-// route renders the Maintenance page instead of the actual content so no one can touch
-// money mid-deploy / mid-migration.  Toggled from /payout-terms.  The current admin can
-// still get past it by visiting /payout-terms directly (the toggle is needed to turn it
-// back off) — that's by design.
+// Reads app_settings.payout_config.maintenance_mode.  When true, every admin route
+// renders the Maintenance page instead of the actual content so no one can touch money
+// mid-deploy / mid-migration.  Toggled from /payout-terms.  The current admin can still
+// get past it by visiting /payout-terms directly (the toggle is needed to turn it back
+// off) — that's by design.
+//
+// The flag is re-fetched on every route change (loc.pathname dep) so flipping it on in
+// another tab takes effect the next time admin navigates here.  The PayoutTerms toggle
+// also forces a window.location.reload() to fire it instantly in the current tab.
 function MaintenanceGate({ children, allowPath }: { children: any; allowPath?: string }) {
   const loc = useLocation()
   const [state, setState] = useState<{ on: boolean; message?: string } | null>(null)
@@ -65,7 +69,7 @@ function MaintenanceGate({ children, allowPath }: { children: any; allowPath?: s
       setState({ on: !!v.maintenance_mode, message: v.maintenance_message })
     })
     return () => { active = false }
-  }, [])
+  }, [loc.pathname])
   if (state === null) return children // don't flash maintenance before the fetch resolves
   if (state.on && loc.pathname !== (allowPath || '/payout-terms')) return <Maintenance message={state.message}/>
   return children
