@@ -63,6 +63,10 @@ export default function PayoutTerms() {
     setMaintenanceSaving(false);
     if (upErr) { setError(upErr.message); return; }
     setMaintenanceOn(next);
+    // MaintenanceGate in App.tsx reads the flag once on mount, so without a reload the
+    // admin shell would keep running until the next full page load.  Force a reload so
+    // the kill-switch takes effect immediately — that's the whole point of a kill-switch.
+    setTimeout(() => window.location.reload(), 250);
   }
 
   async function save() {
