@@ -4,12 +4,15 @@ import { supabase } from '@/lib/supabase'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { Table } from '@/components/ui/Table.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
-import { ArrowLeft, Users, TrendingUp, Wallet, Award } from 'lucide-react'
+import { ArrowLeft, Users, TrendingUp, Wallet, Award, AlertCircle } from 'lucide-react'
 
 export default function BrokerProfile() {
   const { id } = useParams()
 
-  const { data: broker } = useQuery({
+  // Switched to maybeSingle() so missing-broker reads as data=null (instead of an
+  // exception that left the page stuck in "Loading broker…" forever).  The component
+  // then renders a real 404 panel below when isFetched && !broker.
+  const { data: broker, isFetched, isLoading } = useQuery({
     queryKey: ['broker', id],
     enabled: !!id,
     queryFn: async () => {
@@ -17,7 +20,7 @@ export default function BrokerProfile() {
         .from('brokers')
         .select('*, sponsor:sponsor_id(id,name,broker_id,rank)')
         .eq('id', id!)
-        .single()
+        .maybeSingle()
       if (error) throw error
       return data
     },
@@ -87,7 +90,26 @@ export default function BrokerProfile() {
     .reduce((s: number, d: any) => s + Number(d.net_payout || 0), 0)
   const totalVolume = confirmed.reduce((s: number, b: any) => s + Number(b.total_amount || 0), 0)
 
-  if (!broker) return <div className="p-8 text-center text-gray-400 text-sm">Loading broker…</div>
+  if (isLoading || !isFetched) return <div className="p-8 text-center text-gray-400 text-sm">Loading broker…</div>
+  if (!broker) return (
+    // The broker id in the URL doesn't match any row.  Could be a stale bookmark, a
+    // deleted broker, or a typo.  Don't strand the admin on a blank page.
+    <div className="min-h-[60vh] flex items-center justify-center p-6">
+      <div className="max-w-md w-full text-center bg-white rounded-2xl border border-gray-100 shadow-sm p-8">
+        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-amber-50 text-amber-600 mb-4">
+          <AlertCircle size={28}/>
+        </div>
+        <div className="text-5xl font-bold text-gray-900">404</div>
+        <h1 className="text-lg font-semibold text-gray-900 mt-2">Broker not found</h1>
+        <p className="text-sm text-gray-500 mt-2">
+          No broker exists with id <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs font-mono">{id}</code>. They may have been deleted, or the link is wrong.
+        </p>
+        <Link to="/brokers" className="mt-5 inline-flex items-center gap-1.5 text-sm font-medium px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white">
+          <ArrowLeft size={14}/>Back to Brokers
+        </Link>
+      </div>
+    </div>
+  )
 
   return (
     <div className="space-y-6">

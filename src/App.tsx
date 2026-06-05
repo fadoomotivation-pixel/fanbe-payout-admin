@@ -22,6 +22,8 @@ import Withdrawals from '@/pages/Withdrawals'
 import Tickets from '@/pages/Tickets'
 import News from '@/pages/News'
 import NotFound from '@/pages/NotFound'
+import Maintenance from '@/pages/Maintenance'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import Roles from '@/pages/Roles'
 import BankAccounts from '@/pages/BankAccounts'
 import CommissionRanks from '@/pages/CommissionRanks'
@@ -47,13 +49,36 @@ function Guard({children}:{children:any}){
   return children
 }
 
+// Reads app_settings.payout_config.maintenance_mode on mount.  When true, every admin
+// route renders the Maintenance page instead of the actual content so no one can touch
+// money mid-deploy / mid-migration.  Toggled from /payout-terms.  The current admin can
+// still get past it by visiting /payout-terms directly (the toggle is needed to turn it
+// back off) — that's by design.
+function MaintenanceGate({ children, allowPath }: { children: any; allowPath?: string }) {
+  const loc = useLocation()
+  const [state, setState] = useState<{ on: boolean; message?: string } | null>(null)
+  useEffect(() => {
+    let active = true
+    supabase.from('app_settings').select('value').eq('key', 'payout_config').maybeSingle().then(({ data }) => {
+      if (!active) return
+      const v = (data?.value || {}) as any
+      setState({ on: !!v.maintenance_mode, message: v.maintenance_message })
+    })
+    return () => { active = false }
+  }, [])
+  if (state === null) return children // don't flash maintenance before the fetch resolves
+  if (state.on && loc.pathname !== (allowPath || '/payout-terms')) return <Maintenance message={state.message}/>
+  return children
+}
+
 export default function App(){
   return(
+    <ErrorBoundary>
     <Routes>
       <Route path="/login" element={<Login/>}/>
       <Route path="/broker/login" element={<BrokerLogin/>}/>
       <Route path="/broker/dashboard" element={<BrokerDashboard/>}/>
-      <Route element={<Guard><AppLayout/></Guard>}>
+      <Route element={<Guard><MaintenanceGate><AppLayout/></MaintenanceGate></Guard>}>
         <Route path="/" element={<Dashboard/>}/>
         <Route path="/analytics" element={<Analytics/>}/>
         <Route path="/inquiries" element={<Inquiries/>}/>
@@ -100,5 +125,6 @@ export default function App(){
           via a child route. */}
       <Route path="*" element={<NotFound/>}/>
     </Routes>
+    </ErrorBoundary>
   )
 }

@@ -60,7 +60,7 @@ export default function CustomerPipeline() {
   // This is the data that used to live on the deleted /customer-history page — it gives
   // admin a "total picture" of the customer (cost, paid, outstanding, overdue) so they
   // don't have to mentally sum across multiple booking rows.
-  const { data: customerFocus } = useQuery({
+  const { data: customerFocus, isFetched: customerFocusFetched } = useQuery({
     queryKey: ['cp_customer_focus', customerFocusId],
     enabled: !!customerFocusId,
     queryFn: async () => {
@@ -486,6 +486,23 @@ export default function CustomerPipeline() {
       {/* Customer focus header — present when ?customer= is in the URL.  Replaces the
           deleted /customer-history page: shows the customer profile + aggregate totals
           across ALL their bookings, then narrows the list below to just this customer. */}
+      {customerFocusId && customerFocusFetched && !customerFocus?.customer && (
+        // The ?customer=X in the URL doesn't match any bp_customers row.  Don't pretend
+        // the filter is active — show a clear 404 with a way to clear the filter.
+        <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-start gap-3">
+          <span className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-rose-100 text-rose-700 shrink-0 font-bold text-sm">404</span>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-semibold text-rose-900">Customer not found</div>
+            <div className="text-xs text-rose-800 mt-0.5">
+              No customer exists with id <code className="font-mono bg-white px-1 py-0.5 rounded">{customerFocusId}</code>. They may have been deleted, or the link is wrong.
+            </div>
+          </div>
+          <button onClick={clearCustomerFocus} className="text-xs font-medium px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white shrink-0">
+            Clear filter
+          </button>
+        </div>
+      )}
+
       {customerFocusId && customerFocus?.customer && (
         <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-5 shadow-sm">
           <div className="flex items-start gap-4 flex-wrap">
