@@ -21,6 +21,7 @@ import Expenses from '@/pages/Expenses'
 import Withdrawals from '@/pages/Withdrawals'
 import Tickets from '@/pages/Tickets'
 import News from '@/pages/News'
+import NotFound from '@/pages/NotFound'
 import Roles from '@/pages/Roles'
 import BankAccounts from '@/pages/BankAccounts'
 import CommissionRanks from '@/pages/CommissionRanks'
@@ -90,8 +91,14 @@ export default function App(){
         <Route path="/reports" element={<Reports/>}/>
         {/* Settings page was a 20-line stub that just showed the logged-in user's email. */}
         <Route path="/settings" element={<Navigate to="/" replace/>}/>
+        {/* In-layout 404 — when an admin types a wrong path the sidebar + topbar stay so
+            they can keep working.  The outer catch-all below covers auth-only routes. */}
+        <Route path="*" element={<NotFound/>}/>
       </Route>
-      <Route path="*" element={<Navigate to="/" replace/>}/>
+      {/* Catch-all outside the layout for /login, /broker/login, /broker/dashboard typos
+          where we don't want the admin chrome.  Real 404 inside the layout is added below
+          via a child route. */}
+      <Route path="*" element={<NotFound/>}/>
     </Routes>
   )
 }
