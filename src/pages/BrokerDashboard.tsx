@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
+import { BRAND } from '@/lib/branding'
 import {
   LogOut, Users, Wallet, Award, TrendingUp, ArrowUpRight, AlertCircle,
   ChevronRight, EyeOff, BarChart3, Coins, Receipt, CalendarDays, Send,
@@ -478,7 +479,7 @@ export default function BrokerDashboard() {
     <body>
     <div class="toolbar"><button class="pr" onclick="window.print()">🖨 Print statement</button><button class="cl" onclick="window.close()">Close</button></div>
     <div class="sp" style="height:46px"></div>
-    <h1>FANBE GROUP — Broker Statement</h1>
+    <h1>${BRAND.company.toUpperCase()} — Broker Statement</h1>
     <div class="muted">${broker?.name} · [${broker?.broker_id}] · ${broker?.rank || ''} · KYC ${broker?.kyc_status || 'pending'} · Generated ${new Date().toLocaleString('en-IN')}</div>
     <div class="kpis">
       <div class="kpi"><span class="muted">Earned (distributed)</span><b>${fmt(stats.totalEarned)}</b></div>
@@ -869,7 +870,7 @@ export default function BrokerDashboard() {
               ) : (
                 <div className="divide-y divide-gray-100 -mx-2">
                   {upcomingEmis.slice(0, 8).map((e: any) => {
-                    const msg = encodeURIComponent(`Hi ${e.customer_name || ''}, this is a reminder for EMI #${e.seq} of ₹${Number(e.outstandingForRow).toLocaleString('en-IN')} on booking ${e.booking_no}${e.overdue ? ' which is overdue' : ` due on ${new Date(e.due_date).toLocaleDateString('en-IN')}`}. Please arrange the payment at the earliest. — Fanbe Group`)
+                    const msg = encodeURIComponent(`Hi ${e.customer_name || ''}, this is a reminder for EMI #${e.seq} of ₹${Number(e.outstandingForRow).toLocaleString('en-IN')} on booking ${e.booking_no}${e.overdue ? ' which is overdue' : ` due on ${new Date(e.due_date).toLocaleDateString('en-IN')}`}. Please arrange the payment at the earliest. — ${BRAND.company}`)
                     const cleanPhone = (e.customer_phone || '').replace(/[^0-9]/g, '')
                     return (
                       <div key={e.id} className="px-2 py-2.5 flex items-center gap-3">
@@ -1341,7 +1342,7 @@ function CustomerCard({ group, expanded, onToggle, broker }: { group: any; expan
   // Pre-build a generic WhatsApp template the broker can fire off — overridable per row in
   // the chase section, but the customer-level one says "hi, here's where you stand".
   const generalMsg = encodeURIComponent(
-    `Hi ${c?.name || ''}, hope you're well.  Here's your latest account snapshot from Fanbe Group:\n` +
+    `Hi ${c?.name || ''}, hope you're well.  Here's your latest account snapshot from ${BRAND.company}:\n` +
     `• Bookings: ${g.bookings.length}\n` +
     `• Total cost: ₹${Number(g.totalCost).toLocaleString('en-IN')}\n` +
     `• Paid so far: ₹${Number(g.totalPaid).toLocaleString('en-IN')} (${collectionPct}%)\n` +

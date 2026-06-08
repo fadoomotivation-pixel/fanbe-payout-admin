@@ -1,5 +1,5 @@
 -- ─────────────────────────────────────────────────────────────────────────────
--- Fanbe Group — Payout Engine v2 Migration
+-- Your Company — Payout Engine v2 Migration
 -- Adds correct rank qualification fields (sq yards + sub-rank counts)
 -- and broker rank stats tracking table.
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -25,7 +25,7 @@ alter table commission_ranks
 -- for backward compatibility but they are no longer used by payoutEngine v2.
 
 -- ============================================================
--- 2. Seed the 15 official ranks from Fanbe Group Business Plan
+-- 2. Seed the 15 official ranks from Your Company Business Plan
 -- ============================================================
 
 insert into commission_ranks (

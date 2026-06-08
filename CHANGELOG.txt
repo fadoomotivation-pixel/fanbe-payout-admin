@@ -1,0 +1,18 @@
+CHANGELOG
+
+v1.0.0 — Initial release
+- Admin dashboard with operational health overview, MoM deltas, top-broker card
+- Analytics: hero KPIs, 6-month trends, sales funnel, top brokers, top projects
+- Sales pipeline: inquiries + customer pipeline with customer-focus view
+- Brokers: master list, profile, downline tree, login management + password reset
+- KYC: admin review + broker upload portal (Aadhaar / PAN / Photo / Bank / Address)
+- Differential payout engine with rank-reversal protection (highest-so-far floor)
+- Payout cycles with race-safe cycle_id stamping
+- Withdrawals: 4-step pipeline (Pending -> Approved -> Money sent -> Locked)
+  with KYC gating, global UTR uniqueness checks, and audit lock
+- Programs: Achievers Club + Team Rewards
+- 15-rank commission ladder
+- Broker portal: earnings, customers (with payments + EMI), team, withdrawals,
+  WhatsApp / Call quick actions, KYC docs upload
+- Printable receipts, application forms, broker statements
+- Reports: editable transactions + CSV export

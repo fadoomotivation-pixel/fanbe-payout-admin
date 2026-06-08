@@ -1,6 +1,6 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- FANBE GROUP — WORKFLOW ALIGNMENT WITH PHYSICAL APPLICATION FORM & RECEIPT
--- Mirrors: आवासीय भू-खण्ड योजना आवेदन-पत्र  +  FANBE DEVELOPERS receipt #6301
+-- YOUR COMPANY — WORKFLOW ALIGNMENT WITH PHYSICAL APPLICATION FORM & RECEIPT
+-- Mirrors: आवासीय भू-खण्ड योजना आवेदन-पत्र  +  YOUR COMPANY receipt #6301
 -- Adds: nominee, father/husband, DOB on customers/bookings;
 --       receipt detail fields on payments (drawn-on bank, branch, instalment no);
 --       registry_members seed;  emi schedules + instalments seed;
@@ -87,7 +87,7 @@ update bookings set scheme_name='Royal Residency Awasiya Yojana',application_dat
 update bookings set scheme_name='Green Valley Awasiya Yojana',application_date=booked_at,booking_time='11:00', customer_bank_name='HDFC Bank',  upline_broker_code='FNB-008', manager_signature_by='Nidhi Sharma' where id='f1000000-0000-0000-0000-000000000009';
 update bookings set scheme_name='Royal Residency Awasiya Yojana',application_date=booked_at,booking_time='16:30',customer_bank_name='ICICI Bank',upline_broker_code='FNB-005', manager_signature_by='Vikram Rao'   where id='f1000000-0000-0000-0000-000000000010';
 
--- ─── 5. PAYMENT RECEIPT-DETAIL ENRICHMENT (matches FANBE receipt #6301) ──
+-- ─── 5. PAYMENT RECEIPT-DETAIL ENRICHMENT (matches YOUR COMPANY receipt #6301) ──
 update payments set receipt_no='6301', drawn_on_bank='Cash Adjustment', branch='BIB/LBD', instalment_no=1, rupees_in_words='Ninety Thousand only',     sponsor_name='Alok / Sanjeet', is_cash_adjustment=true,  subject_to_realisation=false where id='g1000000-0000-0000-0000-000000000001';
 update payments set receipt_no='6302', drawn_on_bank='HDFC Bank',       branch='Sector 12 Gurugram', instalment_no=2, rupees_in_words='Ninety Thousand only', sponsor_name='Alok / Sanjeet', subject_to_realisation=true  where id='g1000000-0000-0000-0000-000000000002';
 update payments set receipt_no='6303', drawn_on_bank='HDFC Bank',       branch='Sector 12 Gurugram', instalment_no=3, rupees_in_words='Ninety Thousand only', sponsor_name='Alok / Sanjeet', subject_to_realisation=true  where id='g1000000-0000-0000-0000-000000000003';
@@ -191,11 +191,11 @@ select
   (select id from roles where name = v.role_name),
   true
 from (values
-  ('u1000000-0000-0000-0000-000000000001'::uuid,'Nidhi Sharma','nidhi@fanbegroup.com',  'super_admin'),
-  ('u1000000-0000-0000-0000-000000000002'::uuid,'Vikram Rao',  'vikram@fanbegroup.com', 'admin'),
-  ('u1000000-0000-0000-0000-000000000003'::uuid,'Alok Pandey', 'alok@fanbegroup.com',   'office_incharge'),
-  ('u1000000-0000-0000-0000-000000000004'::uuid,'Sanjeet Kumar','sanjeet@fanbegroup.com','finance_officer'),
-  ('u1000000-0000-0000-0000-000000000005'::uuid,'Pooja Saxena','pooja@fanbegroup.com',  'accountant')
+  ('u1000000-0000-0000-0000-000000000001'::uuid,'Nidhi Sharma','nidhi@example.com',  'super_admin'),
+  ('u1000000-0000-0000-0000-000000000002'::uuid,'Vikram Rao',  'vikram@example.com', 'admin'),
+  ('u1000000-0000-0000-0000-000000000003'::uuid,'Alok Pandey', 'alok@example.com',   'office_incharge'),
+  ('u1000000-0000-0000-0000-000000000004'::uuid,'Sanjeet Kumar','sanjeet@example.com','finance_officer'),
+  ('u1000000-0000-0000-0000-000000000005'::uuid,'Pooja Saxena','pooja@example.com',  'accountant')
 ) as v(id,name,email,role_name)
 on conflict (id) do nothing;
 

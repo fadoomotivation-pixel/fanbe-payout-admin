@@ -31,7 +31,7 @@ function digitsOnly(s: string) { return (s || '').replace(/\D/g, '') }
 function syntheticEmailFromPhone(phone: string) {
   const digits = digitsOnly(phone)
   if (!digits) return ''
-  return `b${digits}@fanbegroup.com`
+  return `b${digits}@example.com`
 }
 
 export default function Brokers() {

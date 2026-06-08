@@ -1,5 +1,5 @@
 -- ─────────────────────────────────────────────────────────────────────────────
--- Fanbe Group — Brochure Alignment (May 2026)
+-- Your Company — Brochure Alignment (May 2026)
 -- Aligns commission_ranks, achievers_club_config, payout_terms with the
 -- official Business Plan brochure (15 ranks · achievers club · team rewards
 -- terms).

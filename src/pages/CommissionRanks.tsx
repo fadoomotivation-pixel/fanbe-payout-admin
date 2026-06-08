@@ -102,7 +102,7 @@ export default function CommissionRanks() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Commission Ranks</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            15-rank ladder per Fanbe Group Business Plan · 5% → 12% commission slabs
+            15-rank ladder · configure commission % per rank slab
           </p>
         </div>
       </div>

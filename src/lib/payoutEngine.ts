@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Fanbe Group — Payout Distribution Engine
+// Payout Distribution Engine
 // Business Plan: differential rank-based commission system
 //
-// KEY RULES (from Fanbe Group Business Plan):
+// KEY RULES:
 //   1. Payout is on DIFFERENTIAL basis:
 //      Upline earns = their rank % − immediate downline's rank %
 //   2. Equal rank or superseded (upline rank ≤ downline rank) → 0 payout
@@ -177,7 +177,7 @@ export async function getUplineChain(
 /**
  * computeDifferentialDistribution
  *
- * Implements Fanbe Group's differential commission rule:
+ * Implements differential commission rule:
  *   - The direct broker (level 0) earns their own rank % on the deposited amount.
  *   - Each upline broker earns only the DIFFERENCE between their rank % and the
  *     rank % of the person immediately below them in the chain.

@@ -1,4 +1,5 @@
 import { formatINR } from './utils'
+import { BRAND } from './branding'
 
 function toWordsINR(n: number): string {
   if (!n || isNaN(n)) return ''
@@ -47,9 +48,9 @@ export function printPaymentReceipt(p: any, ctx: { customer?: any; booking?: any
       <div class="copy-tag">${copyLabel}</div>
       <div class="head">
         <div class="brand">
-          FANBE DEVELOPERS
-          <small>2nd Floor, Balaji Tower, Plot No.35, Nathu Colony, Opp. Agarwal Dharamshala, Ballabgarh, Faridabad</small>
-          <small>www.fanbeindia.com · fanbeindia@gmail.com</small>
+          ${BRAND.company.toUpperCase()}
+          <small>${BRAND.address}</small>
+          <small>${BRAND.website}${BRAND.email ? ' · ' + BRAND.email : ''}${BRAND.phone ? ' · ' + BRAND.phone : ''}</small>
         </div>
         <div class="meta">
           <div>Receipt No</div>
@@ -82,7 +83,7 @@ export function printPaymentReceipt(p: any, ctx: { customer?: any; booking?: any
 
       <div class="sig">
         <div class="box">Customer Signature</div>
-        <div class="box">For FANBE DEVELOPERS<br/>Authorised Signatory</div>
+        <div class="box">For ${BRAND.company.toUpperCase()}<br/>Authorised Signatory</div>
       </div>
     </section>
   `
@@ -232,8 +233,8 @@ export function printApplicationForm(b: any, ctx: { customer?: any; project?: an
   </div>
   <div class="toolbar-spacer" style="height:48px"></div>
   <div class="header">
-    <div class="logo">FG</div>
-    <div><div class="title">FANBE GROUP</div><div style="font-size:10px;color:#64748b">Success Starts Here</div></div>
+    <div class="logo">${BRAND.company.split(/\s+/).map(w => w.charAt(0)).join('').slice(0, 2).toUpperCase()}</div>
+    <div><div class="title">${BRAND.company.toUpperCase()}</div><div style="font-size:10px;color:#64748b">${BRAND.applicationTagline}</div></div>
   </div>
   <div class="sub"><h2>आवासीय भू-खण्ड योजना</h2><br/><h3>आवेदन-पत्र</h3></div>
   <div class="row"><div class="field"><b>आवासीय योजना का नाम</b><span>${b.scheme_name || pj.name || pj.project_name || ''}</span></div><div class="field" style="max-width:200px"><b>दिनांक</b><span>${fmtDate(b.application_date || b.created_at)}</span></div></div>
@@ -261,7 +262,7 @@ export function printApplicationForm(b: any, ctx: { customer?: any; project?: an
     <li>मैं किस्तों का भुगतान नकद/चेक से ही करुंगा तथा इसके बदले में रसीदें प्राप्त करूँगा।</li>
     <li>मैंने समझ लिया है कि अगर मैं प्लॉट का आवंटन कम्पनी द्वारा निर्धारित समय पर नहीं करता हूँ, तो मेरे द्वारा जमा सम्पूर्ण राशि केवल कम्पनी के किसी दूसरे उपलब्ध प्लॉट में ही हस्तांतरित करा सकता है।</li>
   </ol></div>
-  <p class="accept">मैंने <b>FANBE GROUP</b> के सभी नियम व शर्तें पढ़ व समझ ली है तथा ये मुझे स्वीकार है! मैं अपने पूर्ण विवेक से इस योजना का सदस्य बन रहा/रही हूँ!</p>
+  <p class="accept">मैंने <b>${BRAND.company.toUpperCase()}</b> के सभी नियम व शर्तें पढ़ व समझ ली है तथा ये मुझे स्वीकार है! मैं अपने पूर्ण विवेक से इस योजना का सदस्य बन रहा/रही हूँ!</p>
 
   <div class="sigrow"><div class="sigbox">हस्ताक्षर</div><div class="sigbox">हस्ताक्षर परिचयकर्ता</div><div class="sigbox">हस्ताक्षर मैनेजर<br/>${b.manager_signature_by || ''}</div></div>
   <script>window.onload=()=>setTimeout(()=>window.print(),200)</script>

@@ -96,7 +96,7 @@ export default function AddBroker() {
       }
 
       // Create dummy email for Supabase Auth
-      const authEmail = form.email || `broker_${form.mobile}@internal.fanbegroup.com`
+      const authEmail = form.email || `broker_${form.mobile}@internal.example.com`
 
       // Create auth user via service role (Edge Function)
       // For now create broker record directly — portal_access granted after auth creation
@@ -167,7 +167,7 @@ export default function AddBroker() {
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Login Credentials</p>
             <div className="flex justify-between text-sm">
               <span className="text-slate-500">Portal URL</span>
-              <span className="font-medium text-teal-700">broker.fanbegroup.com</span>
+              <span className="font-medium text-teal-700">broker.yourcompany.com</span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-slate-500">Mobile</span>

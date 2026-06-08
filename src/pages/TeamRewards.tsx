@@ -43,7 +43,7 @@ interface BrokerRewardStatus {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const UNIT_SQ_YARDS = 50; // 1 unit = 50 sq yards (Fanbe Business Plan)
+const UNIT_SQ_YARDS = 50; // 1 unit = 50 sq yards (1 unit = 50 sq yards by default; configurable)
 const MAX_TEAM_PCT  = 33; // max 33% from one team sub-branch counts
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

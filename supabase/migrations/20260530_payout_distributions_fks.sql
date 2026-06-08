@@ -1,5 +1,5 @@
 -- BUG FIX: BrokerDashboard showed "Earned (distributed) ₹0" even though payout_distributions
--- had 20 rows totalling ₹22,872.48 for Fanbe Admin (FNB-05000).
+-- had 20 rows totalling ₹22,872.48 for Sunrise Admin (FNB-05000).
 --
 -- Root cause: payout_distributions had NO foreign keys to bp_bookings / bp_payments / brokers.
 -- The dashboard's PostgREST query
