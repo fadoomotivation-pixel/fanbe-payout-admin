@@ -152,6 +152,7 @@ export default function CustomerPipeline() {
           id, booking_no, stage, application_date, total_amount, plot_total_price,
           token_amount, booking_amount, full_payment_amount,
           expected_booking_amount, commission_amount, commission_rate,
+          commission_mode, traditional_commission_pct, traditional_commission_per_sqyd, traditional_pay_upline,
           broker_id, customer_id, plot_id, project_id, closed_at,
           bp_customers(id, customer_code, name, phone),
           bp_plots(plot_no, size_sqyd, sector, block),
@@ -647,12 +648,20 @@ export default function CustomerPipeline() {
                   <Link to={`/customer-pipeline?customer=${r.customer_id}`} className="text-[17px] font-semibold text-gray-900 hover:text-blue-700 truncate block">
                     {cust?.name || '—'}
                   </Link>
-                  {/* Subline 1: identity (booking_no · plot · project) */}
-                  <div className="text-[13px] text-gray-500 mt-0.5 truncate">
+                  {/* Subline 1: identity (booking_no · plot · project · sale mode badge) */}
+                  <div className="text-[13px] text-gray-500 mt-0.5 truncate flex items-center gap-1.5 flex-wrap">
                     <span className="font-mono">{r.booking_no}</span>
-                    {r.bp_plots?.plot_no && <> · Plot {r.bp_plots.plot_no}</>}
-                    {r.bp_plots?.size_sqyd && <> · {r.bp_plots.size_sqyd} sqyd</>}
-                    {(r.bp_projects?.name || r.scheme_name) && <> · {r.bp_projects?.name || r.scheme_name}</>}
+                    {r.bp_plots?.plot_no && <span>· Plot {r.bp_plots.plot_no}</span>}
+                    {r.bp_plots?.size_sqyd && <span>· {r.bp_plots.size_sqyd} sqyd</span>}
+                    {(r.bp_projects?.name || r.scheme_name) && <span>· {r.bp_projects?.name || r.scheme_name}</span>}
+                    {/* Sale-mode badge — admin can spot Traditional bookings without expanding. */}
+                    {r.commission_mode === 'traditional' && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-800 bg-amber-100 border border-amber-200 rounded-full px-1.5 py-0.5" title="Sold the traditional way — custom commission, no MLM upline cascade">
+                        TRADITIONAL
+                        {r.traditional_commission_pct != null && <span className="font-mono opacity-80">· {r.traditional_commission_pct}%</span>}
+                        {r.traditional_commission_per_sqyd != null && <span className="font-mono opacity-80">· ₹{r.traditional_commission_per_sqyd}/sqyd</span>}
+                      </span>
+                    )}
                   </div>
                   {/* Subline 2: broker (explicit "BROKER" pill) · application date · stage */}
                   <div className="text-[12px] text-gray-400 mt-1 flex items-center gap-2 flex-wrap">
