@@ -768,7 +768,21 @@ export default function Bookings() {
         <input type="checkbox" checked={selectedIds.has(r.id)} onChange={() => toggleSelect(r.id)} className="rounded border-gray-300"/>
       ),
     },
-    { header: 'Booking No', render: (r: any) => <span className="font-mono text-xs font-semibold text-blue-700">{r.booking_no}</span> },
+    { header: 'Booking No', render: (r: any) => (
+      <div className="leading-tight">
+        <span className="font-mono text-xs font-semibold text-blue-700">{r.booking_no}</span>
+        {/* Sale-mode badge — admin can scan the list and spot Traditional sales without
+            opening each row.  Default MLM is not badged because every booking is MLM
+            unless explicitly switched. */}
+        {r.commission_mode === 'traditional' && (
+          <div className="mt-0.5 inline-flex items-center gap-1 text-[9px] font-semibold text-amber-800 bg-amber-100 border border-amber-200 rounded-full px-1.5 py-0.5" title="Sold the traditional way — custom commission, no MLM upline cascade unless opted in">
+            TRADITIONAL
+            {r.traditional_commission_pct != null && <span className="font-mono opacity-80">· {r.traditional_commission_pct}%</span>}
+            {r.traditional_commission_per_sqyd != null && <span className="font-mono opacity-80">· ₹{r.traditional_commission_per_sqyd}/sqyd</span>}
+          </div>
+        )}
+      </div>
+    )},
     {
       header: 'Customer',
       render: (r: any) => {

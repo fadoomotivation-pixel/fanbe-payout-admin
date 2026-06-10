@@ -32,7 +32,7 @@ export default function BrokerProfile() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('bp_bookings')
-        .select('id, booking_no, total_amount, commission_amount, commission_rate, stage, application_date, bp_customers(name)')
+        .select('id, booking_no, total_amount, commission_amount, commission_rate, commission_mode, stage, application_date, bp_customers(name)')
         .eq('broker_id', id!)
         .order('application_date', { ascending: false })
       if (error) throw error
@@ -152,7 +152,14 @@ export default function BrokerProfile() {
         <div className="px-4 py-3 border-b border-gray-100 text-sm font-semibold text-gray-700">Bookings ({bookings.length})</div>
         <Table
           columns={[
-            { header: 'Booking No', render: (r: any) => <span className="font-mono text-xs font-semibold text-blue-700">{r.booking_no}</span> },
+            { header: 'Booking No', render: (r: any) => (
+              <div className="leading-tight">
+                <span className="font-mono text-xs font-semibold text-blue-700">{r.booking_no}</span>
+                {r.commission_mode === 'traditional' && (
+                  <div className="mt-0.5 inline-flex text-[9px] font-semibold text-amber-800 bg-amber-100 border border-amber-200 rounded-full px-1.5 py-0.5">TRADITIONAL</div>
+                )}
+              </div>
+            )},
             { header: 'Customer',   render: (r: any) => r.bp_customers?.name || '—' },
             { header: 'Stage',      render: (r: any) => <Badge label={r.stage} className="bg-gray-100 text-gray-700"/> },
             { header: 'Total Value',render: (r: any) => formatINR(r.total_amount) },

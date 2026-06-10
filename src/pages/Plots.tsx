@@ -42,6 +42,9 @@ export default function Plots() {
   const qc = useQueryClient()
   const [projectFilter, setProjectFilter] = useState('')
   const [statusFilter, setStatusFilter]   = useState('')
+  // Sale-mode filter — narrow the list to plots sold MLM vs traditionally.  Applied
+  // client-side via bookingByPlot since commission_mode lives on bp_bookings, not bp_plots.
+  const [saleModeFilter, setSaleModeFilter] = useState<'' | 'mlm' | 'traditional'>('')
   const [search, setSearch]               = useState('')
 
   // ── Queries ──────────────────────────────────────────────────────
@@ -69,14 +72,27 @@ export default function Plots() {
     },
   })
 
-  // Compute "in-use" plot IDs so Delete can be guarded.
-  const { data: inUseIds = new Set<string>() } = useQuery<Set<string>>({
+  // Compute "in-use" plot IDs so Delete can be guarded.  Same query also exposes the
+  // commission_mode + booking_no for each plot so the Status cell can show admins which
+  // plot was sold the traditional way vs through the MLM engine.  When a plot has more
+  // than one booking we surface the most recent one (DESC sort + first-write-wins on the
+  // Map key) — that's the booking the trigger is currently distributing for.
+  const { data: bookingByPlot = new Map<string, any>() } = useQuery<Map<string, any>>({
     queryKey: ['plots_in_use'],
     queryFn: async () => {
-      const { data } = await supabase.from('bp_bookings').select('plot_id').not('plot_id', 'is', null)
-      return new Set((data || []).map((b: any) => b.plot_id))
+      const { data } = await supabase
+        .from('bp_bookings')
+        .select('plot_id, booking_no, commission_mode, traditional_commission_pct, traditional_commission_per_sqyd, stage, application_date')
+        .not('plot_id', 'is', null)
+        .order('application_date', { ascending: false })
+      const m = new Map<string, any>()
+      for (const b of (data || []) as any[]) {
+        if (!m.has(b.plot_id)) m.set(b.plot_id, b)
+      }
+      return m
     },
   })
+  const inUseIds = useMemo(() => new Set(bookingByPlot.keys()), [bookingByPlot])
 
   // ── Mutations ─────────────────────────────────────────────────────
   const createPlot = useMutation({
@@ -187,14 +203,21 @@ export default function Plots() {
   const allPlots = plots as any[]
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
-    if (!q) return allPlots
-    return allPlots.filter((p: any) =>
-      String(p.plot_no || '').toLowerCase().includes(q) ||
-      String(p.block || '').toLowerCase().includes(q) ||
-      String(p.sector || '').toLowerCase().includes(q) ||
-      String(p.bp_projects?.name || '').toLowerCase().includes(q)
-    )
-  }, [allPlots, search])
+    return allPlots.filter((p: any) => {
+      if (q && !(
+        String(p.plot_no || '').toLowerCase().includes(q) ||
+        String(p.block || '').toLowerCase().includes(q) ||
+        String(p.sector || '').toLowerCase().includes(q) ||
+        String(p.bp_projects?.name || '').toLowerCase().includes(q)
+      )) return false
+      if (saleModeFilter) {
+        const bk = bookingByPlot.get(p.id)
+        if (!bk) return false
+        if (bk.commission_mode !== saleModeFilter) return false
+      }
+      return true
+    })
+  }, [allPlots, search, saleModeFilter, bookingByPlot])
 
   const availableCount = allPlots.filter(p => p.status === 'available').length
   const tokenCount     = allPlots.filter(p => p.status === 'token').length
@@ -303,7 +326,24 @@ export default function Plots() {
     { header: 'Rate / sqyd', render: (r: any) => r.price_per_sqyd ? formatINR(r.price_per_sqyd) : '—' },
     { header: 'PLC', render: (r: any) => r.plc_charges ? formatINR(r.plc_charges) : '—' },
     { header: 'Total Price', render: (r: any) => r.total_price ? <span className="font-semibold">{formatINR(r.total_price)}</span> : '—' },
-    { header: 'Status', render: (r: any) => <Badge label={r.status || 'available'} className={STATUS_COLORS[r.status] || 'bg-gray-100 text-gray-600'} /> },
+    { header: 'Status', render: (r: any) => {
+      // Sale mode badge appears alongside plot status whenever a booking exists.  Bold
+      // amber "Traditional" pill makes the non-MLM sales jump out at a glance — admin
+      // doesn't have to click into each booking to remember which way it was sold.
+      const bk = bookingByPlot.get(r.id)
+      const traditional = bk?.commission_mode === 'traditional'
+      return (
+        <div className="flex flex-col gap-0.5">
+          <Badge label={r.status || 'available'} className={STATUS_COLORS[r.status] || 'bg-gray-100 text-gray-600'}/>
+          {bk && (
+            <Badge
+              label={traditional ? 'Sold · Traditional' : 'Sold · MLM'}
+              className={traditional ? 'bg-amber-100 text-amber-800 border border-amber-200' : 'bg-blue-50 text-blue-700 border border-blue-100'}
+            />
+          )}
+        </div>
+      )
+    }},
     { header: '', render: (r: any) => {
       const inUse = inUseIds.has(r.id)
       return (
@@ -370,8 +410,13 @@ export default function Plots() {
             <option value="">All Status</option>
             {['available','token','booked','cancelled','sold'].map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>)}
           </select>
-          {(search || projectFilter || statusFilter) && (
-            <button onClick={() => { setSearch(''); setProjectFilter(''); setStatusFilter('') }} className="text-xs text-gray-500 hover:text-gray-800 underline">Clear filters</button>
+          <select value={saleModeFilter} onChange={e => setSaleModeFilter(e.target.value as any)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" title="Filter by sale mode">
+            <option value="">All sale modes</option>
+            <option value="mlm">Sold · MLM</option>
+            <option value="traditional">Sold · Traditional</option>
+          </select>
+          {(search || projectFilter || statusFilter || saleModeFilter) && (
+            <button onClick={() => { setSearch(''); setProjectFilter(''); setStatusFilter(''); setSaleModeFilter('') }} className="text-xs text-gray-500 hover:text-gray-800 underline">Clear filters</button>
           )}
         </div>
         <Table columns={cols} data={filtered} loading={isLoading} />
