@@ -54,6 +54,13 @@ const EMPTY: any = {
   plot_id:'', customer_id:'', broker_id:'', project_id:'', stage:'token_received',
   size_sqyd:'', rate_per_sqyd:'',
   dev_charges:'0', plc_charges:'0', discount_amount:'0',
+  // Commission mode — 'mlm' (default, rank-based + upline differential) or 'traditional'
+  // (admin-defined commission paid only to the direct broker, with optional upline cascade).
+  commission_mode: 'mlm',
+  traditional_input: 'pct' as 'pct' | 'per_sqyd', // UI-only: which input field the admin used
+  traditional_commission_pct: '',
+  traditional_commission_per_sqyd: '',
+  traditional_pay_upline: false,
   notes:'',
   application_date: today(), booking_time:'', customer_bank_name:'',
   upline_broker_code:'', manager_signature_by:'', affidavit_accepted:true,
@@ -186,6 +193,7 @@ export default function Bookings() {
   })
 
   const num = (v: any) => Number(v) || 0
+  const round2 = (v: number) => Math.round(v * 100) / 100
   const size  = num(form.size_sqyd)
   const rate  = num(form.rate_per_sqyd)
   const basePrice = Math.round(size * rate)
@@ -286,7 +294,7 @@ export default function Bookings() {
       const stage = autoStage(rest)
       const project = (projects as any[]).find((pj: any) => pj.id === rest.project_id)
       const broker  = (brokers as any[]).find((b: any) => b.id === rest.broker_id)
-      const brokerPct = broker ? Number((ranks as any[]).find((r: any) => r.rank_name === broker.rank)?.commission_pct || 0) : 0
+      const mlmPct = broker ? Number((ranks as any[]).find((r: any) => r.rank_name === broker.rank)?.commission_pct || 0) : 0
       const sz   = num(rest.size_sqyd); const rt = num(rest.rate_per_sqyd)
       const base = Math.round(sz * rt)
       const d    = num(rest.dev_charges); const pl = num(rest.plc_charges); const dsc = num(rest.discount_amount)
@@ -294,6 +302,15 @@ export default function Bookings() {
       const tokenAmt   = rest.token_enabled   ? num(rest.token_amount) : 0
       const bookingAmt = rest.booking_enabled ? num(rest.booking_amount) : 0
       const fullAmt    = rest.full_enabled    ? (num(rest.full_amount) || total) : 0
+      // Traditional-mode commission overrides the MLM rank %.  Only one of pct / per_sqyd is sent
+      // (whichever input the admin chose); the trigger reads them and computes the effective
+      // direct-broker pct -- per_sqyd is converted to an equivalent % via plot.size_sqyd.
+      const isTraditional = rest.commission_mode === 'traditional'
+      const tradPct       = isTraditional && rest.traditional_input === 'pct'      ? num(rest.traditional_commission_pct)      : null
+      const tradPerSqyd   = isTraditional && rest.traditional_input === 'per_sqyd' ? num(rest.traditional_commission_per_sqyd) : null
+      const effectivePct  = isTraditional
+        ? (tradPct != null ? tradPct : (tradPerSqyd != null && sz > 0 && total > 0 ? round2((tradPerSqyd * sz / total) * 100) : 0))
+        : mlmPct
       const bookingPayload: any = {
         plot_id: rest.plot_id || null, customer_id, broker_id: rest.broker_id || null, project_id: rest.project_id || null,
         stage,
@@ -304,8 +321,12 @@ export default function Bookings() {
         expected_booking_amount: num(rest.expected_booking_amount) || null,
         booking_amount: bookingAmt || null, booking_date: rest.booking_enabled ? rest.booking_date : null,
         full_payment_amount: fullAmt || null, full_payment_date: rest.full_enabled ? rest.full_date : null,
-        commission_rate: brokerPct || null,
-        commission_amount: brokerPct > 0 ? Math.round(base * brokerPct / 100) : null,
+        commission_mode: isTraditional ? 'traditional' : 'mlm',
+        traditional_commission_pct:      tradPct,
+        traditional_commission_per_sqyd: tradPerSqyd,
+        traditional_pay_upline:          isTraditional ? !!rest.traditional_pay_upline : false,
+        commission_rate:                 effectivePct || null,
+        commission_amount:               effectivePct > 0 ? Math.round(base * effectivePct / 100) : null,
         notes: rest.notes || null, scheme_name: project?.name || null,
         application_date: rest.application_date || null, booking_time: rest.booking_time || null,
         customer_bank_name: rest.customer_bank_name || null,
@@ -355,11 +376,19 @@ export default function Bookings() {
     mutationFn: async ({ id, data }: { id: string; data: any }) => {
       const project = (projects as any[]).find((pj: any) => pj.id === data.project_id)
       const broker  = (brokers as any[]).find((b: any) => b.id === data.broker_id)
-      const brokerPct = broker ? Number((ranks as any[]).find((r: any) => r.rank_name === broker.rank)?.commission_pct || 0) : 0
+      const mlmPct = broker ? Number((ranks as any[]).find((r: any) => r.rank_name === broker.rank)?.commission_pct || 0) : 0
       const sz   = num(data.size_sqyd); const rt = num(data.rate_per_sqyd)
       const base = Math.round(sz * rt)
       const d    = num(data.dev_charges); const pl = num(data.plc_charges); const dsc = num(data.discount_amount)
       const total = Math.max(0, base + d + pl - dsc)
+      // Same traditional-mode handling as the create path -- editing must persist the
+      // commission_mode + traditional_* columns so the trigger recomputes correctly.
+      const isTraditional = data.commission_mode === 'traditional'
+      const tradPct       = isTraditional && data.traditional_input === 'pct'      ? num(data.traditional_commission_pct)      : null
+      const tradPerSqyd   = isTraditional && data.traditional_input === 'per_sqyd' ? num(data.traditional_commission_per_sqyd) : null
+      const effectivePct  = isTraditional
+        ? (tradPct != null ? tradPct : (tradPerSqyd != null && sz > 0 && total > 0 ? round2((tradPerSqyd * sz / total) * 100) : 0))
+        : mlmPct
       const { data: current } = await supabase.from('bp_bookings').select('plot_id').eq('id', id).single()
       const payload = {
         plot_id: data.plot_id || null, customer_id: data.customer_id || null,
@@ -369,8 +398,12 @@ export default function Bookings() {
         base_price: base || null,
         dev_charges: d, plc_charges: pl, discount_amount: dsc,
         plot_total_price: total, total_amount: total,
-        commission_rate: brokerPct || null,
-        commission_amount: brokerPct > 0 ? Math.round(base * brokerPct / 100) : null,
+        commission_mode: isTraditional ? 'traditional' : 'mlm',
+        traditional_commission_pct:      tradPct,
+        traditional_commission_per_sqyd: tradPerSqyd,
+        traditional_pay_upline:          isTraditional ? !!data.traditional_pay_upline : false,
+        commission_rate:                 effectivePct || null,
+        commission_amount:               effectivePct > 0 ? Math.round(base * effectivePct / 100) : null,
         expected_booking_amount: num(data.expected_booking_amount) || null,
         notes: data.notes || null,
         scheme_name: project?.name || null,
@@ -527,6 +560,12 @@ export default function Bookings() {
       dev_charges: b.dev_charges ?? '0',
       plc_charges: b.plc_charges ?? '0',
       discount_amount: b.discount_amount ?? '0',
+      commission_mode: b.commission_mode || 'mlm',
+      // Pick which input the admin used: prefer per_sqyd if it's set, else fall back to pct.
+      traditional_input: b.traditional_commission_per_sqyd != null ? 'per_sqyd' : 'pct',
+      traditional_commission_pct:      b.traditional_commission_pct      ?? '',
+      traditional_commission_per_sqyd: b.traditional_commission_per_sqyd ?? '',
+      traditional_pay_upline:          !!b.traditional_pay_upline,
       notes: b.notes || '',
       application_date: b.application_date || today(),
       booking_time: b.booking_time || '', customer_bank_name: b.customer_bank_name || '',
@@ -952,6 +991,98 @@ export default function Bookings() {
             <span className="text-emerald-700 font-bold">{formatINR(totalNet)}</span>
           </div>
         )}
+
+        {/* Commission mode -- MLM (broker rank + upline cascade) or Traditional (admin-defined
+            commission paid only to the direct broker, with optional upline cascade).  Defaults
+            to MLM so existing flows keep working unchanged.  The selected mode + value are
+            persisted to bp_bookings.commission_mode + traditional_commission_pct /
+            traditional_commission_per_sqyd, which the recompute_booking_payouts trigger reads. */}
+        <div className="mt-4 rounded-lg border border-gray-200 overflow-hidden">
+          <div className="flex">
+            <button
+              type="button"
+              onClick={() => set('commission_mode', 'mlm')}
+              className={`flex-1 px-3 py-2 text-sm font-medium transition ${form.commission_mode !== 'traditional' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
+            >
+              MLM (rank-based + upline cascade)
+            </button>
+            <button
+              type="button"
+              onClick={() => set('commission_mode', 'traditional')}
+              className={`flex-1 px-3 py-2 text-sm font-medium transition ${form.commission_mode === 'traditional' ? 'bg-amber-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
+            >
+              Traditional (custom commission)
+            </button>
+          </div>
+
+          {form.commission_mode === 'traditional' && (
+            <div className="p-3 bg-amber-50/40 border-t border-amber-200 space-y-3">
+              <p className="text-xs text-amber-900">
+                Traditional sale -- the system uses the value below instead of the broker's rank %.
+                Direct broker gets paid only; upline cascade is OFF by default.
+              </p>
+
+              {/* Choose the input shape -- a straight % OR Rs/gaj */}
+              <div className="flex gap-2 text-xs">
+                <label className={`flex-1 cursor-pointer px-3 py-2 rounded-lg border ${form.traditional_input === 'pct' ? 'border-amber-500 bg-white' : 'border-gray-200 bg-white/60'}`}>
+                  <input type="radio" name="trad_input" className="mr-1.5" checked={form.traditional_input === 'pct'} onChange={() => set('traditional_input', 'pct')}/>
+                  <b>Custom %</b> of deposited amount
+                </label>
+                <label className={`flex-1 cursor-pointer px-3 py-2 rounded-lg border ${form.traditional_input === 'per_sqyd' ? 'border-amber-500 bg-white' : 'border-gray-200 bg-white/60'}`}>
+                  <input type="radio" name="trad_input" className="mr-1.5" checked={form.traditional_input === 'per_sqyd'} onChange={() => set('traditional_input', 'per_sqyd')}/>
+                  <b>Rs per gaj</b> (sq.yd) -- traditional
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {form.traditional_input === 'pct' ? (
+                  <Input
+                    label="Commission % of each payment"
+                    type="number"
+                    value={form.traditional_commission_pct}
+                    onChange={(e: any) => set('traditional_commission_pct', e.target.value)}
+                    placeholder="e.g. 2.5"
+                  />
+                ) : (
+                  <>
+                    <Input
+                      label="Commission rate per gaj (₹/sq.yd)"
+                      type="number"
+                      value={form.traditional_commission_per_sqyd}
+                      onChange={(e: any) => set('traditional_commission_per_sqyd', e.target.value)}
+                      placeholder="e.g. 100"
+                    />
+                    {/* Live preview: total commission + equivalent % so admin sees what'll be saved */}
+                    {(() => {
+                      const psy = num(form.traditional_commission_per_sqyd)
+                      const sz  = num(form.size_sqyd)
+                      const tot = totalNet
+                      if (psy <= 0 || sz <= 0) return null
+                      const totalComm = Math.round(psy * sz)
+                      const eqPct = tot > 0 ? round2((totalComm / tot) * 100) : 0
+                      return (
+                        <div className="rounded-lg bg-white border border-amber-200 p-2 text-xs flex flex-col justify-center">
+                          <div className="text-gray-500">Total commission ({sz} sq.yd × ₹{psy})</div>
+                          <div className="font-bold text-amber-900">{formatINR(totalComm)} <span className="text-gray-500 font-normal">≈ {eqPct}% of total</span></div>
+                        </div>
+                      )
+                    })()}
+                  </>
+                )}
+              </div>
+
+              <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={!!form.traditional_pay_upline}
+                  onChange={e => set('traditional_pay_upline', e.target.checked)}
+                  className="rounded"
+                />
+                Also pay upline differential (mixed mode — uncommon)
+              </label>
+            </div>
+          )}
+        </div>
 
         {!editing && (
           <>
