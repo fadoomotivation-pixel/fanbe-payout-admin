@@ -135,6 +135,11 @@ export default function Bookings() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo]     = useState('')
   const [showFilters, setShowFilters] = useState(false)
+  // Inline "Add new broker" modal triggered from the broker picker on the booking form.
+  // Saves a quick broker (name + phone + auto broker_type from booking mode) and
+  // auto-selects them so admin doesn't have to leave the page mid-booking.
+  const [quickBroker, setQuickBroker] = useState<null | { name: string; phone: string; email: string }>(null)
+  const [quickBrokerSaving, setQuickBrokerSaving] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }))
   const setNC = (k: string, v: any) => setForm((p: any) => ({ ...p, new_customer: { ...p.new_customer, [k]: v } }))
@@ -729,6 +734,43 @@ export default function Bookings() {
     })
   }
 
+  // Save the inline-created broker: writes a brokers row with broker_type matching the
+  // current booking mode, refetches the broker list, and auto-selects the new broker
+  // so admin doesn't have to find them in the picker.
+  const saveQuickBroker = async () => {
+    if (!quickBroker) return
+    const name = quickBroker.name.trim()
+    const phone = quickBroker.phone.trim()
+    if (!name) { toast.error('Please enter the broker name.'); return }
+    if (!phone) { toast.error('Please enter a phone number.'); return }
+    setQuickBrokerSaving(true)
+    try {
+      const broker_type = form.commission_mode === 'traditional' ? 'traditional' : 'mlm'
+      const payload: any = {
+        name,
+        phone,
+        email: quickBroker.email.trim() || null,
+        broker_type,
+        status: 'active',
+        // MLM brokers default to the lowest rank; traditional brokers don't need one but the
+        // column is non-null in some schemas, so 'Executive' is the safe fallback.
+        rank: 'Executive',
+      }
+      const { data: created, error } = await supabase.from('brokers').insert(payload).select().single()
+      if (error) throw error
+      await qc.invalidateQueries({ queryKey: ['brokers'] })
+      // Auto-select the new broker in the form
+      handleBrokerChange(created.id)
+      toast.success(`${broker_type === 'traditional' ? 'Traditional' : 'MLM'} broker added · selected`)
+      setQuickBroker(null)
+    } catch (e: any) {
+      console.error('Quick broker save failed:', e)
+      toast.error(friendlyError(e, 'Could not add the broker. Please check the name and phone and try again.'))
+    } finally {
+      setQuickBrokerSaving(false)
+    }
+  }
+
   const nextStage = (current: Stage): Stage | null => {
     const idx = PIPELINE_STAGES.indexOf(current)
     if (idx === -1 || idx >= PIPELINE_STAGES.length - 1) return null
@@ -1256,7 +1298,10 @@ export default function Bookings() {
                           className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm"
                         >
                           <option value="">— pick broker —</option>
-                          {(brokers as any[])
+                          {/* Use the SAME pool as the primary picker so MLM brokers don't
+                              leak into a Traditional booking's split selector.  Was just
+                              `brokers` before, which is the bug admin was reporting. */}
+                          {pickerBrokers
                             .filter((b: any) => b.id !== form.broker_id && !splitBrokers.some((x, i) => i !== idx && x.broker_id === b.id))
                             .map((b: any) => <option key={b.id} value={b.id}>{b.name} [{b.broker_id}]</option>)}
                         </select>
@@ -1564,15 +1609,19 @@ export default function Bookings() {
                 </option>
               ))}
             </Select>
-            {/* Inline hint when the pool is empty so admin knows EXACTLY what to do instead
-                of being staring at a dropdown with no options. */}
+            {/* Quick add — admin can create a fresh broker without leaving the booking
+                page.  Auto-sets broker_type from the current booking mode so the new
+                broker shows up in the right pool (traditional or MLM) immediately. */}
+            <button
+              type="button"
+              onClick={() => setQuickBroker({ name: '', phone: '', email: '' })}
+              className="mt-1.5 text-[11px] text-blue-700 hover:underline inline-flex items-center gap-1 font-medium"
+            >
+              + Add new {form.commission_mode === 'traditional' ? 'traditional' : 'MLM'} broker
+            </button>
             {pickerBrokers.length === 0 && (
               <div className="mt-1.5 text-[11px] bg-amber-50 border border-amber-200 text-amber-900 rounded-lg px-2 py-1.5">
-                No {form.commission_mode === 'traditional' ? 'traditional' : 'MLM'} brokers yet.
-                {' '}
-                <Link to="/brokers" target="_blank" className="text-blue-700 hover:underline font-medium">
-                  Add one in Brokers →
-                </Link>
+                No {form.commission_mode === 'traditional' ? 'traditional' : 'MLM'} brokers yet — tap the button above to add one without leaving this page.
               </div>
             )}
           </div>
@@ -1631,6 +1680,26 @@ export default function Bookings() {
         onSubmit={(p) => recordBookingPayment.mutate(p)}
         submitting={recordBookingPayment.isPending}
       />
+
+      {/* Quick "Add new broker" modal launched from the booking form picker.  Minimal
+          fields (name + phone + optional email) so the workflow stays fast; rank / KYC
+          / bank details can be filled in later from the Brokers page. */}
+      <Modal open={!!quickBroker} onClose={() => setQuickBroker(null)} title={`Add new ${form.commission_mode === 'traditional' ? 'traditional' : 'MLM'} broker`}>
+        {quickBroker && (
+          <div className="space-y-3">
+            <div className="text-xs bg-blue-50 border border-blue-200 text-blue-900 rounded-lg p-2.5">
+              This broker will be added as <b>{form.commission_mode === 'traditional' ? 'Traditional' : 'MLM'}</b> and selected on this booking automatically.  Rank, KYC and bank details can be filled in later from the <Link to="/brokers" target="_blank" className="text-blue-700 hover:underline">Brokers page</Link>.
+            </div>
+            <Input label="Broker name *" value={quickBroker.name} onChange={(e: any) => setQuickBroker({ ...quickBroker, name: e.target.value })} placeholder="Full name as on documents" />
+            <Input label="Phone *" value={quickBroker.phone} onChange={(e: any) => setQuickBroker({ ...quickBroker, phone: e.target.value })} placeholder="10-digit mobile (used for broker login by default)" />
+            <Input label="Email (optional)" value={quickBroker.email} onChange={(e: any) => setQuickBroker({ ...quickBroker, email: e.target.value })} placeholder="Auto-generated from phone if blank" />
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="ghost" onClick={() => setQuickBroker(null)} disabled={quickBrokerSaving}>Cancel</Button>
+              <Button onClick={saveQuickBroker} loading={quickBrokerSaving}>Add & select</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }
