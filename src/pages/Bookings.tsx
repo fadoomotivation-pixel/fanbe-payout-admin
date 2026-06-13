@@ -80,9 +80,16 @@ const EMPTY: any = {
 export default function Bookings() {
   const qc = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
+  // ?mode=traditional puts the whole page into "Traditional Bookings" mode: the list
+  // filters to traditional bookings only and the New Booking modal defaults to the
+  // traditional form.  Driven by the "Traditional Bookings" sidebar entry.
+  const modeFilter = (searchParams.get('mode') === 'traditional') ? 'traditional' as const : 'all' as const
   const [modal, setModal]     = useState(false)
   const [editing, setEditing] = useState<any>(null)
   const [form, setForm]       = useState<any>(EMPTY)
+  // Additional brokers for traditional multi-broker splits.  Array of { broker_id, commission_pct, position }.
+  // Empty by default; admin clicks "+Add another broker" inside the Traditional panel to add up to 2 more.
+  const [splitBrokers, setSplitBrokers] = useState<{ broker_id: string; commission_pct: string; position: number }[]>([])
   const [category, setCategory] = useState<Category>('all')
   const [emiBooking, setEmiBooking] = useState<any>(null)
   const [recordBookingFor, setRecordBookingFor] = useState<any>(null)
@@ -337,6 +344,22 @@ export default function Bookings() {
       }
       const { data: bk, error } = await supabase.from('bp_bookings').insert(bookingPayload).select().single()
       if (error) throw error
+      // Multi-broker traditional split (1..3 brokers).  Only written when this is a
+      // traditional booking AND admin added at least one extra broker.  Position 1 is the
+      // primary broker (bp_bookings.broker_id) + their traditional_commission_pct; we
+      // duplicate it into bp_booking_brokers so the trigger only has to read one source.
+      const splits = (rest.splitBrokers || []) as any[]
+      if (isTraditional && splits.length > 0 && tradPct != null && tradPct > 0) {
+        const rows = [
+          { booking_id: bk.id, broker_id: rest.broker_id, commission_pct: tradPct, position: 1 },
+          ...splits
+            .filter((s: any) => s.broker_id && num(s.commission_pct) > 0)
+            .map((s: any, i: number) => ({ booking_id: bk.id, broker_id: s.broker_id, commission_pct: num(s.commission_pct), position: i + 2 })),
+        ]
+        if (rows.length > 1) {
+          await supabase.from('bp_booking_brokers').insert(rows)
+        }
+      }
       const sponsorName = broker?.name || null
       let distributed = 0
       if (rest.token_enabled && tokenAmt > 0) {
@@ -417,6 +440,21 @@ export default function Bookings() {
       }
       const { data: d2, error } = await supabase.from('bp_bookings').update(payload).eq('id', id).select().single()
       if (error) throw error
+      // Re-sync the multi-broker split rows on edit: wipe + re-insert is simplest because
+      // admin may have added / removed / re-ordered brokers in the form.  CASCADE on the
+      // FK means re-inserting is safe.
+      await supabase.from('bp_booking_brokers').delete().eq('booking_id', id)
+      if (isTraditional && data.splitBrokers?.length > 0 && tradPct != null && tradPct > 0) {
+        const rows = [
+          { booking_id: id, broker_id: data.broker_id, commission_pct: tradPct, position: 1 },
+          ...(data.splitBrokers as any[])
+            .filter((s: any) => s.broker_id && num(s.commission_pct) > 0)
+            .map((s: any, i: number) => ({ booking_id: id, broker_id: s.broker_id, commission_pct: num(s.commission_pct), position: i + 2 })),
+        ]
+        if (rows.length > 1) {
+          await supabase.from('bp_booking_brokers').insert(rows)
+        }
+      }
       const newPlotId = data.plot_id || null
       const oldPlotId = current?.plot_id || null
       if (oldPlotId && oldPlotId !== newPlotId) {
@@ -574,18 +612,44 @@ export default function Bookings() {
       cust_mode: 'existing',
       expected_booking_amount: b.expected_booking_amount ?? '',
       token_enabled: false, booking_enabled: false, emi_enabled: false, full_enabled: false,
-    } : EMPTY)
+    } : { ...EMPTY, commission_mode: modeFilter === 'traditional' ? 'traditional' : 'mlm' })
+    // Seed splitBrokers from existing bp_booking_brokers when editing; otherwise reset.
+    setSplitBrokers([])
+    if (b?.id) {
+      supabase
+        .from('bp_booking_brokers')
+        .select('broker_id, commission_pct, position')
+        .eq('booking_id', b.id)
+        .order('position', { ascending: true })
+        .then(({ data }) => {
+          if (!data || data.length === 0) return
+          // Position 1 stays in form.broker_id; positions 2+ live in splitBrokers state.
+          setSplitBrokers(
+            (data as any[]).filter(r => r.position > 1).map(r => ({
+              broker_id: r.broker_id,
+              commission_pct: String(r.commission_pct ?? ''),
+              position: r.position,
+            }))
+          )
+        })
+    }
     setModal(true)
   }
 
   const save = async () => {
+    // Broker is now required on every booking — admin asked for it, and the trigger
+    // also needs broker_id to credit any commission.
+    if (!form.broker_id) { toast.error('Pick the broker who made the sale (required)'); return }
     if (!editing) {
       if (form.token_enabled && !num(form.token_amount))     { toast.error('Token amount is required (or uncheck the section)'); return }
       if (form.booking_enabled && !num(form.booking_amount)) { toast.error('Booking amount is required (or uncheck the section if the customer has not paid the booking deposit yet)'); return }
       if (form.full_enabled && !num(form.full_amount))       { toast.error('Full payment amount is required (or uncheck the section)'); return }
     }
-    if (editing) await update.mutateAsync({ id: editing.id, data: form })
-    else await create.mutateAsync(form)
+    // Thread splitBrokers state through to the mutation closures via the data payload —
+    // it lives outside the form object so we attach it explicitly.
+    const payload = { ...form, splitBrokers }
+    if (editing) await update.mutateAsync({ id: editing.id, data: payload })
+    else await create.mutateAsync(payload)
     setModal(false)
   }
 
@@ -659,8 +723,12 @@ export default function Bookings() {
     category === 'closed' ? all.filter(isClosed) :
                             all.filter((b: any) => !isClosed(b) && categorize(b) === category)
 
-  // Apply admin filters (search, project, broker, stage, date range)
+  // Apply admin filters (search, project, broker, stage, date range, sale mode)
   const filtered = inCategory.filter((b: any) => {
+    // ?mode=traditional narrows the page to traditional bookings only — driven by the
+    // "Traditional Bookings" sidebar entry so the same /bookings page can serve both
+    // browsing experiences without splitting into a second route.
+    if (modeFilter === 'traditional' && b.commission_mode !== 'traditional') return false
     if (filterProject && b.project_id !== filterProject) return false
     if (filterBroker  && b.broker_id  !== filterBroker)  return false
     if (filterStage   && b.stage      !== filterStage)   return false
@@ -926,8 +994,15 @@ export default function Bookings() {
   return (
     <div className="p-4 md:p-8 space-y-6 max-w-4xl mx-auto">
       <div>
-        <h1 className="text-2xl md:text-3xl font-bold text-gray-900 tracking-tight">Create a booking</h1>
-        <p className="text-sm text-gray-500 mt-1">{all.length} bookings · Confirmed value {formatINR(totalValue)}. Manage payments &amp; EMIs in <Link to="/customer-pipeline" className="text-blue-700 hover:underline">Customer Pipeline →</Link></p>
+        <h1 className="text-2xl md:text-3xl font-bold text-gray-900 tracking-tight">
+          {modeFilter === 'traditional' ? 'Traditional Bookings' : 'Create a booking'}
+        </h1>
+        <p className="text-sm text-gray-500 mt-1">
+          {modeFilter === 'traditional'
+            ? <>Custom-commission sales (single or multi-broker split). New bookings here default to traditional mode. <Link to="/bookings" className="text-blue-700 hover:underline">All bookings →</Link></>
+            : <>{all.length} bookings · Confirmed value {formatINR(totalValue)}. Manage payments &amp; EMIs in <Link to="/customer-pipeline" className="text-blue-700 hover:underline">Customer Pipeline →</Link></>
+          }
+        </p>
       </div>
 
       <div className="flex flex-wrap gap-3 items-center">
@@ -1094,6 +1169,69 @@ export default function Bookings() {
                 />
                 Also pay upline differential (mixed mode — uncommon)
               </label>
+
+              {/* Multi-broker split — admin can add up to 2 more brokers to share the
+                  commission on a single traditional sale.  Each additional broker has
+                  their own commission %.  When at least one extra broker is added,
+                  the trigger uses bp_booking_brokers rows instead of the single % above. */}
+              <div className="border-t border-amber-200 pt-3 mt-1">
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <div className="text-xs font-semibold text-amber-900">Sold with help of other brokers? (optional)</div>
+                    <div className="text-[10px] text-amber-800">Add up to 2 more brokers and choose what % each gets on every payment.</div>
+                  </div>
+                  {splitBrokers.length < 2 && (
+                    <button type="button"
+                      onClick={() => setSplitBrokers([...splitBrokers, { broker_id: '', commission_pct: '', position: splitBrokers.length + 2 }])}
+                      className="text-xs font-medium bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg">
+                      + Add broker
+                    </button>
+                  )}
+                </div>
+                {splitBrokers.length > 0 && (
+                  <div className="space-y-2">
+                    {splitBrokers.map((sb, idx) => (
+                      <div key={idx} className="flex gap-2 items-center bg-white border border-amber-200 rounded-lg p-2">
+                        <span className="shrink-0 text-[10px] uppercase tracking-wide font-bold text-amber-700">#{sb.position}</span>
+                        <select
+                          value={sb.broker_id}
+                          onChange={e => setSplitBrokers(splitBrokers.map((x, i) => i === idx ? { ...x, broker_id: e.target.value } : x))}
+                          className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm"
+                        >
+                          <option value="">— pick broker —</option>
+                          {(brokers as any[])
+                            .filter((b: any) => b.id !== form.broker_id && !splitBrokers.some((x, i) => i !== idx && x.broker_id === b.id))
+                            .map((b: any) => <option key={b.id} value={b.id}>{b.name} [{b.broker_id}]</option>)}
+                        </select>
+                        <input
+                          type="number"
+                          value={sb.commission_pct}
+                          onChange={e => setSplitBrokers(splitBrokers.map((x, i) => i === idx ? { ...x, commission_pct: e.target.value } : x))}
+                          placeholder="% of payment"
+                          className="w-28 border border-gray-200 rounded-lg px-2 py-1.5 text-sm"
+                        />
+                        <button type="button"
+                          onClick={() => setSplitBrokers(splitBrokers.filter((_, i) => i !== idx).map((x, i) => ({ ...x, position: i + 2 })))}
+                          className="text-rose-600 hover:bg-rose-50 px-2 py-1 rounded text-xs">
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                    {/* Live total so admin sees the combined commission burden at a glance */}
+                    {(() => {
+                      const primary = num(form.traditional_input === 'pct' ? form.traditional_commission_pct : 0)
+                      const extra = splitBrokers.reduce((s, x) => s + num(x.commission_pct), 0)
+                      const total = round2(primary + extra)
+                      return (
+                        <div className="text-[11px] text-amber-900 px-1">
+                          Total commission paid per verified payment: <b>{total}%</b>
+                          {' '} (primary {primary}% + extras {extra}%)
+                        </div>
+                      )
+                    })()}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
