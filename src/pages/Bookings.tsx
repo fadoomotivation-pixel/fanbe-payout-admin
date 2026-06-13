@@ -50,6 +50,38 @@ const NEW_CUST_EMPTY = {
 
 const today = () => new Date().toISOString().slice(0,10)
 
+// Translate Postgres / Supabase error spew into something a non-technical admin can
+// read.  Falls back to the original message when we don't recognise the pattern.
+function friendlyError(err: any, defaultMsg = 'Could not save the booking.  Please check the fields and try again.') {
+  const m = (err?.message || err?.error?.message || String(err || '')).toLowerCase()
+  if (!m) return defaultMsg
+  if (m.includes('null value in column "broker_id"') || m.includes('broker_id') && m.includes('null')) {
+    return 'Please pick the broker who made this sale.  Every booking needs a broker assigned.'
+  }
+  if (m.includes('null value in column "customer_id"') || m.includes('customer') && m.includes('null')) {
+    return 'Please pick or create a customer for this booking.'
+  }
+  if (m.includes('null value in column "plot_id"') || m.includes('plot_id') && m.includes('null')) {
+    return 'Please select a plot for this booking.'
+  }
+  if (m.includes('duplicate key') && m.includes('utr')) {
+    return 'That UTR / reference number has already been used on another payment.'
+  }
+  if (m.includes('duplicate key')) {
+    return 'A booking with the same details already exists.'
+  }
+  if (m.includes('foreign key') || m.includes('violates') && m.includes('constraint')) {
+    return 'One of the linked records (broker, customer or plot) is missing or was deleted.  Please reselect and try again.'
+  }
+  if (m.includes('jwt') || m.includes('not authenticated') || m.includes('unauthorized')) {
+    return 'Your session has expired.  Please sign in again.'
+  }
+  if (m.includes('network') || m.includes('failed to fetch')) {
+    return 'Could not reach the server.  Check your internet connection and try again.'
+  }
+  return defaultMsg
+}
+
 const EMPTY: any = {
   plot_id:'', customer_id:'', broker_id:'', project_id:'', stage:'token_received',
   size_sqyd:'', rate_per_sqyd:'',
@@ -175,7 +207,9 @@ export default function Bookings() {
   const { data: brokers = [] } = useQuery({
     queryKey: ['brokers'],
     queryFn: async () => {
-      const { data, error } = await supabase.from('brokers').select('id,name,broker_id,rank')
+      // Include broker_type so the booking form can filter the picker by sale mode
+      // (MLM brokers for MLM bookings, traditional brokers for traditional bookings).
+      const { data, error } = await supabase.from('brokers').select('id,name,broker_id,rank,broker_type,status')
       if (error) throw error
       return data
     },
@@ -214,6 +248,27 @@ export default function Bookings() {
     ? Number((ranks as any[]).find((r: any) => r.rank_name === selectedBroker.rank)?.commission_pct || 0)
     : 0
   const commissionAmt = Math.round(basePrice * brokerRankPct / 100)
+
+  // Pick the right pool of brokers for the current booking mode.  MLM bookings only show
+  // MLM brokers (the ones in the sponsor tree); Traditional bookings only show
+  // Traditional brokers (standalone, no sponsor cascade).  Keeps the picker honest so
+  // admin can't accidentally credit a tree broker on a traditional sale or vice versa.
+  const pickerBrokers = useMemo(() => {
+    const wantType = form.commission_mode === 'traditional' ? 'traditional' : 'mlm'
+    const list = (brokers as any[]).filter((b: any) => {
+      if (b.status && b.status !== 'active') return false
+      const t = b.broker_type || 'mlm'
+      return t === wantType
+    })
+    // Always include the currently-selected broker even if the type doesn't match
+    // (e.g. legacy bookings where the broker was reclassified after the fact) so the
+    // dropdown can render the chosen value instead of silently dropping it.
+    if (form.broker_id && !list.find((b: any) => b.id === form.broker_id)) {
+      const stray = (brokers as any[]).find((b: any) => b.id === form.broker_id)
+      if (stray) list.push(stray)
+    }
+    return list
+  }, [brokers, form.commission_mode, form.broker_id])
 
   async function generateEmiSchedule(bookingId: string, customerId: string|null, principal: number, n: number, freq: string, startDate: string) {
     if (principal <= 0 || n <= 0) return
@@ -392,7 +447,9 @@ export default function Bookings() {
       qc.invalidateQueries({ queryKey: ['commission_ledger'] })
       toast.success(`Booking saved${res?.distributed ? ` · MLM distributed to ${res.distributed} broker${res.distributed !== 1 ? 's' : ''}` : ''}`)
     },
-    onError: (e: any) => toast.error(e.message),
+    // Translate Supabase / Postgres error spew into plain English so non-technical
+    // admins know what to fix.  Raw DB messages still log to console for support.
+    onError: (e: any) => { console.error('Create booking failed:', e); toast.error(friendlyError(e)) },
   })
 
   const update = useMutation({
@@ -469,7 +526,7 @@ export default function Bookings() {
       qc.invalidateQueries({ queryKey: ['plots'] })
       toast.success('Booking updated')
     },
-    onError: (e: any) => toast.error(e.message),
+    onError: (e: any) => { console.error('Update booking failed:', e); toast.error(friendlyError(e, 'Could not update the booking. Please check the fields and try again.')) },
   })
 
   const advanceStage = useMutation({
@@ -1491,12 +1548,34 @@ export default function Bookings() {
           <Input label="Customer Bank Name" value={form.customer_bank_name} onChange={(e: any) => set('customer_bank_name', e.target.value)} placeholder="e.g. HDFC Bank" />
         </div>
 
-        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Sponsor & Approvals</div>
+        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Broker (required) & Approvals</div>
         <div className="grid grid-cols-2 gap-3">
-          <Select label="परिचयकर्ता / Upline Broker" value={form.broker_id} onChange={(e: any) => handleBrokerChange(e.target.value)}>
-            <option value="">No Broker</option>
-            {(brokers as any[]).map((b: any) => <option key={b.id} value={b.id}>{b.name} [{b.broker_id}] · {b.rank}</option>)}
-          </Select>
+          <div>
+            <Select
+              label={form.commission_mode === 'traditional' ? 'Broker (Traditional) *' : 'Broker (MLM, Upline) *'}
+              value={form.broker_id}
+              onChange={(e: any) => handleBrokerChange(e.target.value)}
+            >
+              <option value="" disabled>— Choose the broker who made the sale —</option>
+              {pickerBrokers.map((b: any) => (
+                <option key={b.id} value={b.id}>
+                  {b.name} [{b.broker_id}]
+                  {b.broker_type === 'traditional' ? ' · Traditional' : ` · ${b.rank || 'MLM'}`}
+                </option>
+              ))}
+            </Select>
+            {/* Inline hint when the pool is empty so admin knows EXACTLY what to do instead
+                of being staring at a dropdown with no options. */}
+            {pickerBrokers.length === 0 && (
+              <div className="mt-1.5 text-[11px] bg-amber-50 border border-amber-200 text-amber-900 rounded-lg px-2 py-1.5">
+                No {form.commission_mode === 'traditional' ? 'traditional' : 'MLM'} brokers yet.
+                {' '}
+                <Link to="/brokers" target="_blank" className="text-blue-700 hover:underline font-medium">
+                  Add one in Brokers →
+                </Link>
+              </div>
+            )}
+          </div>
           <Input label="परिचयकर्ता कोड (Upline Code)" value={form.upline_broker_code} onChange={(e: any) => set('upline_broker_code', e.target.value)} />
           <Input label="Manager Signed By" value={form.manager_signature_by} onChange={(e: any) => set('manager_signature_by', e.target.value)} placeholder="Office manager name" />
           <Select label="Stage" value={form.stage} onChange={(e: any) => set('stage', e.target.value)}>
