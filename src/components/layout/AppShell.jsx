@@ -30,6 +30,7 @@ const NAV = [
     { to: '/plots',             icon: Map,        label: 'Plots' },
     { to: '/customer-pipeline', icon: Users,      label: 'Customer Pipeline' },
     { to: '/bookings',          icon: BookOpen,   label: 'New Booking' },
+    { to: '/bookings?mode=traditional', icon: BookOpen, label: 'Traditional Bookings' },
     { to: '/payments',          icon: CreditCard, label: 'Payments' },
   ]},
   { group: 'Broker Network', items: [
