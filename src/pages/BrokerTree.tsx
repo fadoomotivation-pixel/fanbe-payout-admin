@@ -93,15 +93,31 @@ export default function BrokerTree() {
   const { data: customersByBroker = {} } = useQuery<Record<string, { id: string; name: string; code: string }[]>>({
     queryKey: ['team_tree_customers_full'],
     queryFn: async () => {
-      const { data } = await supabase
-        .from('bp_bookings')
-        .select('broker_id, customer_id, bp_customers(id, name, customer_code)')
-        .not('broker_id', 'is', null)
-        .not('customer_id', 'is', null)
+      // Two queries: bookings (broker -> customer link) AND brokers (who's already a broker).
+      // Customers that ARE brokers are skipped from the customer-leaf list so the team tree
+      // doesn't show duplicate nodes + "Make broker" buttons for someone who's already in
+      // the tree as a broker.  After the v6 backfill, basically every existing customer
+      // satisfies this.
+      const [{ data }, { data: linkedBrokers }] = await Promise.all([
+        supabase
+          .from('bp_bookings')
+          .select('broker_id, customer_id, bp_customers(id, name, customer_code)')
+          .not('broker_id', 'is', null)
+          .not('customer_id', 'is', null),
+        supabase
+          .from('brokers')
+          .select('customer_id')
+          .not('customer_id', 'is', null),
+      ])
+      const customerIsBroker = new Set((linkedBrokers || []).map((r: any) => r.customer_id))
       const seen: Record<string, Set<string>> = {}
       const out: Record<string, { id: string; name: string; code: string }[]> = {}
       for (const r of (data || []) as any[]) {
         if (!r.bp_customers) continue
+        // Skip if this customer is already a broker -- they show in the tree as a broker
+        // node directly, so we don't also want them as a "customer leaf" with a Make
+        // broker button.
+        if (customerIsBroker.has(r.customer_id)) continue
         const set = (seen[r.broker_id] ??= new Set())
         if (set.has(r.customer_id)) continue
         set.add(r.customer_id)
