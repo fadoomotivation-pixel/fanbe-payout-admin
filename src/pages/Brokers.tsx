@@ -13,6 +13,11 @@ import toast from 'react-hot-toast'
 
 const EMPTY = {
   name:'', email:'', phone:'', referral_code:'', rank:'Executive', status:'active',
+  // broker_type splits the directory in two buckets so admin can't accidentally credit
+  // a tree-broker on a traditional sale (or vice versa).
+  // - 'mlm'         : sits in the sponsor tree, earns via the differential cascade
+  // - 'traditional' : standalone broker used only for non-MLM sales
+  broker_type:'mlm',
   tds_applicable:false, pan_no:'', gst_no:'',
   sponsor_id:'', date_of_joining:'',
   bank_name:'', account_no:'', ifsc:'', account_holder:'', aadhaar_no:'',
@@ -121,6 +126,8 @@ export default function Brokers() {
   const [editing, setEditing] = useState<any>(null)
   const [form, setForm] = useState<any>(EMPTY)
   const [q, setQ] = useState('')
+  // '' = all brokers, 'mlm' = only tree brokers, 'traditional' = only standalone brokers
+  const [typeFilter, setTypeFilter] = useState<'' | 'mlm' | 'traditional'>('')
   const [copiedKey, setCopiedKey] = useState<string|null>(null)
   const [loginResult, setLoginResult] = useState<any>(null)
   const [editPassword, setEditPassword] = useState('')
@@ -133,6 +140,7 @@ export default function Brokers() {
     setForm(b ? {
       name:b.name, email:b.email||'', phone:b.phone||'', referral_code:b.referral_code||'',
       rank:b.rank||'Executive', status:b.status||'active', tds_applicable:!!b.tds_applicable,
+      broker_type: b.broker_type || 'mlm',
       pan_no:b.pan_no||'', gst_no:b.gst_no||'',
       sponsor_id:b.sponsor_id||'', date_of_joining:b.date_of_joining||'',
       bank_name:b.bank_name||'', account_no:b.account_no||'', ifsc:b.ifsc||'',
@@ -181,7 +189,12 @@ export default function Brokers() {
   }
 
   const allBrokers = brokers as any[]
-  const filtered = allBrokers.filter((b: any) => `${b.name||''}${b.phone||''}${b.broker_id||''}${b.email||''}`.toLowerCase().includes(q.toLowerCase()))
+  const filtered = allBrokers.filter((b: any) => {
+    if (typeFilter && (b.broker_type || 'mlm') !== typeFilter) return false
+    return `${b.name||''}${b.phone||''}${b.broker_id||''}${b.email||''}`.toLowerCase().includes(q.toLowerCase())
+  })
+  const mlmCount         = allBrokers.filter((b: any) => (b.broker_type || 'mlm') === 'mlm').length
+  const traditionalCount = allBrokers.filter((b: any) => b.broker_type === 'traditional').length
 
   const rankList = ranks as any[]
   const rankPctFor = (rankName: string) => rankList.find((r: any) => r.rank_name === rankName)?.commission_pct
@@ -226,6 +239,14 @@ export default function Brokers() {
     { header: 'Broker ID', render: (r: any) => <span className="font-mono text-xs bg-gray-100 px-2 py-0.5 rounded">{r.broker_id}</span> },
     { header: 'Name', render: (r: any) => <Link to={`/brokers/${r.id}`} className="font-medium text-blue-700 hover:underline">{r.name}</Link> },
     { header: 'Phone', key: 'phone' },
+    { header: 'Type', render: (r: any) => {
+      const t = r.broker_type || 'mlm'
+      // Bold pill so admin can scan the directory and spot which brokers are MLM
+      // (sponsor-tree, differential cascade) vs traditional (standalone, no cascade).
+      return t === 'traditional'
+        ? <Badge label="Traditional" className="bg-amber-100 text-amber-800 border border-amber-200"/>
+        : <Badge label="MLM" className="bg-blue-100 text-blue-800 border border-blue-200"/>
+    }},
     { header: 'Rank', render: (r: any) => {
       const pct = rankPctFor(r.rank)
       return <div><span className="text-sm">{r.rank || '—'}</span>{pct != null && <div className="text-[10px] text-gray-400">{pct}% commission</div>}</div>
@@ -379,8 +400,24 @@ export default function Brokers() {
         <Button onClick={() => open()}><Plus size={14} />Add Broker</Button>
       </div>
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
-        <div className="p-4 border-b border-gray-100 flex gap-3">
+        <div className="p-4 border-b border-gray-100 flex gap-3 items-center flex-wrap">
           <div className="relative flex-1 max-w-xs"><Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" /><input value={q} onChange={e => setQ(e.target.value)} placeholder="Search brokers…" className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" /></div>
+          {/* Type chips so admin can scope the list to MLM brokers vs traditional brokers
+              without scrolling.  Counts are computed off the unfiltered list. */}
+          <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden text-xs">
+            <button
+              onClick={() => setTypeFilter('')}
+              className={`px-3 py-1.5 ${typeFilter === '' ? 'bg-gray-900 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
+            >All ({allBrokers.length})</button>
+            <button
+              onClick={() => setTypeFilter('mlm')}
+              className={`px-3 py-1.5 border-l border-gray-200 ${typeFilter === 'mlm' ? 'bg-blue-600 text-white' : 'bg-white text-blue-700 hover:bg-blue-50'}`}
+            >MLM ({mlmCount})</button>
+            <button
+              onClick={() => setTypeFilter('traditional')}
+              className={`px-3 py-1.5 border-l border-gray-200 ${typeFilter === 'traditional' ? 'bg-amber-600 text-white' : 'bg-white text-amber-700 hover:bg-amber-50'}`}
+            >Traditional ({traditionalCount})</button>
+          </div>
         </div>
         <Table columns={cols} data={filtered} loading={isLoading} />
       </div>
@@ -392,6 +429,16 @@ export default function Brokers() {
           <Input label="Email (optional)" value={form.email} onChange={(e: any) => set('email', e.target.value)} placeholder={form.phone ? `Auto: ${syntheticEmailFromPhone(form.phone)}` : 'leave blank to auto-generate from phone'} />
           <Input label="Referral Code (optional)" value={form.referral_code} onChange={(e: any) => set('referral_code', e.target.value)} placeholder="leave blank if not used"/>
 
+          {/* MLM vs Traditional broker.  Booking form picks brokers from the right bucket
+              automatically based on the sale mode; admin doesn't have to remember. */}
+          <Select
+            label="Broker type"
+            value={form.broker_type || 'mlm'}
+            onChange={(e: any) => set('broker_type', e.target.value)}
+          >
+            <option value="mlm">MLM · sits in sponsor tree (default)</option>
+            <option value="traditional">Traditional · standalone, no sponsor cascade</option>
+          </Select>
           <Select label="Rank (from Commission Ranks)" value={form.rank} onChange={(e: any) => set('rank', e.target.value)}>
             {rankList.length === 0 && <option value="">— no ranks defined yet —</option>}
             {rankList.map((r: any) => (
