@@ -330,8 +330,10 @@ export default function BrokerTree() {
         )}
         {!isLoading && visibleRoots.length > 0 && (
           // Horizontal scroll so wide trees don't break the layout on mobile.
-          <div className="overflow-x-auto p-6">
-            <div className="inline-flex gap-8 mx-auto min-w-full justify-center">
+          // overscroll-x-contain stops the swipe-to-go-back gesture from triggering when
+          // admin pans the wide tree on mobile.  Momentum scroll on iOS via -webkit-overflow-scrolling.
+          <div className="overflow-x-auto p-3 sm:p-6" style={{ WebkitOverflowScrolling: 'touch', overscrollBehaviorX: 'contain' }}>
+            <div className="inline-flex gap-3 sm:gap-8 mx-auto min-w-full justify-center">
               {visibleRoots.map(b => (
                 <OrgNode
                   key={b.id} broker={b} isRoot
@@ -412,7 +414,7 @@ function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, cust
               const isLast  = i === combined.length - 1
               const isOnly  = combined.length === 1
               return (
-                <div key={c.key} className="relative flex flex-col items-center px-3 pt-6">
+                <div key={c.key} className="relative flex flex-col items-center px-1.5 sm:px-3 pt-6">
                   {!isOnly && !isFirst && <div className="absolute top-0 left-0 right-1/2 h-px bg-gray-300" />}
                   {!isOnly && !isLast  && <div className="absolute top-0 left-1/2 right-0 h-px bg-gray-300" />}
                   <div className="absolute top-0 left-1/2 -translate-x-1/2 w-px h-6 bg-gray-300" />
@@ -448,7 +450,7 @@ function CustomerLeaf({ customer, sponsorBrokerId, onPromote, isPromoting }: {
 }) {
   const [confirming, setConfirming] = useState(false)
   return (
-    <div className="w-[180px] sm:w-[200px] rounded-2xl border-2 border-dashed border-amber-200 bg-amber-50/40 px-3 py-3 shadow-sm hover:border-amber-300 hover:bg-amber-50 transition flex flex-col items-center">
+    <div className="w-[130px] sm:w-[180px] md:w-[200px] rounded-2xl border-2 border-dashed border-amber-200 bg-amber-50/40 px-2 py-2 sm:px-3 sm:py-3 shadow-sm hover:border-amber-300 hover:bg-amber-50 transition flex flex-col items-center">
       <Link
         to={`/customer-pipeline?customer=${customer.id}`}
         onClick={e => e.stopPropagation()}
@@ -503,13 +505,13 @@ function NodeCard({ broker, isRoot, isMatched, hasChildren, isCollapsed, directC
   return (
     <div
       onClick={hasChildren ? onToggle : undefined}
-      className={`relative w-[180px] sm:w-[200px] rounded-2xl border bg-white px-3 py-3 shadow-sm transition
+      className={`relative w-[130px] sm:w-[180px] md:w-[200px] rounded-2xl border bg-white px-2 py-2 sm:px-3 sm:py-3 shadow-sm transition
         ${isMatched ? 'border-amber-300 ring-2 ring-amber-200' : 'border-gray-200 hover:border-gray-300'}
         ${hasChildren ? 'cursor-pointer' : ''}`}
     >
       {/* avatar */}
       <div className="flex flex-col items-center">
-        <div className={`shrink-0 w-12 h-12 rounded-full flex items-center justify-center text-base font-semibold mb-2
+        <div className={`shrink-0 w-9 h-9 sm:w-12 sm:h-12 rounded-full flex items-center justify-center text-sm sm:text-base font-semibold mb-1.5 sm:mb-2
           ${isRoot ? 'bg-gray-900 text-white'
           : broker.status === 'active' ? 'bg-gradient-to-br from-blue-500 to-indigo-600 text-white'
           : 'bg-gray-100 text-gray-400'}`}>
