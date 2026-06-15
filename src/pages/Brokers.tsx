@@ -492,18 +492,29 @@ export default function Brokers() {
       <Modal open={!!loginResult} onClose={() => setLoginResult(null)} title={loginResult?.message?.toLowerCase().includes('reset') ? 'Password reset · share new credentials' : 'Broker login created'}>
         {loginResult && (
           <div className="space-y-3">
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900">
-              Share these credentials with the broker. They sign in at <b>/broker/login</b>.
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-900">
+              Share these with the broker.  They sign in at <b>/broker/login</b> with their phone number + password.
               {loginResult.message?.toLowerCase().includes('reset') && ' This password is shown once — copy it now.'}
             </div>
             <div className="space-y-2">
-              <Field label="Email"        value={loginResult.email}    copyKey="email"    copiedKey={copiedKey} onCopy={copy}/>
+              {/* Phone is the broker-facing primary credential now.  Read it off the row
+                  being edited; the create-login response doesn't carry it explicitly. */}
+              {editing?.phone && (
+                <Field label="Phone"      value={editing.phone}        copyKey="phone"    copiedKey={copiedKey} onCopy={copy}/>
+              )}
               {loginResult.password ? (
                 <Field label="Password"   value={loginResult.password} copyKey="password" copiedKey={copiedKey} onCopy={copy}/>
               ) : (
                 <div className="text-xs text-gray-500">User already existed in auth — linked to broker. Password unchanged.</div>
               )}
               <Field label="Login URL"    value={`${window.location.origin}/broker/login`} copyKey="url" copiedKey={copiedKey} onCopy={copy}/>
+              {/* Email is now a fallback / power-user option.  Auto-promoted brokers have
+                  synthetic emails the broker can't easily type, so it stays collapsed under
+                  a disclosure. */}
+              <details className="text-xs">
+                <summary className="text-gray-500 cursor-pointer hover:text-gray-700">Show internal email (fallback)</summary>
+                <div className="mt-2"><Field label="Email" value={loginResult.email} copyKey="email" copiedKey={copiedKey} onCopy={copy}/></div>
+              </details>
             </div>
             <div className="flex justify-end pt-2">
               <Button onClick={() => setLoginResult(null)}>Done</Button>
