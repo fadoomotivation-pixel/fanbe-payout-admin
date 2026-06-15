@@ -499,28 +499,46 @@ export default function Brokers() {
       </div>
 
       <Modal open={modal} onClose={() => setModal(false)} title={editing ? `Edit Broker — ${editing.broker_id || ''}` : 'Add Broker'}>
+        {/* Broker-type toggle promoted to the TOP of the modal so admin sees it before
+            filling out any fields.  Was buried below rank earlier -- admin reported there
+            was "no way to add traditional broker" because the select wasn't obvious. */}
+        <div className="mb-4 rounded-xl border-2 border-gray-200 overflow-hidden">
+          <div className="flex">
+            <button
+              type="button"
+              onClick={() => set('broker_type', 'mlm')}
+              className={`flex-1 px-3 py-2.5 text-sm font-semibold transition ${(form.broker_type || 'mlm') === 'mlm' ? 'bg-blue-600 text-white' : 'bg-white text-blue-700 hover:bg-blue-50'}`}
+            >
+              MLM broker
+              <div className="text-[10px] font-normal opacity-80 mt-0.5">Sits in sponsor tree · differential cascade</div>
+            </button>
+            <button
+              type="button"
+              onClick={() => set('broker_type', 'traditional')}
+              className={`flex-1 px-3 py-2.5 text-sm font-semibold transition border-l-2 border-gray-200 ${form.broker_type === 'traditional' ? 'bg-amber-600 text-white' : 'bg-white text-amber-700 hover:bg-amber-50'}`}
+            >
+              Traditional broker
+              <div className="text-[10px] font-normal opacity-80 mt-0.5">Standalone · no sponsor cascade</div>
+            </button>
+          </div>
+        </div>
         <div className="grid grid-cols-2 gap-4">
           <Input label="Full Name" value={form.name} onChange={(e: any) => set('name', e.target.value)} required />
-          <Input label="Phone" value={form.phone} onChange={(e: any) => set('phone', e.target.value)} required placeholder="10-digit mobile (used for login by default)" />
+          <Input label="Phone" value={form.phone} onChange={(e: any) => set('phone', e.target.value)} required placeholder="10-digit mobile (used as login + password)" />
           <Input label="Email (optional)" value={form.email} onChange={(e: any) => set('email', e.target.value)} placeholder={form.phone ? `Auto: ${syntheticEmailFromPhone(form.phone)}` : 'leave blank to auto-generate from phone'} />
           <Input label="Referral Code (optional)" value={form.referral_code} onChange={(e: any) => set('referral_code', e.target.value)} placeholder="leave blank if not used"/>
 
-          {/* MLM vs Traditional broker.  Booking form picks brokers from the right bucket
-              automatically based on the sale mode; admin doesn't have to remember. */}
-          <Select
-            label="Broker type"
-            value={form.broker_type || 'mlm'}
-            onChange={(e: any) => set('broker_type', e.target.value)}
-          >
-            <option value="mlm">MLM · sits in sponsor tree (default)</option>
-            <option value="traditional">Traditional · standalone, no sponsor cascade</option>
-          </Select>
+          {/* Rank is irrelevant for traditional brokers (they don't use the rank ladder),
+              but it's still required by the DB.  Default to Executive (lowest) and hide
+              the picker entirely when broker_type is traditional. */}
+          {form.broker_type !== 'traditional' && (
           <Select label="Rank (from Commission Ranks)" value={form.rank} onChange={(e: any) => set('rank', e.target.value)}>
             {rankList.length === 0 && <option value="">— no ranks defined yet —</option>}
             {rankList.map((r: any) => (
               <option key={r.rank_name} value={r.rank_name}>L{r.level} — {r.rank_name} ({r.commission_pct}%)</option>
             ))}
           </Select>
+          )}
           <Select label="Status" value={form.status} onChange={(e: any) => set('status', e.target.value)}>
             <option value="active">Active</option><option value="inactive">Inactive</option><option value="suspended">Suspended</option>
           </Select>
