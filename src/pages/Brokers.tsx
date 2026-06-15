@@ -401,7 +401,7 @@ export default function Brokers() {
       </div>
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
         <div className="p-4 border-b border-gray-100 flex gap-3 items-center flex-wrap">
-          <div className="relative flex-1 max-w-xs"><Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" /><input value={q} onChange={e => setQ(e.target.value)} placeholder="Search brokers…" className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" /></div>
+          <div className="relative w-full md:flex-1 md:max-w-xs"><Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" /><input value={q} onChange={e => setQ(e.target.value)} placeholder="Search brokers…" className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" /></div>
           {/* Type chips so admin can scope the list to MLM brokers vs traditional brokers
               without scrolling.  Counts are computed off the unfiltered list. */}
           <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden text-xs">
@@ -419,7 +419,83 @@ export default function Brokers() {
             >Traditional ({traditionalCount})</button>
           </div>
         </div>
-        <Table columns={cols} data={filtered} loading={isLoading} />
+        {/* Desktop: the dense table.  Mobile: the same data in stacked cards because
+            horizontally-scrolling 10 columns on a 360px screen was painful (admin's
+            screenshot showed exactly this).  Both views read from the same `filtered`
+            array and use the same actions, so behaviour is identical. */}
+        <div className="hidden md:block">
+          <Table columns={cols} data={filtered} loading={isLoading} />
+        </div>
+        <div className="md:hidden p-2 space-y-2">
+          {isLoading && <div className="py-12 text-center text-sm text-gray-400">Loading brokers…</div>}
+          {!isLoading && filtered.length === 0 && (
+            <div className="py-12 text-center text-sm text-gray-400">No brokers match the filter.</div>
+          )}
+          {filtered.map((r: any) => {
+            const e = earnings[r.id]
+            const pct = rankPctFor(r.rank)
+            const t = r.broker_type || 'mlm'
+            return (
+              <div key={r.id} className="bg-white border border-gray-200 rounded-xl p-3 shadow-sm">
+                <div className="flex items-start gap-3">
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${t === 'traditional' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
+                    {(r.name || '?').charAt(0).toUpperCase()}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <Link to={`/brokers/${r.id}`} className="font-semibold text-blue-700 hover:underline truncate block">{r.name || '—'}</Link>
+                    <div className="text-[11px] text-gray-500 font-mono">{r.broker_id || '—'}</div>
+                  </div>
+                  <Badge
+                    label={t === 'traditional' ? 'Traditional' : 'MLM'}
+                    className={t === 'traditional'
+                      ? 'bg-amber-100 text-amber-800 border border-amber-200 shrink-0'
+                      : 'bg-blue-100 text-blue-800 border border-blue-200 shrink-0'}
+                  />
+                </div>
+
+                <div className="mt-2.5 flex flex-wrap gap-1.5 text-[11px]">
+                  {r.phone && <span className="bg-gray-50 border border-gray-100 rounded-full px-2 py-0.5 text-gray-700">📞 {r.phone}</span>}
+                  {r.rank && <span className="bg-gray-50 border border-gray-100 rounded-full px-2 py-0.5 text-gray-700">{r.rank}{pct != null ? ` · ${pct}%` : ''}</span>}
+                  <Badge label={r.kyc_status || 'pending'} className={`${KYC_COLORS[r.kyc_status] || 'bg-gray-100 text-gray-600'} text-[10px]`}/>
+                  <Badge label={r.status} className={`${r.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'} text-[10px]`}/>
+                  {r.auth_user_id && (
+                    <span className="bg-emerald-50 border border-emerald-100 rounded-full px-2 py-0.5 text-emerald-700 inline-flex items-center gap-1">
+                      <KeyRound size={10}/>linked
+                    </span>
+                  )}
+                </div>
+
+                {(e && (e.total > 0 || e.promised > 0)) || r.sponsor?.name ? (
+                  <div className="mt-2 flex items-center justify-between gap-3 pt-2 border-t border-gray-100 text-xs">
+                    <div className="min-w-0">
+                      {r.sponsor?.name && (
+                        <div className="text-gray-500 truncate">
+                          Sponsor: <span className="text-gray-700">{r.sponsor.name}</span>
+                        </div>
+                      )}
+                    </div>
+                    {e && (e.total > 0 || e.promised > 0) && (
+                      <div className="text-right shrink-0">
+                        <div className="font-semibold text-green-700">{formatINR(e.total || 0)}</div>
+                        <div className="text-[10px] text-gray-400">
+                          {e.ytd ? `YTD ${formatINR(e.ytd)} · ` : ''}{e.count} bk
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+
+                <div className="mt-2.5 flex gap-1.5">
+                  <Link to={`/brokers/${r.id}`} className="flex-1 text-center text-xs py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 font-medium">Profile</Link>
+                  <button onClick={() => open(r)} className="flex-1 text-center text-xs py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium">Edit</button>
+                  <Link to={`/broker/dashboard?broker_id=${r.id}`} target="_blank" rel="noopener noreferrer" className="flex-1 text-center text-xs py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium inline-flex items-center justify-center gap-1" title="Open broker portal as this broker (read-only shadow mode)">
+                    <Eye size={11}/>View as
+                  </Link>
+                </div>
+              </div>
+            )
+          })}
+        </div>
       </div>
 
       <Modal open={modal} onClose={() => setModal(false)} title={editing ? `Edit Broker — ${editing.broker_id || ''}` : 'Add Broker'}>
