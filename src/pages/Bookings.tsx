@@ -789,14 +789,21 @@ export default function Bookings() {
     setQuickBrokerSaving(true)
     try {
       const broker_type = form.commission_mode === 'traditional' ? 'traditional' : 'mlm'
+      // brokers.email is NOT NULL on this schema, so when admin doesn't type one we
+      // synthesize a stable placeholder.  Phone-based is preferred (matches the
+      // syntheticEmailFromPhone helper used elsewhere) and falls back to a random
+      // suffix when phone is missing.
+      const typedEmail = quickBroker.email.trim()
+      const phoneDigits = phone.replace(/\D/g, '')
+      const email = typedEmail || (phoneDigits ? `b${phoneDigits}@example.com` : `auto-${Date.now().toString(36)}@example.com`)
       const payload: any = {
         name,
         phone,
-        email: quickBroker.email.trim() || null,
+        email,
         broker_type,
         status: 'active',
-        // MLM brokers default to the lowest rank; traditional brokers don't need one but the
-        // column is non-null in some schemas, so 'Executive' is the safe fallback.
+        // MLM brokers default to the lowest rank; traditional brokers don't use ranks
+        // but the column is non-null so 'Executive' is the safe fallback either way.
         rank: 'Executive',
       }
       const { data: created, error } = await supabase.from('brokers').insert(payload).select().single()
@@ -1609,8 +1616,8 @@ export default function Bookings() {
           <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg space-y-3">
             <div className="text-[11px] text-emerald-800">A new customer record will be created and auto-assigned a CR-XXXX code on save.</div>
             <div className="grid grid-cols-2 gap-3">
-              <Input label="Full Name *"             value={form.new_customer.name}                   onChange={(e:any) => setNC('name', e.target.value)} required />
-              <Input label="Mobile *"                value={form.new_customer.phone}                  onChange={(e:any) => setNC('phone', e.target.value)} required />
+              <Input label="Full Name"             value={form.new_customer.name}                   onChange={(e:any) => setNC('name', e.target.value)} required />
+              <Input label="Mobile"                value={form.new_customer.phone}                  onChange={(e:any) => setNC('phone', e.target.value)} required />
               <Input label="Father / Husband"        value={form.new_customer.father_or_husband_name} onChange={(e:any) => setNC('father_or_husband_name', e.target.value)} />
               <Input label="Date of Birth"           type="date" value={form.new_customer.dob}        onChange={(e:any) => setNC('dob', e.target.value)} />
               <Input label="Email"                   value={form.new_customer.email}                  onChange={(e:any) => setNC('email', e.target.value)} />
@@ -1640,7 +1647,7 @@ export default function Bookings() {
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-medium text-gray-700 mb-1">
-              {form.commission_mode === 'traditional' ? 'Broker (Traditional) *' : 'Broker (MLM, Upline) *'}
+              {form.commission_mode === 'traditional' ? 'Broker / Company (Traditional)' : 'Broker (MLM, Upline)'}
             </label>
             <BrokerCombobox
               value={form.broker_id}
@@ -1729,8 +1736,8 @@ export default function Bookings() {
             <div className="text-xs bg-blue-50 border border-blue-200 text-blue-900 rounded-lg p-2.5">
               This broker will be added as <b>{form.commission_mode === 'traditional' ? 'Traditional' : 'MLM'}</b> and selected on this booking automatically.  Rank, KYC and bank details can be filled in later from the <Link to="/brokers" target="_blank" className="text-blue-700 hover:underline">Brokers page</Link>.
             </div>
-            <Input label="Broker name *" value={quickBroker.name} onChange={(e: any) => setQuickBroker({ ...quickBroker, name: e.target.value })} placeholder="Full name as on documents" />
-            <Input label="Phone *" value={quickBroker.phone} onChange={(e: any) => setQuickBroker({ ...quickBroker, phone: e.target.value })} placeholder="10-digit mobile (used for broker login by default)" />
+            <Input label={form.commission_mode === 'traditional' ? 'Broker / Company name' : 'Broker name'} value={quickBroker.name} onChange={(e: any) => setQuickBroker({ ...quickBroker, name: e.target.value })} placeholder={form.commission_mode === 'traditional' ? 'Broker name or company name' : 'Full name as on documents'} required />
+            <Input label="Phone" value={quickBroker.phone} onChange={(e: any) => setQuickBroker({ ...quickBroker, phone: e.target.value })} placeholder="10-digit mobile (used as login + password)" required />
             <Input label="Email (optional)" value={quickBroker.email} onChange={(e: any) => setQuickBroker({ ...quickBroker, email: e.target.value })} placeholder="Auto-generated from phone if blank" />
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setQuickBroker(null)} disabled={quickBrokerSaving}>Cancel</Button>
