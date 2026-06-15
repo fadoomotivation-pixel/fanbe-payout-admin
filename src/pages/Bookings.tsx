@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
@@ -145,13 +145,18 @@ export default function Bookings() {
   const setNC = (k: string, v: any) => setForm((p: any) => ({ ...p, new_customer: { ...p.new_customer, [k]: v } }))
 
   const { data: bookings = [], isLoading } = useQuery({
-    queryKey: ['bookings'],
+    // Include modeFilter in the key so the cache splits properly per view (all vs traditional).
+    queryKey: ['bookings', modeFilter],
     queryFn: async () => {
-      const { data, error } = await supabase
+      let q = supabase
         .from('bp_bookings')
         .select('*,bp_plots(*),bp_customers(*),brokers(name,broker_id),bp_projects(*)')
         .in('stage', ['token_received','booking_done','cancelled'])
         .order('created_at', { ascending: false })
+      // Server-side filter: don't even fetch MLM rows when admin is on the Traditional
+      // Bookings menu.  Belt-and-suspenders with the client-side filter below.
+      if (modeFilter === 'traditional') q = q.eq('commission_mode', 'traditional')
+      const { data, error } = await q
       if (error) throw error
       return data
     },
@@ -1634,19 +1639,15 @@ export default function Bookings() {
         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Broker (required) & Approvals</div>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <Select
-              label={form.commission_mode === 'traditional' ? 'Broker (Traditional) *' : 'Broker (MLM, Upline) *'}
+            <label className="block text-xs font-medium text-gray-700 mb-1">
+              {form.commission_mode === 'traditional' ? 'Broker (Traditional) *' : 'Broker (MLM, Upline) *'}
+            </label>
+            <BrokerCombobox
               value={form.broker_id}
-              onChange={(e: any) => handleBrokerChange(e.target.value)}
-            >
-              <option value="" disabled>— Choose the broker who made the sale —</option>
-              {pickerBrokers.map((b: any) => (
-                <option key={b.id} value={b.id}>
-                  {b.name} [{b.broker_id}]
-                  {b.broker_type === 'traditional' ? ' · Traditional' : ` · ${b.rank || 'MLM'}`}
-                </option>
-              ))}
-            </Select>
+              options={pickerBrokers}
+              onChange={handleBrokerChange}
+              placeholder="— Search by name, broker code or phone —"
+            />
             {/* Quick add — admin can create a fresh broker without leaving the booking
                 page.  Auto-sets broker_type from the current booking mode so the new
                 broker shows up in the right pool (traditional or MLM) immediately. */}
@@ -1738,6 +1739,122 @@ export default function Bookings() {
           </div>
         )}
       </Modal>
+    </div>
+  )
+}
+
+// Search-as-you-type broker picker.  Replaces the native <select> on the booking form
+// because that select struggles at 10,000+ brokers -- the browser has to render every
+// <option> on first paint, the keyboard search jumps to whoever's first letter matches,
+// and there's no way to filter by phone / broker_id.  This combobox:
+//
+//   - stays closed by default (just a button showing the current selection)
+//   - on open, shows a search input + the top 30 matches by name / broker code / phone
+//   - matches are case-insensitive and substring-based (so admin can type "987" to find
+//     a phone or "FNB-05" to find a broker_id range)
+//   - autofocuses the search input so admin can type immediately
+//   - closes on Escape and on clicking outside
+function BrokerCombobox({ value, options, onChange, placeholder }: {
+  value: string
+  options: any[]
+  onChange: (id: string) => void
+  placeholder?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const rootRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const selected = options.find((o: any) => o.id === value)
+
+  useEffect(() => {
+    if (open) setTimeout(() => inputRef.current?.focus(), 0)
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const filtered = useMemo(() => {
+    const term = q.trim().toLowerCase()
+    if (!term) return options.slice(0, 30)
+    return options
+      .filter((o: any) => {
+        const hay = `${o.name || ''} ${o.broker_id || ''} ${o.phone || ''} ${o.rank || ''}`.toLowerCase()
+        return hay.includes(term)
+      })
+      .slice(0, 50)
+  }, [options, q])
+
+  return (
+    <div className="relative" ref={rootRef}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className={`w-full text-left bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 ${selected ? 'text-gray-900' : 'text-gray-400'}`}
+      >
+        {selected
+          ? <span><b className="text-gray-900">{selected.name}</b> <span className="text-gray-500 font-mono text-xs">[{selected.broker_id}]</span>{selected.phone && <span className="text-gray-400 text-xs"> · {selected.phone}</span>}</span>
+          : placeholder || '— Select broker —'}
+      </button>
+      {open && (
+        <div className="absolute z-30 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+          <div className="p-2 border-b border-gray-100">
+            <input
+              ref={inputRef}
+              value={q}
+              onChange={e => setQ(e.target.value)}
+              placeholder="Type a name, broker code or phone…"
+              className="w-full border border-gray-200 rounded-md px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            />
+          </div>
+          <div className="max-h-72 overflow-y-auto">
+            {options.length === 0 && (
+              <div className="px-3 py-6 text-center text-xs text-gray-400">No brokers in this pool yet.</div>
+            )}
+            {options.length > 0 && filtered.length === 0 && (
+              <div className="px-3 py-6 text-center text-xs text-gray-400">No matches for "{q}".</div>
+            )}
+            {filtered.map((o: any) => {
+              const isSel = o.id === value
+              return (
+                <button
+                  key={o.id}
+                  type="button"
+                  onClick={() => { onChange(o.id); setOpen(false); setQ('') }}
+                  className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 border-b border-gray-50 last:border-b-0 ${isSel ? 'bg-emerald-50' : ''}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-medium text-gray-900 truncate">{o.name || '—'}</div>
+                      <div className="text-[11px] text-gray-500 truncate">
+                        <span className="font-mono">{o.broker_id || '—'}</span>
+                        {o.phone && <> · {o.phone}</>}
+                        {o.broker_type === 'traditional' ? ' · Traditional' : (o.rank ? ` · ${o.rank}` : '')}
+                      </div>
+                    </div>
+                    {isSel && <span className="text-emerald-600 text-xs font-semibold shrink-0">✓ Selected</span>}
+                  </div>
+                </button>
+              )
+            })}
+            {!q && options.length > 30 && (
+              <div className="px-3 py-2 text-[10px] text-gray-400 bg-gray-50 text-center">
+                Showing first 30 of {options.length}. Type to search.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
