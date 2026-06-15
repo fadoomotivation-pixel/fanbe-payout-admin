@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react'
+import { useMemo, useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
@@ -52,6 +52,11 @@ export default function BrokerTree() {
   }
   const [search, setSearch] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  // One-shot: collapse the whole tree by default the FIRST time brokers data arrives,
+  // so admin sees a focused starting point (just the roots) instead of 37+ broker cards
+  // dumped at them.  Subsequent broker changes (after admin has expanded things) don't
+  // re-collapse -- only the initial load triggers this.
+  const initialisedRef = useRef(false)
 
   useEffect(() => {
     const urlRoot = searchParams.get('root') || ''
@@ -194,6 +199,21 @@ export default function BrokerTree() {
     for (const b of brokers) size(b.id)
     return { byId, childrenOf, subtreeSize }
   }, [brokers])
+
+  // First time the tree gets data, collapse every broker that has at least one child so
+  // admin sees just the roots on initial paint.  Guarded by initialisedRef so we don't
+  // re-collapse what admin has manually opened.
+  useEffect(() => {
+    if (initialisedRef.current) return
+    if (brokers.length === 0) return
+    const out = new Set<string>()
+    for (const b of brokers) {
+      const ch = tree.childrenOf.get(b.id) || []
+      if (ch.length > 0) out.add(b.id)
+    }
+    setCollapsed(out)
+    initialisedRef.current = true
+  }, [brokers, tree])
 
   const aggregateEarnings = useMemo(() => {
     const cache: Record<string, number> = {}
