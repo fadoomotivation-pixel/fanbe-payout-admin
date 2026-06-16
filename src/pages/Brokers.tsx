@@ -506,7 +506,7 @@ export default function Brokers() {
           <div className="flex">
             <button
               type="button"
-              onClick={() => set('broker_type', 'mlm')}
+              onClick={() => setForm((p: any) => ({ ...p, broker_type: 'mlm', sponsor_id: (allBrokers.find((b: any) => b.id === p.sponsor_id && (b.broker_type || 'mlm') === 'mlm') ? p.sponsor_id : '') }))}
               className={`flex-1 px-3 py-2.5 text-sm font-semibold transition ${(form.broker_type || 'mlm') === 'mlm' ? 'bg-blue-600 text-white' : 'bg-white text-blue-700 hover:bg-blue-50'}`}
             >
               MLM broker
@@ -514,7 +514,7 @@ export default function Brokers() {
             </button>
             <button
               type="button"
-              onClick={() => set('broker_type', 'traditional')}
+              onClick={() => setForm((p: any) => ({ ...p, broker_type: 'traditional', sponsor_id: (allBrokers.find((b: any) => b.id === p.sponsor_id && b.broker_type === 'traditional') ? p.sponsor_id : '') }))}
               className={`flex-1 px-3 py-2.5 text-sm font-semibold transition border-l-2 border-gray-200 ${form.broker_type === 'traditional' ? 'bg-amber-600 text-white' : 'bg-white text-amber-700 hover:bg-amber-50'}`}
             >
               Traditional broker
@@ -546,8 +546,12 @@ export default function Brokers() {
           <div className="col-span-2 mt-2 pt-3 border-t border-gray-100">
             <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Sponsor / Upline (drives differential payouts)</label>
             <p className="text-xs text-gray-400 mt-0.5 mb-2">Type a name, broker ID or phone to filter. Pick a result from the list, or leave blank for top-of-tree brokers.</p>
+            {/* MLM and Traditional trees are strictly separate -- only let admin pick
+                a sponsor of the same broker_type as the broker being edited.  The DB
+                trigger enforce_same_type_sponsor would refuse a cross-type save anyway,
+                but filtering up front avoids confusing "sponsor must match" errors. */}
             <SponsorPicker
-              brokers={allBrokers}
+              brokers={allBrokers.filter((b: any) => (b.broker_type || 'mlm') === (form.broker_type || 'mlm'))}
               value={form.sponsor_id}
               excludeId={editing?.id}
               onChange={(id) => set('sponsor_id', id)}

@@ -51,6 +51,20 @@ export default function BrokerTree() {
     setSearchParams(next, { replace: true })
   }
   const [search, setSearch] = useState('')
+  // Tree type tab.  Admin: "their both tree are different, no relationship with each other."
+  // MLM and Traditional brokers each have their own sponsor chains; never mix the two
+  // on the same page.  Default to MLM since that's where the differential cascade lives.
+  const [treeType, setTreeType] = useState<'mlm' | 'traditional'>(
+    (searchParams.get('type') === 'traditional' ? 'traditional' : 'mlm')
+  )
+  const setTreeTypeAndUrl = (t: 'mlm' | 'traditional') => {
+    setTreeType(t)
+    const next = new URLSearchParams(searchParams)
+    if (t === 'traditional') next.set('type', 'traditional'); else next.delete('type')
+    next.delete('root') // clear any root pin when switching trees
+    setSearchParams(next, { replace: true })
+    setRootIdState('')
+  }
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   // One-shot: collapse the whole tree by default the FIRST time brokers data arrives,
   // so admin sees a focused starting point (just the roots) instead of 37+ broker cards
@@ -64,11 +78,15 @@ export default function BrokerTree() {
   }, [searchParams])
 
   const { data: brokers = [], isLoading } = useQuery({
-    queryKey: ['team_tree_brokers'],
+    // Key includes treeType so switching tabs refetches the right slice and the
+    // tree memo recomputes from a clean dataset (no leftover Traditional rows in
+    // the MLM tree map and vice versa).
+    queryKey: ['team_tree_brokers', treeType],
     queryFn: async () => {
       const { data, error } = await supabase
         .from('brokers')
-        .select('id, name, broker_id, rank, phone, email, status, kyc_status, sponsor_id, created_at')
+        .select('id, name, broker_id, rank, phone, email, status, kyc_status, sponsor_id, created_at, broker_type')
+        .eq('broker_type', treeType)
         .order('name')
       if (error) throw error
       return (data || []) as Broker[]
@@ -303,7 +321,29 @@ export default function BrokerTree() {
     <div className="p-4 md:p-8 space-y-6 max-w-7xl mx-auto">
       <div>
         <h1 className="text-2xl md:text-3xl font-bold text-gray-900 tracking-tight">Team Network</h1>
-        <p className="text-sm text-gray-500 mt-1">Your MLM downline · {brokers.length} brokers · top-down org chart.</p>
+        <p className="text-sm text-gray-500 mt-1">
+          {treeType === 'mlm'
+            ? `MLM downline · ${brokers.length} brokers · differential cascade pays uplines.`
+            : `Traditional brokers · ${brokers.length} brokers · standalone, no upline cascade.`}
+        </p>
+      </div>
+
+      {/* MLM and Traditional brokers are strictly separate trees -- no sponsor link
+          can cross the boundary and the differential cascade stops at it.  Default
+          to MLM since that's the bigger network. */}
+      <div className="inline-flex rounded-full bg-gray-100 p-1 text-sm">
+        <button
+          onClick={() => setTreeTypeAndUrl('mlm')}
+          className={`px-4 py-1.5 rounded-full font-medium transition ${
+            treeType === 'mlm' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >MLM Tree</button>
+        <button
+          onClick={() => setTreeTypeAndUrl('traditional')}
+          className={`px-4 py-1.5 rounded-full font-medium transition ${
+            treeType === 'traditional' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >Traditional Tree</button>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
