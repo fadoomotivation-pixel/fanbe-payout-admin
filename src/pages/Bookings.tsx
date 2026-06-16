@@ -70,8 +70,21 @@ function friendlyError(err: any, defaultMsg = 'Could not save the booking.  Plea
   if (m.includes('duplicate key')) {
     return 'A booking with the same details already exists.'
   }
+  // Identify which FK or check constraint actually failed so admin knows what to fix.
+  if (m.includes('broker') && (m.includes('foreign key') || m.includes('violates') || m.includes('constraint'))) {
+    return "The broker you picked no longer exists.  Pick another broker or use the '+ Add new broker' button to create one inline."
+  }
+  if (m.includes('customer') && (m.includes('foreign key') || m.includes('violates') || m.includes('constraint'))) {
+    return 'The customer you picked no longer exists.  Switch to "New customer" or pick another existing customer.'
+  }
+  if (m.includes('plot') && (m.includes('foreign key') || m.includes('violates') || m.includes('constraint'))) {
+    return 'The plot you picked no longer exists.  Pick another available plot.'
+  }
+  if (m.includes('project') && (m.includes('foreign key') || m.includes('violates') || m.includes('constraint'))) {
+    return 'The project you picked no longer exists.  Pick another project.'
+  }
   if (m.includes('foreign key') || m.includes('violates') && m.includes('constraint')) {
-    return 'One of the linked records (broker, customer or plot) is missing or was deleted.  Please reselect and try again.'
+    return 'One of the linked records (broker, customer, plot or project) is missing.  Please reselect and try again.  Check the browser console for the exact field.'
   }
   if (m.includes('jwt') || m.includes('not authenticated') || m.includes('unauthorized')) {
     return 'Your session has expired.  Please sign in again.'
@@ -435,7 +448,10 @@ export default function Bookings() {
                 sponsor_id: rest.broker_id,
                 broker_type: 'mlm',
                 status: 'active',
-                rank: 'Executive',
+                // 'Post-Executive' is the lowest active slab in commission_ranks (level 1, 5%).
+                // If we set this to a name not in commission_ranks the trigger gets direct_pct=0
+                // and historically over-paid uplines on the full rank% instead of the differential.
+                rank: 'Post-Executive',
               })
               qc.invalidateQueries({ queryKey: ['brokers'] })
             }
@@ -745,6 +761,26 @@ export default function Bookings() {
     // Broker is now required on every booking — admin asked for it, and the trigger
     // also needs broker_id to credit any commission.
     if (!form.broker_id) { toast.error('Pick the broker who made the sale (required)'); return }
+
+    // Traditional bookings MUST set a commission > 0 — otherwise the trigger has nothing
+    // to distribute and the broker silently earns ₹0 even though the customer paid in
+    // full.  This was the root cause of the "wrong commission" complaint.  Total includes
+    // the primary + any extra brokers admin added in the multi-broker split section.
+    if (form.commission_mode === 'traditional') {
+      const primary = form.traditional_input === 'per_sqyd'
+        ? num(form.traditional_commission_per_sqyd)
+        : num(form.traditional_commission_pct)
+      const extras = (splitBrokers || []).reduce((s, x) => s + num(x.commission_pct), 0)
+      if (primary <= 0 && extras <= 0) {
+        toast.error(
+          form.traditional_input === 'per_sqyd'
+            ? 'Enter a commission rate per gaj (₹/sq.yd) greater than 0 — otherwise the broker earns nothing.'
+            : 'Enter a commission % greater than 0 — otherwise the broker earns nothing.'
+        )
+        return
+      }
+    }
+
     if (!editing) {
       if (form.token_enabled && !num(form.token_amount))     { toast.error('Token amount is required (or uncheck the section)'); return }
       if (form.booking_enabled && !num(form.booking_amount)) { toast.error('Booking amount is required (or uncheck the section if the customer has not paid the booking deposit yet)'); return }
@@ -802,9 +838,11 @@ export default function Bookings() {
         email,
         broker_type,
         status: 'active',
-        // MLM brokers default to the lowest rank; traditional brokers don't use ranks
-        // but the column is non-null so 'Executive' is the safe fallback either way.
-        rank: 'Executive',
+        // MLM brokers default to the lowest active rank slab; traditional brokers don't use
+        // ranks but the column is non-null so 'Post-Executive' is the safe fallback either way.
+        // Must match a row in commission_ranks (level 1, 5%) — anything else makes
+        // recompute_booking_payouts hit direct_pct=0 and historically over-paid the upline cascade.
+        rank: 'Post-Executive',
       }
       const { data: created, error } = await supabase.from('brokers').insert(payload).select().single()
       if (error) throw error
