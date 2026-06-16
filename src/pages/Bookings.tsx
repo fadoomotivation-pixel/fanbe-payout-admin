@@ -64,8 +64,19 @@ function friendlyError(err: any, defaultMsg = 'Could not save the booking.  Plea
   if (m.includes('null value in column "plot_id"') || m.includes('plot_id') && m.includes('null')) {
     return 'Please select a plot for this booking.'
   }
+  // Pre-flight error thrown by the create mutation when the new-customer block is
+  // missing name or phone -- and the matching DB NOT NULL on bp_customers.phone.
+  if (m.includes('new customer name & phone required') || m.includes('null value in column "phone"') || (m.includes('phone') && m.includes('not-null'))) {
+    return "Please enter the customer's mobile number — it's required to save the booking."
+  }
   if (m.includes('duplicate key') && m.includes('utr')) {
     return 'That UTR / reference number has already been used on another payment.'
+  }
+  if (m.includes('duplicate key') && (m.includes('brokers_email_key') || m.includes('brokers_email'))) {
+    return "A broker with that email already exists.  If you've already added this broker, pick them from the dropdown instead of adding again."
+  }
+  if (m.includes('duplicate key') && (m.includes('brokers_phone') || m.includes('brokers_phone_key'))) {
+    return "A broker with that phone number already exists.  Pick them from the dropdown instead of adding again."
   }
   if (m.includes('duplicate key')) {
     return 'A booking with the same details already exists.'
@@ -761,6 +772,18 @@ export default function Bookings() {
     // Broker is now required on every booking — admin asked for it, and the trigger
     // also needs broker_id to credit any commission.
     if (!form.broker_id) { toast.error('Pick the broker who made the sale (required)'); return }
+
+    // New-customer block: bp_customers.phone is NOT NULL on this schema, so blocking
+    // here avoids hitting the generic "Could not save the booking" toast that admins
+    // saw whenever the customer card was filled in without a mobile number.
+    if (form.cust_mode === 'new') {
+      const cName = (form.new_customer?.name || '').trim()
+      const cPhone = (form.new_customer?.phone || '').trim()
+      if (!cName)  { toast.error("Please enter the customer's full name."); return }
+      if (!cPhone) { toast.error("Please enter the customer's mobile number — it's required to save the booking."); return }
+    } else if (!form.customer_id) {
+      toast.error("Pick a customer or switch to 'New customer' to add one."); return
+    }
 
     // Traditional bookings MUST set a commission > 0 — otherwise the trigger has nothing
     // to distribute and the broker silently earns ₹0 even though the customer paid in
