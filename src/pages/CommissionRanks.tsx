@@ -13,7 +13,7 @@ interface Rank {
   level: number;
   rank_name: string;
   commission_pct: number;
-  rank_qualification_type: 'sq_yards' | 'sub_ranks';
+  rank_qualification_type: 'sq_yards' | 'direct_sq_yards' | 'sub_ranks';
   min_sq_yards: number;
   max_sq_yards: number | null;
   required_sub_rank_level: number | null;
@@ -24,8 +24,9 @@ interface Rank {
 }
 
 const QUALIFY_TYPES = [
-  { value: 'sq_yards',  label: 'Sq Yards (team volume)' },
-  { value: 'sub_ranks', label: 'Sub-rank count (3 of rank N)' },
+  { value: 'direct_sq_yards', label: 'Sq Yards (direct sales only — entry)' },
+  { value: 'sq_yards',        label: 'Sq Yards (team volume)' },
+  { value: 'sub_ranks',       label: 'Sub-rank count (3 of rank N)' },
 ] as const;
 
 export default function CommissionRanks() {
@@ -65,7 +66,9 @@ export default function CommissionRanks() {
     setSaving(true);
     setError(null);
     const patch: Partial<Rank> = { ...draft };
-    if (patch.rank_qualification_type === 'sq_yards') {
+    // sq_yards (team) and direct_sq_yards (R1's direct-only count) both use the
+    // min/max sqyd columns; only sub_ranks needs the required_sub_rank_* fields.
+    if (patch.rank_qualification_type === 'sq_yards' || patch.rank_qualification_type === 'direct_sq_yards') {
       patch.required_sub_rank_level = null;
       patch.required_sub_rank_count = null;
     } else if (patch.rank_qualification_type === 'sub_ranks') {
@@ -82,12 +85,13 @@ export default function CommissionRanks() {
   }
 
   function describeQualification(r: Rank): string {
-    if (r.rank_qualification_type === 'sq_yards') {
+    if (r.rank_qualification_type === 'sq_yards' || r.rank_qualification_type === 'direct_sq_yards') {
       const min = r.min_sq_yards;
       const max = r.max_sq_yards;
       const range = max ? `${min}–${max}` : `${min}+`;
+      const scope = r.rank_qualification_type === 'direct_sq_yards' ? ' direct' : ' team';
       const directs = r.min_directs > 0 ? ` · min ${r.min_directs} direct` : '';
-      return `${range} Sq Yds${directs}`;
+      return `${range} Sq Yds${scope}${directs}`;
     }
     const subRank = r.required_sub_rank_level
       ? (ranksByLevel.get(r.required_sub_rank_level)?.rank_name ?? `Rank ${r.required_sub_rank_level}`)
@@ -108,14 +112,14 @@ export default function CommissionRanks() {
       </div>
 
       <div className="flex flex-wrap gap-2 mb-4">
+        <span className="inline-flex items-center gap-1.5 text-xs bg-amber-50 border border-amber-200 text-amber-700 rounded-lg px-3 py-1.5">
+          <Square size={11} /> Rank 1: 0–100 sqyd direct (any leg)
+        </span>
         <span className="inline-flex items-center gap-1.5 text-xs bg-blue-50 border border-blue-200 text-blue-700 rounded-lg px-3 py-1.5">
-          <Square size={11} /> Ranks 1–5 qualify by Sq Yards
+          <Square size={11} /> Ranks 2–5: team sqyd (direct + indirect both count)
         </span>
         <span className="inline-flex items-center gap-1.5 text-xs bg-purple-50 border border-purple-200 text-purple-700 rounded-lg px-3 py-1.5">
-          <Users size={11} /> Ranks 6–15 require 3× of a previous rank
-        </span>
-        <span className="inline-flex items-center gap-1.5 text-xs bg-amber-50 border border-amber-200 text-amber-700 rounded-lg px-3 py-1.5">
-          <Info size={11} /> Rank-1 also requires minimum 1 direct downline
+          <Users size={11} /> Ranks 6–15: 3 brokers of the previous rank
         </span>
       </div>
 
@@ -224,14 +228,21 @@ export default function CommissionRanks() {
                   {Number(r.commission_pct).toFixed(1)}%
                 </td>
                 <td className="px-4 py-3">
-                  <span className={`inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full font-medium ${
-                    r.rank_qualification_type === 'sq_yards'
-                      ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                      : 'bg-purple-50 text-purple-700 border border-purple-200'
-                  }`}>
-                    {r.rank_qualification_type === 'sq_yards' ? <Square size={11}/> : <Users size={11}/>}
-                    {r.rank_qualification_type === 'sq_yards' ? 'Sq Yards' : 'Sub-ranks'}
-                  </span>
+                  {(() => {
+                    const t = r.rank_qualification_type
+                    const style = t === 'direct_sq_yards' ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                : t === 'sq_yards'        ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                                                          : 'bg-purple-50 text-purple-700 border border-purple-200'
+                    const label = t === 'direct_sq_yards' ? 'Direct Sq Yards'
+                                : t === 'sq_yards'        ? 'Team Sq Yards'
+                                                          : 'Sub-ranks'
+                    return (
+                      <span className={`inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full font-medium ${style}`}>
+                        {t === 'sub_ranks' ? <Users size={11}/> : <Square size={11}/>}
+                        {label}
+                      </span>
+                    )
+                  })()}
                 </td>
                 <td className="px-4 py-3 text-gray-700 tabular-nums text-xs">
                   {describeQualification(r)}
