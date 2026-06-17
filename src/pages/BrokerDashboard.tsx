@@ -124,7 +124,7 @@ export default function BrokerDashboard() {
     // dashboard team tab — the two views must agree.
     const customerLookupIds = [b.id, ...dlIds]
     if (customerLookupIds.length) {
-      const [{ data: dlDist }, { data: dlBk }] = await Promise.all([
+      const [{ data: dlDist }, { data: dlBk }, { data: linkedBrokers }] = await Promise.all([
         dlIds.length
           ? supabase
               .from('payout_distributions')
@@ -133,26 +133,47 @@ export default function BrokerDashboard() {
           : Promise.resolve({ data: [] as any[] }),
         supabase
           .from('bp_bookings')
-          .select('broker_id, customer_id, bp_customers(id, name, customer_code)')
+          .select('broker_id, customer_id, bp_customers(id, name, customer_code, phone)')
           .in('broker_id', customerLookupIds)
           .not('customer_id', 'is', null),
+        // Dedupe customers that are also brokers (auto-promote target).  Same 3-signal
+        // approach as the /team-tree page: customer_id link, broker_id == customer_code,
+        // or exact phone match.  Without this the team mini-tree on the broker dashboard
+        // shows the same person twice (once as a broker card, once as a "Make broker"
+        // customer leaf) -- "uneducated people think they have two bookings."
+        supabase
+          .from('brokers')
+          .select('customer_id, broker_id, phone'),
       ])
       const earnedMap: Record<string, number> = {}
       for (const d of (dlDist || []) as any[]) {
         if (!d.beneficiary_broker_id) continue
         earnedMap[d.beneficiary_broker_id] = (earnedMap[d.beneficiary_broker_id] || 0) + Number(d.net_payout || 0)
       }
+      const isBrokerCustId = new Set<string>()
+      const brokerCodes    = new Set<string>()
+      const brokerPhones   = new Set<string>()
+      for (const r of (linkedBrokers || []) as any[]) {
+        if (r.customer_id) isBrokerCustId.add(r.customer_id)
+        if (r.broker_id)   brokerCodes.add(String(r.broker_id))
+        if (r.phone)       brokerPhones.add(String(r.phone).trim())
+      }
       const seen: Record<string, Set<string>> = {}
       const custMap: Record<string, { id: string; name: string; code: string }[]> = {}
       for (const r of (dlBk || []) as any[]) {
-        if (!r.bp_customers) continue
+        const cust = r.bp_customers
+        if (!cust) continue
+        // Skip customers that are already a broker (any of the 3 signals).
+        if (isBrokerCustId.has(r.customer_id)) continue
+        if (cust.customer_code && brokerCodes.has(String(cust.customer_code))) continue
+        if (cust.phone && brokerPhones.has(String(cust.phone).trim())) continue
         const s = (seen[r.broker_id] ??= new Set())
         if (s.has(r.customer_id)) continue
         s.add(r.customer_id)
         ;(custMap[r.broker_id] ??= []).push({
-          id:   r.bp_customers.id,
-          name: r.bp_customers.name || '—',
-          code: r.bp_customers.customer_code || '',
+          id:   cust.id,
+          name: cust.name || '—',
+          code: cust.customer_code || '',
         })
       }
       setDownlineEarnings(earnedMap)
