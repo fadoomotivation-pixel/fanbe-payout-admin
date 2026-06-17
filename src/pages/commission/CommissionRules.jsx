@@ -6,7 +6,7 @@ import toast from 'react-hot-toast'
 import { Info, Pencil, Check, X, Clock } from 'lucide-react'
 
 const DEFAULT_RANKS = [
-  { rank_level: 1,  title: 'Post-Executive',       commission_pct: 5.0,  qualification: '100 sq yd personal + 1 direct' },
+  { rank_level: 1,  title: 'Executive',       commission_pct: 5.0,  qualification: '100 sq yd personal + 1 direct' },
   { rank_level: 2,  title: 'Senior Executive',      commission_pct: 5.5,  qualification: '500 sq yd team' },
   { rank_level: 3,  title: 'Sales Officer',         commission_pct: 6.0,  qualification: '750 sq yd team' },
   { rank_level: 4,  title: 'Senior Sales Officer',  commission_pct: 6.5,  qualification: '1250 sq yd team' },
