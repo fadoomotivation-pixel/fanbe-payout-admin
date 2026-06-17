@@ -44,7 +44,7 @@ export interface RankSlab {
   min_sq_yards: number           // team sq yards to qualify
   max_sq_yards: number | null
   commission_pct: number         // direct commission % at this rank
-  rank_qualification_type: 'sq_yards' | 'sub_ranks' // how rank is earned
+  rank_qualification_type: 'sq_yards' | 'direct_sq_yards' | 'sub_ranks' // how rank is earned
   required_sub_rank_level: number | null  // for rank 6+ (needs N brokers of sub-rank)
   required_sub_rank_count: number | null
   active: boolean
