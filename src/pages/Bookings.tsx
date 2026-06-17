@@ -459,10 +459,10 @@ export default function Bookings() {
                 sponsor_id: rest.broker_id,
                 broker_type: 'mlm',
                 status: 'active',
-                // 'Post-Executive' is the lowest active slab in commission_ranks (level 1, 5%).
+                // 'Executive' is the lowest active slab in commission_ranks (level 1, 5%).
                 // If we set this to a name not in commission_ranks the trigger gets direct_pct=0
                 // and historically over-paid uplines on the full rank% instead of the differential.
-                rank: 'Post-Executive',
+                rank: 'Executive',
               })
               qc.invalidateQueries({ queryKey: ['brokers'] })
             }
@@ -862,10 +862,10 @@ export default function Bookings() {
         broker_type,
         status: 'active',
         // MLM brokers default to the lowest active rank slab; traditional brokers don't use
-        // ranks but the column is non-null so 'Post-Executive' is the safe fallback either way.
+        // ranks but the column is non-null so 'Executive' is the safe fallback either way.
         // Must match a row in commission_ranks (level 1, 5%) — anything else makes
         // recompute_booking_payouts hit direct_pct=0 and historically over-paid the upline cascade.
-        rank: 'Post-Executive',
+        rank: 'Executive',
       }
       const { data: created, error } = await supabase.from('brokers').insert(payload).select().single()
       if (error) throw error

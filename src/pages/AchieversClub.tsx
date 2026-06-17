@@ -47,19 +47,54 @@ export default function AchieversClub() {
   useEffect(() => {
     async function load() {
       setLoading(true)
-      // Pull every broker + their booking sqyd + their distributed income in three queries.
+      // Pull every broker + their booking sqyd + their distributed income in four queries.
       // Aggregating in JS keeps SQL simple and avoids a custom RPC.
       const [{ data: brokers }, { data: bookings }, { data: distributions }, { data: ranks }] = await Promise.all([
-        supabase.from('brokers').select('id, name, broker_id, phone, rank, status, created_at'),
+        // Only MLM brokers are eligible -- the Achievers Club rewards team-building, and
+        // traditional brokers don't sit in the sponsor tree.
+        supabase.from('brokers').select('id, name, broker_id, phone, rank, status, created_at, sponsor_id').eq('broker_type', 'mlm'),
         supabase.from('bp_bookings').select('broker_id, bp_plots(size_sqyd)').eq('stage', 'booking_done'),
         supabase.from('payout_distributions').select('beneficiary_broker_id, net_payout'),
         supabase.from('commission_ranks').select('rank_name, badge_color'),
       ])
 
-      const sqydByBroker: Record<string, number> = {}
+      // Step 1: own-booking sqyd per broker (their direct sales).
+      const ownSqyd: Record<string, number> = {}
       for (const b of (bookings || []) as any[]) {
         if (!b.broker_id) continue
-        sqydByBroker[b.broker_id] = (sqydByBroker[b.broker_id] || 0) + Number(b.bp_plots?.size_sqyd || 0)
+        ownSqyd[b.broker_id] = (ownSqyd[b.broker_id] || 0) + Number(b.bp_plots?.size_sqyd || 0)
+      }
+
+      // Step 2: build the sponsor tree (direct children of each broker).
+      const directChildren: Record<string, string[]> = {}
+      for (const b of (brokers || []) as any[]) {
+        if (!b.sponsor_id) continue
+        ;(directChildren[b.sponsor_id] ??= []).push(b.id)
+      }
+
+      // Step 3: subtree sqyd for each broker (own + every descendant's own).
+      // Memoised DFS, single pass over the tree.
+      const subtreeSqyd: Record<string, number> = {}
+      function computeSubtree(id: string, seen: Set<string>): number {
+        if (subtreeSqyd[id] != null) return subtreeSqyd[id]
+        if (seen.has(id)) return 0 // cycle guard
+        seen.add(id)
+        let total = ownSqyd[id] || 0
+        for (const childId of (directChildren[id] || [])) total += computeSubtree(childId, seen)
+        subtreeSqyd[id] = total
+        return total
+      }
+      for (const b of (brokers || []) as any[]) computeSubtree(b.id, new Set())
+
+      // Step 4: team sqyd per broker WITH per-leg 1000-sqyd cap (admin's "1 leg
+      // 1000 gaj count only" rule).  Each direct child leg contributes at most
+      // 1000 sqyd to the achiever's qualifying total, plus the broker's own sales.
+      const LEG_CAP = 1000
+      const teamSqyd: Record<string, number> = {}
+      for (const b of (brokers || []) as any[]) {
+        const legs = (directChildren[b.id] || []).map(c => Math.min(subtreeSqyd[c] || 0, LEG_CAP))
+        const cappedTeam = legs.reduce((s, v) => s + v, 0)
+        teamSqyd[b.id] = (ownSqyd[b.id] || 0) + cappedTeam
       }
 
       const incomeByBroker: Record<string, number> = {}
@@ -75,7 +110,7 @@ export default function AchieversClub() {
       const rows: AchieverRow[] = (brokers || [])
         .filter((b: any) => b.status !== 'inactive')
         .map((b: any) => {
-          const sqyd = sqydByBroker[b.id] || 0
+          const sqyd = teamSqyd[b.id] || 0
           return {
             broker_id:     b.id,
             broker_name:   b.name || '—',
@@ -168,6 +203,18 @@ export default function AchieversClub() {
         </div>
       )}
 
+      {/* Closing rule: "1 leg 1000 gaj count only" -- explained inline so admins (and
+          brokers when this view ships to them) know why a leg with 4000 sqyd only
+          contributes 1000 sqyd to the achiever's qualifying total. */}
+      <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50/50 px-4 py-3 text-sm">
+        <p className="font-semibold text-amber-900 mb-1 flex items-center gap-1.5"><Info size={13}/>How qualification closes</p>
+        <ul className="list-disc pl-5 text-amber-800 space-y-0.5 text-[13px]">
+          <li>Need <b>{(config?.target_sq_yards ?? 3000).toLocaleString('en-IN')} sqyd</b> team business across {(config?.consecutive_months ?? 3)} consecutive months.</li>
+          <li><b>1-leg cap of 1,000 sqyd</b> -- any single direct downline contributes at most 1,000 sqyd toward your target, so the team has to be balanced across legs.</li>
+          <li>Your own direct sales also count toward the target.</li>
+        </ul>
+      </div>
+
       <input
         type="text" placeholder="Search broker name, code or phone..."
         value={search} onChange={e => setSearch(e.target.value)}
@@ -222,7 +269,7 @@ export default function AchieversClub() {
                     <th className="text-center px-4 py-3 font-semibold text-gray-600 w-12">Rank</th>
                     <th className="text-left px-4 py-3 font-semibold text-gray-600">Broker</th>
                     <th className="text-left px-4 py-3 font-semibold text-gray-600">Badge</th>
-                    <th className="text-right px-4 py-3 font-semibold text-gray-600">Lifetime (sqyd)</th>
+                    <th className="text-right px-4 py-3 font-semibold text-gray-600">Team sqyd (capped/leg)</th>
                     <th className="text-right px-4 py-3 font-semibold text-gray-600">Distributed Income</th>
                     <th className="text-center px-4 py-3 font-semibold text-gray-600">Status</th>
                   </tr>
@@ -255,7 +302,24 @@ export default function AchieversClub() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right tabular-nums font-semibold text-gray-800">
-                        {a.lifetime_sqyd.toLocaleString('en-IN')}
+                        <div>{a.lifetime_sqyd.toLocaleString('en-IN')}</div>
+                        {/* Per-broker progress -- "how much achieved" toward 3000.
+                            Bar fills the target proportionally, capped at 100%. */}
+                        {(() => {
+                          const target = config?.target_sq_yards ?? 3000
+                          const pct = Math.min(100, Math.round((a.lifetime_sqyd / target) * 100))
+                          return (
+                            <div className="mt-1 w-32 ml-auto">
+                              <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
+                                <div
+                                  className={`h-full ${a.is_qualifying ? 'bg-emerald-500' : 'bg-amber-400'}`}
+                                  style={{ width: `${pct}%` }}
+                                />
+                              </div>
+                              <div className="text-[10px] text-gray-400 mt-0.5">{pct}% of {target.toLocaleString('en-IN')}</div>
+                            </div>
+                          )
+                        })()}
                       </td>
                       <td className="px-4 py-3 text-right tabular-nums text-teal-700 font-medium">
                         {formatINR(a.total_income)}

@@ -12,7 +12,7 @@ import { Plus, Search, KeyRound, Copy, Check, Eye, UserPlus, X } from 'lucide-re
 import toast from 'react-hot-toast'
 
 const EMPTY = {
-  name:'', email:'', phone:'', referral_code:'', rank:'Post-Executive', status:'active',
+  name:'', email:'', phone:'', referral_code:'', rank:'Executive', status:'active',
   // broker_type splits the directory in two buckets so admin can't accidentally credit
   // a tree-broker on a traditional sale (or vice versa).
   // - 'mlm'         : sits in the sponsor tree, earns via the differential cascade
@@ -139,7 +139,7 @@ export default function Brokers() {
     setShowEditPassword(false)
     setForm(b ? {
       name:b.name, email:b.email||'', phone:b.phone||'', referral_code:b.referral_code||'',
-      rank:b.rank||'Post-Executive', status:b.status||'active', tds_applicable:!!b.tds_applicable,
+      rank:b.rank||'Executive', status:b.status||'active', tds_applicable:!!b.tds_applicable,
       broker_type: b.broker_type || 'mlm',
       pan_no:b.pan_no||'', gst_no:b.gst_no||'',
       sponsor_id:b.sponsor_id||'', date_of_joining:b.date_of_joining||'',

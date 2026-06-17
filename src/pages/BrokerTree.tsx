@@ -116,31 +116,43 @@ export default function BrokerTree() {
   const { data: customersByBroker = {} } = useQuery<Record<string, { id: string; name: string; code: string }[]>>({
     queryKey: ['team_tree_customers_full'],
     queryFn: async () => {
-      // Two queries: bookings (broker -> customer link) AND brokers (who's already a broker).
-      // Customers that ARE brokers are skipped from the customer-leaf list so the team tree
-      // doesn't show duplicate nodes + "Make broker" buttons for someone who's already in
-      // the tree as a broker.  After the v6 backfill, basically every existing customer
-      // satisfies this.
+      // Dedupe a customer from the leaf list when they're also a broker, so the tree
+      // doesn't render the same person twice (once as a broker card, once as a "Make
+      // broker" customer leaf).  Three signals catch this -- they overlap and any one
+      // is enough:
+      //   (a) brokers.customer_id linked to this customer (the strongest signal,
+      //       set by the auto-promote flow on every new MLM booking),
+      //   (b) brokers.broker_id == customer.customer_code (PR #119 keeps these in
+      //       sync, so for existing data it's effectively the same as (a)),
+      //   (c) brokers.phone exact-matches customer.phone (catches legacy rows where
+      //       customer_id was never set and a broker was added manually).
       const [{ data }, { data: linkedBrokers }] = await Promise.all([
         supabase
           .from('bp_bookings')
-          .select('broker_id, customer_id, bp_customers(id, name, customer_code)')
+          .select('broker_id, customer_id, bp_customers(id, name, customer_code, phone)')
           .not('broker_id', 'is', null)
           .not('customer_id', 'is', null),
         supabase
           .from('brokers')
-          .select('customer_id')
-          .not('customer_id', 'is', null),
+          .select('customer_id, broker_id, phone'),
       ])
-      const customerIsBroker = new Set((linkedBrokers || []).map((r: any) => r.customer_id))
+      const customerIsBroker = new Set<string>()
+      const brokerCodes = new Set<string>()
+      const brokerPhones = new Set<string>()
+      for (const r of (linkedBrokers || []) as any[]) {
+        if (r.customer_id) customerIsBroker.add(r.customer_id)
+        if (r.broker_id) brokerCodes.add(String(r.broker_id))
+        if (r.phone) brokerPhones.add(String(r.phone).trim())
+      }
       const seen: Record<string, Set<string>> = {}
       const out: Record<string, { id: string; name: string; code: string }[]> = {}
       for (const r of (data || []) as any[]) {
         if (!r.bp_customers) continue
-        // Skip if this customer is already a broker -- they show in the tree as a broker
-        // node directly, so we don't also want them as a "customer leaf" with a Make
-        // broker button.
+        // Skip if this customer is already a broker (via any of the 3 signals above).
+        const cust = r.bp_customers
         if (customerIsBroker.has(r.customer_id)) continue
+        if (cust?.customer_code && brokerCodes.has(String(cust.customer_code))) continue
+        if (cust?.phone && brokerPhones.has(String(cust.phone).trim())) continue
         const set = (seen[r.broker_id] ??= new Set())
         if (set.has(r.customer_id)) continue
         set.add(r.customer_id)
