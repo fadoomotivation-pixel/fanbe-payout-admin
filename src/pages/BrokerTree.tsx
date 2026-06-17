@@ -7,6 +7,7 @@ import toast from 'react-hot-toast'
 import {
   ChevronRight, ChevronDown, Search, Users, TrendingUp,
   ShieldCheck, AlertCircle, Phone, MessageCircle, Layers, GitBranch, User, UserPlus, Loader2,
+  ZoomIn, ZoomOut, Maximize2, Minimize2, LayoutGrid, List as ListIcon, Network, Award,
 } from 'lucide-react'
 
 type Broker = {
@@ -64,6 +65,34 @@ export default function BrokerTree() {
     next.delete('root') // clear any root pin when switching trees
     setSearchParams(next, { replace: true })
     setRootIdState('')
+  }
+
+  // View mode + zoom -- admin kept getting lost in the wide org-chart, so we offer
+  // four ways to read the same data:
+  //   - "chart"   : the existing top-down org chart (default)
+  //   - "compact" : same chart but with mini cards so the whole network fits screen
+  //   - "list"    : file-explorer-style indented list, fastest for scanning by name
+  //   - "rank"    : flat groups by rank slab, no hierarchy -- useful for "show me all GMs"
+  // Zoom is a CSS scale on the chart wrapper; it stays out of the way of list / rank.
+  type ViewMode = 'chart' | 'compact' | 'list' | 'rank'
+  const initialView: ViewMode = (() => {
+    const v = searchParams.get('view')
+    return (v === 'compact' || v === 'list' || v === 'rank') ? v : 'chart'
+  })()
+  const [viewMode, setViewMode] = useState<ViewMode>(initialView)
+  const setViewModeAndUrl = (m: ViewMode) => {
+    setViewMode(m)
+    const next = new URLSearchParams(searchParams)
+    if (m === 'chart') next.delete('view'); else next.set('view', m)
+    setSearchParams(next, { replace: true })
+  }
+  const [zoom, setZoom] = useState(1)
+  const [fullscreen, setFullscreen] = useState(false)
+  const cycleZoom = (delta: number) => {
+    const steps = [0.5, 0.65, 0.8, 1, 1.15, 1.3, 1.5]
+    const i = steps.findIndex(s => Math.abs(s - zoom) < 0.01)
+    const next = steps[Math.max(0, Math.min(steps.length - 1, (i < 0 ? 3 : i) + delta))]
+    setZoom(next)
   }
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   // One-shot: collapse the whole tree by default the FIRST time brokers data arrives,
@@ -330,7 +359,8 @@ export default function BrokerTree() {
   }
 
   return (
-    <div className="p-4 md:p-8 space-y-6 max-w-7xl mx-auto">
+    <div className={fullscreen ? 'fixed inset-0 z-50 bg-white overflow-auto p-3 md:p-6' : 'p-4 md:p-8 space-y-6 max-w-7xl mx-auto'}>
+      <div className={fullscreen ? 'space-y-3' : 'space-y-6'}>
       <div>
         <h1 className="text-2xl md:text-3xl font-bold text-gray-900 tracking-tight">Team Network</h1>
         <p className="text-sm text-gray-500 mt-1">
@@ -365,6 +395,40 @@ export default function BrokerTree() {
         <Kpi icon={<TrendingUp size={16}/>}   label="Total earned"     value={formatINR(kpi.totalEarned)}/>
       </div>
 
+      {/* View-mode toolbar: 4 ways to read the same network.  "Chart" is the
+          classic org chart; "Compact" mini-cards fit a wide network on one screen;
+          "List" is a file-explorer-style indent for fast name scanning; "By Rank"
+          flattens the tree into per-slab groups so admin can see all GMs at a glance. */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="inline-flex rounded-full bg-gray-100 p-1 text-xs">
+          {([
+            { k: 'chart',   label: 'Org Chart', icon: Network },
+            { k: 'compact', label: 'Compact',   icon: LayoutGrid },
+            { k: 'list',    label: 'List',      icon: ListIcon },
+            { k: 'rank',    label: 'By Rank',   icon: Award },
+          ] as const).map(({ k, label, icon: Icon }) => (
+            <button key={k}
+              onClick={() => setViewModeAndUrl(k)}
+              className={`px-3 py-1.5 rounded-full font-medium transition inline-flex items-center gap-1.5 ${
+                viewMode === k ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+              }`}
+            ><Icon size={13}/>{label}</button>
+          ))}
+        </div>
+        {/* Zoom + fullscreen only matter for the visual chart modes. */}
+        {(viewMode === 'chart' || viewMode === 'compact') && (
+          <div className="inline-flex items-center gap-1 text-xs bg-white border border-gray-200 rounded-full p-1">
+            <button onClick={() => cycleZoom(-1)} className="w-7 h-7 rounded-full hover:bg-gray-100 inline-flex items-center justify-center" title="Zoom out"><ZoomOut size={13}/></button>
+            <button onClick={() => setZoom(1)} className="px-2 tabular-nums font-medium text-gray-700" title="Reset to 100%">{Math.round(zoom * 100)}%</button>
+            <button onClick={() => cycleZoom(1)} className="w-7 h-7 rounded-full hover:bg-gray-100 inline-flex items-center justify-center" title="Zoom in"><ZoomIn size={13}/></button>
+            <div className="w-px h-4 bg-gray-200 mx-1"/>
+            <button onClick={() => setFullscreen(f => !f)} className="w-7 h-7 rounded-full hover:bg-gray-100 inline-flex items-center justify-center" title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
+              {fullscreen ? <Minimize2 size={13}/> : <Maximize2 size={13}/>}
+            </button>
+          </div>
+        )}
+      </div>
+
       <div className="flex flex-wrap gap-2 items-center">
         <div className="relative flex-1 min-w-[220px]">
           <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400"/>
@@ -383,29 +447,34 @@ export default function BrokerTree() {
             ))}
           </optgroup>
         </select>
-        <button onClick={expandAll}
-          className="px-3 py-2.5 text-sm rounded-full bg-white border border-gray-200 text-gray-700 hover:border-gray-300">
-          Expand all
-        </button>
-        <button onClick={collapseAll}
-          className="px-3 py-2.5 text-sm rounded-full bg-white border border-gray-200 text-gray-700 hover:border-gray-300">
-          Collapse
-        </button>
+        {(viewMode === 'chart' || viewMode === 'compact' || viewMode === 'list') && (<>
+          <button onClick={expandAll}
+            className="px-3 py-2.5 text-sm rounded-full bg-white border border-gray-200 text-gray-700 hover:border-gray-300">
+            Expand all
+          </button>
+          <button onClick={collapseAll}
+            className="px-3 py-2.5 text-sm rounded-full bg-white border border-gray-200 text-gray-700 hover:border-gray-300">
+            Collapse
+          </button>
+        </>)}
       </div>
 
       <div className="bg-white rounded-2xl border border-gray-200 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
         {isLoading && <div className="py-16 text-center text-sm text-gray-400">Loading network…</div>}
-        {!isLoading && visibleRoots.length === 0 && (
+        {!isLoading && visibleRoots.length === 0 && viewMode !== 'rank' && (
           <div className="py-16 text-center text-sm text-gray-400">
             {rootId ? 'Broker not found in tree.' : 'No brokers yet — add some to see the network.'}
           </div>
         )}
-        {!isLoading && visibleRoots.length > 0 && (
-          // Horizontal scroll so wide trees don't break the layout on mobile.
-          // overscroll-x-contain stops the swipe-to-go-back gesture from triggering when
-          // admin pans the wide tree on mobile.  Momentum scroll on iOS via -webkit-overflow-scrolling.
-          <div className="overflow-x-auto p-3 sm:p-6" style={{ WebkitOverflowScrolling: 'touch', overscrollBehaviorX: 'contain' }}>
-            <div className="inline-flex gap-3 sm:gap-8 mx-auto min-w-full justify-center">
+        {!isLoading && visibleRoots.length > 0 && (viewMode === 'chart' || viewMode === 'compact') && (
+          // Horizontal scroll for wide trees + CSS zoom on the inner wrapper so
+          // admin can shrink to fit or zoom in to inspect.  Compact mode passes a
+          // `compact` flag down to each card so they render in mini form.
+          <div className="overflow-auto p-3 sm:p-6" style={{ WebkitOverflowScrolling: 'touch', overscrollBehaviorX: 'contain', maxHeight: fullscreen ? 'calc(100vh - 220px)' : undefined }}>
+            <div
+              className="inline-flex gap-3 sm:gap-8 mx-auto min-w-full justify-center"
+              style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
+            >
               {visibleRoots.map(b => (
                 <OrgNode
                   key={b.id} broker={b} isRoot
@@ -416,6 +485,7 @@ export default function BrokerTree() {
                   customers={customersByBroker}
                   aggregateEarnings={aggregateEarnings}
                   matchedIds={matchedIds}
+                  compact={viewMode === 'compact'}
                   onToggle={toggleNode}
                   onPromote={(customerId: string, sponsorId: string) => promoteToBroker.mutate({ customerId, sponsorId })}
                   isPromoting={promoteToBroker.isPending}
@@ -424,11 +494,127 @@ export default function BrokerTree() {
             </div>
           </div>
         )}
+        {!isLoading && visibleRoots.length > 0 && viewMode === 'list' && (
+          <div className="p-3 sm:p-5">
+            <ListView
+              roots={visibleRoots}
+              tree={tree}
+              collapsed={collapsed}
+              forceOpenIds={forceOpenIds}
+              matchedIds={matchedIds}
+              earnings={earningsByBroker}
+              onToggle={toggleNode}
+            />
+          </div>
+        )}
+        {!isLoading && viewMode === 'rank' && (
+          <div className="p-3 sm:p-5">
+            <ByRankView brokers={brokers} earnings={earningsByBroker} matchedIds={matchedIds} />
+          </div>
+        )}
       </div>
 
       <div className="text-[11px] text-gray-400">
         Tip: tap any node to collapse its children. Pick a broker as the "root" above to focus on a single subtree. Search auto-expands the path to every match.
       </div>
+      </div>
+    </div>
+  )
+}
+
+// ── List view ────────────────────────────────────────────────────────────────
+// File-explorer-style indented list.  Compact -- one row per broker -- so admin
+// can scan hundreds of names by name + rank without scrolling sideways.  Same
+// collapse / expand state as the org chart so toggling here mirrors there.
+function ListView({ roots, tree, collapsed, forceOpenIds, matchedIds, earnings, onToggle }: any) {
+  const renderRow = (broker: Broker, depth: number): JSX.Element[] => {
+    const ch: Broker[] = tree.childrenOf.get(broker.id) || []
+    const isCollapsed = collapsed.has(broker.id) && !forceOpenIds.has(broker.id)
+    const showChildren = ch.length > 0 && !isCollapsed
+    const isMatched = matchedIds.has(broker.id)
+    const earned = earnings[broker.id]?.earned || 0
+    const subtreeSize = tree.subtreeSize[broker.id] || 0
+    const rows: JSX.Element[] = []
+    rows.push(
+      <div
+        key={broker.id}
+        className={`flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 ${isMatched ? 'bg-amber-50' : ''}`}
+        style={{ paddingLeft: 8 + depth * 18 }}
+      >
+        {ch.length > 0 ? (
+          <button onClick={() => onToggle(broker.id)} className="w-5 h-5 inline-flex items-center justify-center text-gray-500 hover:text-gray-900 rounded hover:bg-gray-100">
+            {isCollapsed ? <ChevronRight size={13}/> : <ChevronDown size={13}/>}
+          </button>
+        ) : (
+          <span className="w-5 h-5 inline-flex items-center justify-center text-gray-300">·</span>
+        )}
+        <Link to={`/broker/dashboard?broker_id=${broker.id}`} className="flex-1 min-w-0 inline-flex items-center gap-2 group">
+          <span className={`w-7 h-7 rounded-full inline-flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0 ${rankCls(broker.rank).replace('text-', 'bg-').replace('bg-bg-', 'bg-')}`}>
+            {(broker.name || '?').charAt(0).toUpperCase()}
+          </span>
+          <span className="text-sm font-medium text-gray-900 group-hover:text-blue-700 truncate">{broker.name || '—'}</span>
+          <span className="text-[10px] font-mono text-gray-400">[{broker.broker_id || '—'}]</span>
+          {broker.rank && (
+            <span className={`text-[10px] px-1.5 py-0.5 rounded ${rankCls(broker.rank)}`}>{broker.rank}</span>
+          )}
+        </Link>
+        <span className="text-[11px] text-gray-500 tabular-nums whitespace-nowrap">{subtreeSize > 0 ? `${subtreeSize} team` : 'no team'}</span>
+        <span className="text-[11px] font-medium text-emerald-700 tabular-nums whitespace-nowrap w-24 text-right">{earned > 0 ? formatINR(earned) : ''}</span>
+      </div>
+    )
+    if (showChildren) for (const c of ch) rows.push(...renderRow(c, depth + 1))
+    return rows
+  }
+  return <div className="divide-y divide-gray-50">{roots.flatMap((r: Broker) => renderRow(r, 0))}</div>
+}
+
+// ── By Rank view ─────────────────────────────────────────────────────────────
+// Flat groups by rank slab -- "Executives (24)", "Sr. Executives (3)" etc.  Useful
+// when admin asks "who are the GMs?" without caring about hierarchy.
+function ByRankView({ brokers, earnings, matchedIds }: any) {
+  const byRank: Record<string, Broker[]> = {}
+  for (const b of brokers as Broker[]) {
+    const k = b.rank || '— No rank —'
+    ;(byRank[k] ??= []).push(b)
+  }
+  // Order by RANK_COLORS keys (income plan order) first, then anything unknown after.
+  const knownOrder = Object.keys(RANK_COLORS)
+  const ranks = Object.keys(byRank).sort((a, b) => {
+    const ai = knownOrder.indexOf(a); const bi = knownOrder.indexOf(b)
+    if (ai === -1 && bi === -1) return a.localeCompare(b)
+    if (ai === -1) return 1
+    if (bi === -1) return -1
+    return ai - bi
+  })
+  return (
+    <div className="space-y-4">
+      {ranks.map(r => (
+        <div key={r}>
+          <div className="flex items-center gap-2 mb-2">
+            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${rankCls(r)}`}>{r}</span>
+            <span className="text-xs text-gray-400">{byRank[r].length}</span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+            {byRank[r].map((b: Broker) => {
+              const earned = earnings[b.id]?.earned || 0
+              const isMatched = matchedIds.has(b.id)
+              return (
+                <Link key={b.id} to={`/broker/dashboard?broker_id=${b.id}`}
+                  className={`flex items-center gap-2 p-2 rounded-lg border ${isMatched ? 'border-amber-300 bg-amber-50' : 'border-gray-200 bg-white'} hover:border-gray-300 hover:bg-gray-50 transition`}
+                >
+                  <div className={`w-8 h-8 rounded-full inline-flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0 ${rankCls(b.rank).replace('text-', 'bg-').replace('bg-bg-', 'bg-')}`}>
+                    {(b.name || '?').charAt(0).toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-gray-900 truncate">{b.name || '—'}</div>
+                    <div className="text-[10px] font-mono text-gray-400 truncate">[{b.broker_id || '—'}]{earned > 0 && ` · ${formatINR(earned)}`}</div>
+                  </div>
+                </Link>
+              )
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -439,7 +625,7 @@ export default function BrokerTree() {
 // risers to each child).  The horizontal bar is composed of two half-borders on each
 // child's top so it naturally spans only between the first and last child without any
 // JS measurement.
-function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, customers, aggregateEarnings, matchedIds, onToggle, onPromote, isPromoting }: any) {
+function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, customers, aggregateEarnings, matchedIds, compact, onToggle, onPromote, isPromoting }: any) {
   const subBrokers: Broker[] = tree.childrenOf.get(broker.id) || []
   const customerList: { id: string; name: string; code: string }[] = customers?.[broker.id] || []
   const hasSubBrokers = subBrokers.length > 0
@@ -474,6 +660,7 @@ function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, cust
         ownEarned={ownEarned}
         teamEarned={teamEarned}
         customers={customerList}
+        compact={compact}
         onToggle={() => hasChildren && onToggle(broker.id)}
       />
 
@@ -494,7 +681,7 @@ function OrgNode({ broker, isRoot, tree, collapsed, forceOpenIds, earnings, cust
                     <OrgNode
                       broker={c.data} tree={tree} collapsed={collapsed} forceOpenIds={forceOpenIds}
                       earnings={earnings} customers={customers} aggregateEarnings={aggregateEarnings}
-                      matchedIds={matchedIds} onToggle={onToggle}
+                      matchedIds={matchedIds} compact={compact} onToggle={onToggle}
                       onPromote={onPromote} isPromoting={isPromoting}
                     />
                   ) : (
@@ -569,11 +756,40 @@ function CustomerLeaf({ customer, sponsorBrokerId, onPromote, isPromoting }: {
   )
 }
 
-function NodeCard({ broker, isRoot, isMatched, hasChildren, isCollapsed, directCount, subtree, ownEarned, teamEarned, customers = [], onToggle }: any) {
+function NodeCard({ broker, isRoot, isMatched, hasChildren, isCollapsed, directCount, subtree, ownEarned, teamEarned, customers = [], compact, onToggle }: any) {
   // Customers now render as actual tree leaves when the broker is expanded — the pill is
   // a simple count badge again.  Tapping anywhere on the card (including the pill) toggles
   // the children, so Nisha tapped → reveals sub-brokers AND Nidhi as sibling leaves.
   const customerCount = customers.length
+  // Compact mode: ~half the width, just avatar + name + tiny rank chip + child count.
+  // Used by the "Compact" view-mode so wide networks fit on one screen.
+  if (compact) {
+    return (
+      <div
+        onClick={hasChildren ? onToggle : undefined}
+        className={`relative w-[90px] sm:w-[110px] rounded-xl border bg-white px-1.5 py-2 shadow-sm transition flex flex-col items-center
+          ${isMatched ? 'border-amber-300 ring-2 ring-amber-200' : 'border-gray-200 hover:border-gray-300'}
+          ${hasChildren ? 'cursor-pointer' : ''}`}
+        title={`${broker.name} · ${broker.rank || '—'} · ${subtree} team`}
+      >
+        <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold mb-1
+          ${isRoot ? 'bg-gray-900 text-white'
+          : broker.status === 'active' ? 'bg-gradient-to-br from-blue-500 to-indigo-600 text-white'
+          : 'bg-gray-100 text-gray-400'}`}>
+          {broker.name ? broker.name.charAt(0).toUpperCase() : <User size={14}/>}
+        </div>
+        <div className="text-[11px] font-semibold text-gray-900 truncate max-w-full text-center leading-tight">{broker.name || '—'}</div>
+        {broker.rank && (
+          <span className={`mt-1 text-[9px] px-1.5 py-0.5 rounded-full ${rankCls(broker.rank)}`}>{broker.rank}</span>
+        )}
+        {hasChildren && (
+          <div className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-gray-900 text-white text-[10px] font-bold flex items-center justify-center">
+            {isCollapsed ? `+${subtree}` : directCount}
+          </div>
+        )}
+      </div>
+    )
+  }
   return (
     <div
       onClick={hasChildren ? onToggle : undefined}
