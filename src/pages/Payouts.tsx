@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { Button } from '@/components/ui/Button.tsx'
 import { Input, Select, Textarea } from '@/components/ui/Input.tsx'
@@ -37,10 +37,27 @@ type LedgerEntry = {
   ref: string
   detail?: string
   booking_no?: string
+  // For commission_earned only: lets us render the math ("5% of ₹1,100 = ₹46.75 net")
+  income_type?: string
+  level?: number
+  base_amount?: number
+  rate_pct?: number
+  gross_payout?: number
 }
 export default function Payouts() {
   const qc = useQueryClient()
-  const [view, setView] = useState<'per_broker' | 'activity'>('per_broker')
+  // Sidebar can deep-link to ?view=activity to land on the commission ledger
+  // directly (the "show me the magic" view).  URL is the source of truth so
+  // tabs / browser back jumps keep things sane.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const urlView = (searchParams.get('view') === 'activity' ? 'activity' : 'per_broker') as 'per_broker' | 'activity'
+  const [view, setViewState] = useState<'per_broker' | 'activity'>(urlView)
+  const setView = (v: 'per_broker' | 'activity') => {
+    setViewState(v)
+    const next = new URLSearchParams(searchParams)
+    if (v === 'activity') next.set('view', 'activity'); else next.delete('view')
+    setSearchParams(next, { replace: true })
+  }
   const [statusF, setStatusF] = useState('')
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -58,7 +75,7 @@ export default function Payouts() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('payout_distributions')
-        .select('id, beneficiary_broker_id, booking_id, level, income_type, gross_payout, tds_amount, admin_charge, net_payout, created_at, status, bp_bookings(booking_no)')
+        .select('id, beneficiary_broker_id, booking_id, level, income_type, base_amount, rate_pct, differential_pct, upline_rank_pct, gross_payout, tds_amount, admin_charge, net_payout, created_at, status, bp_bookings(booking_no)')
         .order('created_at', { ascending: false })
         .limit(2000)
       if (error) throw error
@@ -270,6 +287,11 @@ export default function Payouts() {
         ref: bookingNo,
         booking_no: bookingNo,
         detail: `${d.income_type || 'direct'} · ${d.level === 0 ? 'self' : `L${d.level} upline`}`,
+        income_type:  d.income_type || 'direct',
+        level:        Number(d.level || 0),
+        base_amount:  Number(d.base_amount || 0),
+        rate_pct:     Number(d.rate_pct || d.differential_pct || 0),
+        gross_payout: Number(d.gross_payout || 0),
       })
     }
     for (const t of (txns as any[])) {
@@ -477,11 +499,37 @@ export default function Payouts() {
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead className="bg-gray-50 text-gray-500">
-                  <tr>{['Date','Broker','Type','Reference','Amount','Running Balance'].map(h => <th key={h} className="px-3 py-2 text-left whitespace-nowrap">{h}</th>)}</tr>
+                  <tr>{['Date','Broker','How earned','Math','From booking','Net','Running balance'].map(h => <th key={h} className="px-3 py-2 text-left whitespace-nowrap">{h}</th>)}</tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {ledgerRowsWithBalance.map(r => {
                     const m = LEDGER_KIND_META[r.kind]
+                    // Explicit chip + math hint for commission rows.  Other ledger
+                    // events (payout paid, withdrawal paid) reuse the generic Badge.
+                    const incomeBadge = (() => {
+                      if (r.kind !== 'commission_earned') return <Badge label={m?.label || r.kind} className={m?.color || 'bg-gray-100 text-gray-700'}/>
+                      const it = r.income_type || 'direct'
+                      const lvl = r.level ?? 0
+                      const map: Record<string, { label: string; cls: string }> = {
+                        direct:             { label: 'Direct sale',           cls: 'bg-emerald-50 text-emerald-700 border border-emerald-200' },
+                        differential:       { label: `L${lvl} upline differential`, cls: 'bg-blue-50 text-blue-700 border border-blue-200' },
+                        traditional_direct: { label: 'Traditional direct',     cls: 'bg-amber-50 text-amber-700 border border-amber-200' },
+                        traditional_split:  { label: `Traditional split (pos ${lvl + 1})`, cls: 'bg-amber-50 text-amber-700 border border-amber-200' },
+                        income1:            { label: 'Income 1', cls: 'bg-purple-50 text-purple-700 border border-purple-200' },
+                        income2:            { label: 'Income 2', cls: 'bg-purple-50 text-purple-700 border border-purple-200' },
+                        income3:            { label: 'Income 3', cls: 'bg-purple-50 text-purple-700 border border-purple-200' },
+                      }
+                      const cfg = map[it] || { label: it, cls: 'bg-gray-100 text-gray-700' }
+                      return <Badge label={cfg.label} className={cfg.cls}/>
+                    })()
+                    const math = (() => {
+                      if (r.kind !== 'commission_earned') return r.detail || ''
+                      const base = Number(r.base_amount || 0)
+                      const pct  = Number(r.rate_pct || 0)
+                      const gross= Number(r.gross_payout || 0)
+                      if (base > 0 && pct > 0) return `${pct}% × ${formatINR(base)} = ${formatINR(gross)} gross`
+                      return r.detail || ''
+                    })()
                     return (
                       <tr key={r.id}>
                         <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{formatDate(r.at)}</td>
@@ -489,12 +537,12 @@ export default function Payouts() {
                           <Link to={`/broker/dashboard?broker_id=${r.broker_id}`} className="font-medium text-sm text-blue-700 hover:underline">{r.broker_name}</Link>
                           <div className="text-[10px] text-gray-400 font-mono">[{r.broker_code}]</div>
                         </td>
-                        <td className="px-3 py-2"><Badge label={m?.label || r.kind} className={m?.color || 'bg-gray-100 text-gray-700'}/></td>
+                        <td className="px-3 py-2">{incomeBadge}</td>
+                        <td className="px-3 py-2 text-[11px] text-gray-600 whitespace-nowrap">{math}</td>
                         <td className="px-3 py-2">
                           {r.booking_no && r.booking_no !== '—'
                             ? <Link to={`/bookings?search=${r.booking_no}`} className="text-xs font-mono text-blue-700 hover:underline">{r.ref}</Link>
                             : <span className="text-xs font-mono text-gray-600">{r.ref}</span>}
-                          {r.detail && <div className="text-[10px] text-gray-400 capitalize">{r.detail}</div>}
                         </td>
                         <td className="px-3 py-2">
                           <span className={`font-semibold inline-flex items-center gap-1 ${r.direction === 'credit' ? 'text-emerald-700' : 'text-rose-700'}`}>
