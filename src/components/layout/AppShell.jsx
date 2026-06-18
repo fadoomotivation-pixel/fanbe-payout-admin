@@ -29,8 +29,10 @@ const NAV = [
     { to: '/projects',          icon: Building2,  label: 'Projects' },
     { to: '/plots',             icon: Map,        label: 'Plots' },
     { to: '/customer-pipeline', icon: Users,      label: 'Customer Pipeline' },
-    { to: '/bookings',          icon: BookOpen,   label: 'New Booking' },
-    { to: '/bookings?mode=traditional', icon: BookOpen, label: 'Traditional Bookings' },
+    // One Bookings entry handles both MLM and Traditional -- the form has a mode
+    // toggle for picking which kind of deal you're recording.  Admin found two
+    // entries confusing because clicking either landed on the same /bookings page.
+    { to: '/bookings',          icon: BookOpen,   label: 'Bookings' },
     { to: '/payments',          icon: CreditCard, label: 'Payments' },
   ]},
   { group: 'Broker Network', items: [
@@ -40,10 +42,13 @@ const NAV = [
     { to: '/commission-ranks', icon: Trophy,   label: 'Rank Slabs' },
   ]},
   { group: 'Commissions & Payouts', items: [
-    // One door to everything broker-payout-related.  Cycles, withdrawals and settings
-    // are all reachable from /payouts via the action buttons in its header — no admin
-    // should need to remember which of five sidebar entries to click for a payout action.
+    // /payouts has two views: a per-broker rollup (who's owed money) for actually
+    // sending payments, and a flat activity ledger (who earned what, when, how)
+    // for reading the books.  Two entry points share one page so admin doesn't
+    // get lost: ?view=activity for "show me the magic" / per-event detail,
+    // default view for "let me pay people".
     { to: '/payouts', icon: Banknote, label: 'Pay brokers' },
+    { to: '/payouts?view=activity', icon: ScrollText, label: 'Commission ledger' },
   ]},
   { group: 'Programs', items: [
     { to: '/achievers-club', icon: Star, label: 'Achievers Club' },
