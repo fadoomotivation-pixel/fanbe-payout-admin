@@ -7,7 +7,7 @@ import { Input, Select, Textarea } from '@/components/ui/Input.tsx'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR } from '@/lib/utils'
-import { LayoutGrid, Plus, Layers, Search, Trash2, Edit3, AlertTriangle } from 'lucide-react'
+import { LayoutGrid, Plus, Layers, Search, Trash2, Edit3, AlertTriangle, ClipboardPaste } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -23,7 +23,7 @@ const FACINGS    = ['east','west','north','south','north-east','north-west','sou
 
 const EMPTY_PLOT = {
   project_id: '', plot_no: '', size_sqyd: '', price_per_sqyd: '', plc_charges: '0',
-  total_price: '', category: 'residential', facing: 'east', block: '', sector: '',
+  category: 'residential', facing: 'east', block: '', sector: '',
   floor: '', is_corner: false, notes: '', status: 'available',
 }
 
@@ -170,7 +170,7 @@ export default function Plots() {
         size_sqyd:  size,
         price_per_sqyd: rate || null,
         plc_charges:    plc,
-        total_price:    rate ? size * rate + plc : null,
+        // total_price omitted -- GENERATED column in DB (saveAdd has the same fix).
         category:   bulk.category || 'residential',
         block:      bulk.block || null,
         sector:     bulk.sector || null,
@@ -190,6 +190,109 @@ export default function Plots() {
     onError: (e: any) => toast.error(e.message),
   })
 
+  // Paste-from-spreadsheet bulk import.  Accepts rows separated by newlines, with
+  // columns separated by tabs, commas or pipes (any of them work, so admin can paste
+  // straight from Excel/Sheets without choosing a format).  Header row optional.
+  // Required columns: plot_no, size_sqyd.  Optional: rate, plc, category, block,
+  // sector, facing, floor, is_corner, notes.
+  const pasteBulk = useMutation({
+    mutationFn: async ({ projectId, text }: { projectId: string; text: string }) => {
+      if (!projectId) throw new Error('Pick a project before pasting plots.')
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+      if (lines.length === 0) throw new Error('No rows to import.')
+      const split = (line: string) => line.split(/[\t,|]/).map(c => c.trim())
+      // Detect a header row by trying to parse the first cell as a number; if it's
+      // not numeric AND there's a 'plot' word, treat as header.
+      const firstCells = split(lines[0]).map(c => c.toLowerCase())
+      const hasHeader = firstCells.some(c => /plot|no|number/.test(c)) &&
+                        !/^[0-9]+(\.[0-9]+)?$/.test(firstCells[0] || '')
+      const header = hasHeader ? firstCells : ['plot_no','size_sqyd','price_per_sqyd','plc_charges','category','block','sector','facing','floor']
+      const dataLines = hasHeader ? lines.slice(1) : lines
+      const colIdx = (...keys: string[]) => {
+        for (const k of keys) {
+          const i = header.findIndex(h => h.replace(/[^a-z0-9]/g, '') === k.replace(/[^a-z0-9]/g, ''))
+          if (i >= 0) return i
+        }
+        return -1
+      }
+      const iPlot   = colIdx('plot_no', 'plotno', 'plotnumber', 'no')
+      const iSize   = colIdx('size_sqyd', 'sizesqyd', 'size', 'sqyd', 'sqyards', 'gaj')
+      const iRate   = colIdx('price_per_sqyd', 'rate', 'rateperseyd', 'rate_per_sqyd', 'price')
+      const iPlc    = colIdx('plc_charges', 'plc')
+      const iCat    = colIdx('category')
+      const iBlock  = colIdx('block')
+      const iSector = colIdx('sector')
+      const iFacing = colIdx('facing')
+      const iFloor  = colIdx('floor')
+      const iCorner = colIdx('is_corner', 'iscorner', 'corner')
+      if (iPlot < 0 || iSize < 0) {
+        throw new Error('Need at least plot_no and size_sqyd columns. Paste from a spreadsheet with a header row, or include them in this order: plot_no, size_sqyd, rate, plc.')
+      }
+      const seen = new Set<string>()
+      const rows: any[] = []
+      const errors: string[] = []
+      for (let li = 0; li < dataLines.length; li++) {
+        const cells = split(dataLines[li])
+        const plotNo = (cells[iPlot] || '').trim()
+        const sizeStr = (cells[iSize] || '').replace(/,/g, '').trim()
+        const size = parseFloat(sizeStr)
+        if (!plotNo || !Number.isFinite(size) || size <= 0) {
+          errors.push(`Row ${li + (hasHeader ? 2 : 1)}: missing plot_no or invalid size`)
+          continue
+        }
+        if (seen.has(plotNo)) {
+          errors.push(`Row ${li + (hasHeader ? 2 : 1)}: duplicate plot_no '${plotNo}' in pasted text`)
+          continue
+        }
+        seen.add(plotNo)
+        const num = (v?: string) => {
+          if (!v) return null
+          const n = parseFloat(String(v).replace(/,/g, '').trim())
+          return Number.isFinite(n) ? n : null
+        }
+        const cornerVal = iCorner >= 0 ? String(cells[iCorner] || '').toLowerCase() : ''
+        rows.push({
+          project_id: projectId,
+          plot_no:    plotNo,
+          size_sqyd:  size,
+          price_per_sqyd: iRate   >= 0 ? num(cells[iRate])   : null,
+          plc_charges:    iPlc    >= 0 ? (num(cells[iPlc]) ?? 0) : 0,
+          // total_price omitted -- GENERATED column.
+          category:   iCat    >= 0 ? (cells[iCat] || 'residential') : 'residential',
+          block:      iBlock  >= 0 ? (cells[iBlock] || null) : null,
+          sector:     iSector >= 0 ? (cells[iSector] || null) : null,
+          facing:     iFacing >= 0 ? (cells[iFacing] || 'east') : 'east',
+          floor:      iFloor  >= 0 ? (cells[iFloor] || null) : null,
+          is_corner:  ['true','yes','y','1','corner'].includes(cornerVal),
+          status:     'available',
+        })
+      }
+      if (rows.length === 0) {
+        throw new Error('No valid rows. ' + (errors[0] || ''))
+      }
+      // Detect existing plot_nos in the project so the error mentions specifics
+      // instead of the generic constraint message.
+      const { data: existing } = await supabase
+        .from('bp_plots').select('plot_no').eq('project_id', projectId)
+        .in('plot_no', rows.map(r => r.plot_no))
+      if (existing && existing.length > 0) {
+        throw new Error(`Plot numbers already exist in this project: ${existing.map((x: any) => x.plot_no).join(', ')}`)
+      }
+      const { error } = await supabase.from('bp_plots').insert(rows)
+      if (error) throw error
+      return { inserted: rows.length, errors }
+    },
+    onSuccess: ({ inserted, errors }) => {
+      qc.invalidateQueries({ queryKey: ['plots'] })
+      qc.invalidateQueries({ queryKey: ['plots_avail'] })
+      const trailer = errors.length > 0 ? ` · ${errors.length} row${errors.length !== 1 ? 's' : ''} skipped` : ''
+      toast.success(`${inserted} plot${inserted !== 1 ? 's' : ''} added${trailer}`)
+      if (errors.length > 0) console.warn('Paste-bulk skipped rows:', errors)
+      setPasteModal(false); setPasteText(''); setPasteProjectId('')
+    },
+    onError: (e: any) => toast.error(e.message),
+  })
+
   // ── Local state ───────────────────────────────────────────────────
   const [addModal, setAddModal]   = useState(false)
   const [addForm, setAddForm]     = useState<any>(EMPTY_PLOT)
@@ -198,6 +301,9 @@ export default function Plots() {
   const [editForm, setEditForm]   = useState<any>({})
   const [bulkModal, setBulkModal] = useState(false)
   const [bulkForm, setBulkForm]   = useState<any>(EMPTY_BULK)
+  const [pasteModal, setPasteModal] = useState(false)
+  const [pasteProjectId, setPasteProjectId] = useState('')
+  const [pasteText, setPasteText] = useState('')
   const [deleteFor, setDeleteFor] = useState<any>(null)
 
   const allPlots = plots as any[]
@@ -253,7 +359,6 @@ export default function Plots() {
       size_sqyd: p.size_sqyd ?? '',
       price_per_sqyd: p.price_per_sqyd ?? '',
       plc_charges: p.plc_charges ?? '0',
-      total_price: p.total_price ?? '',
       category: p.category || 'residential',
       facing: p.facing || 'east',
       block: p.block || '',
@@ -270,14 +375,16 @@ export default function Plots() {
     if (!addForm.project_id) return toast.error('Project is required')
     if (!addForm.plot_no)    return toast.error('Plot number is required')
     if (!addForm.size_sqyd)  return toast.error('Size (sqyd) is required')
-    const total = addForm.total_price !== '' ? parseFloat(addForm.total_price) : addTotalPreview
+    // total_price is a GENERATED column in Postgres (size_sqyd * price_per_sqyd) --
+    // sending an explicit value triggers "cannot insert a non-DEFAULT value into
+    // column 'total_price'".  Let the DB compute it; the form preview is for the
+    // admin only.
     await createPlot.mutateAsync({
       project_id: addForm.project_id,
       plot_no: addForm.plot_no,
       size_sqyd: parseFloat(addForm.size_sqyd),
       price_per_sqyd: addForm.price_per_sqyd !== '' ? parseFloat(addForm.price_per_sqyd) : null,
       plc_charges: addForm.plc_charges !== '' ? parseFloat(addForm.plc_charges) : 0,
-      total_price: total || null,
       category: addForm.category, facing: addForm.facing,
       block: addForm.block || null, sector: addForm.sector || null,
       floor: addForm.floor || null, is_corner: !!addForm.is_corner,
@@ -287,14 +394,13 @@ export default function Plots() {
 
   const saveEdit = async () => {
     if (!editing) return
-    const total = editForm.total_price !== '' ? parseFloat(editForm.total_price) : editTotalPreview
     await updatePlot.mutateAsync({ id: editing.id, data: {
       project_id: editForm.project_id || null,
       plot_no: editForm.plot_no || null,
       size_sqyd: editForm.size_sqyd !== '' ? parseFloat(editForm.size_sqyd) : null,
       price_per_sqyd: editForm.price_per_sqyd !== '' ? parseFloat(editForm.price_per_sqyd) : null,
       plc_charges: editForm.plc_charges !== '' ? parseFloat(editForm.plc_charges) : 0,
-      total_price: total || null,
+      // total_price intentionally omitted -- generated column, see saveAdd.
       category: editForm.category, facing: editForm.facing,
       block: editForm.block || null, sector: editForm.sector || null,
       floor: editForm.floor || null, is_corner: !!editForm.is_corner,
@@ -369,7 +475,8 @@ export default function Plots() {
             <p className="text-sm text-gray-500">{allPlots.length} plots{search ? ` · ${filtered.length} matching` : ''}</p>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          <Button variant="secondary" onClick={() => { setPasteText(''); setPasteProjectId(projectFilter || ''); setPasteModal(true) }} title="Paste rows from Excel / Sheets"><ClipboardPaste size={14}/>Paste plots</Button>
           <Button variant="secondary" onClick={() => { setBulkForm(EMPTY_BULK); setBulkModal(true) }}><Layers size={14}/>Bulk Generate</Button>
           <Button onClick={() => { setAddForm(EMPTY_PLOT); setAddModal(true) }}><Plus size={14}/>Add Plot</Button>
         </div>
@@ -488,6 +595,59 @@ export default function Plots() {
         </div>
       </Modal>
 
+      {/* ── Paste plots modal ───────────────────────────────────────
+          Admin pastes rows from Excel/Sheets/Google Docs.  We auto-detect
+          tab / comma / pipe separators and optional header row, so any of:
+
+            101  120  18000
+            plot_no,size_sqyd,rate
+            12,180,17500
+
+          all import.  Only plot_no and size_sqyd are required; the rest fall
+          back to sensible defaults (residential, east, 0 PLC).             */}
+      <Modal open={pasteModal} onClose={() => setPasteModal(false)} title="Paste plots from spreadsheet" size="lg">
+        <div className="space-y-3">
+          <Select label="Project *" value={pasteProjectId} onChange={(e: any) => setPasteProjectId(e.target.value)}>
+            <option value="">— pick a project —</option>
+            {(projects as any[]).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </Select>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Rows (plot_no, size_sqyd, rate, plc, category, block, sector, facing, floor, is_corner)</label>
+            <Textarea
+              rows={12}
+              value={pasteText}
+              onChange={(e: any) => setPasteText(e.target.value)}
+              placeholder={'plot_no\tsize_sqyd\trate\tplc\tcategory\tblock\n101\t180\t17500\t0\tresidential\tA\n102\t200\t17500\t5000\tresidential\tA'}
+              className="font-mono text-xs"
+            />
+            <p className="text-[11px] text-gray-500 mt-1">
+              Copy a range from Excel / Sheets and paste here. Tabs, commas or pipes all work as separators. First row can be a header (plot_no, size_sqyd, ...) or just data. Required: <b>plot_no</b>, <b>size_sqyd</b>. Total price is auto-computed by the database.
+            </p>
+          </div>
+          {(() => {
+            const lines = pasteText.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+            const looksHeader = lines.length > 0 && /plot|no|number/i.test(lines[0]) && !/^\s*[0-9]/.test(lines[0])
+            const dataCount = Math.max(0, lines.length - (looksHeader ? 1 : 0))
+            return (
+              <div className="text-xs text-gray-600 flex items-center gap-2">
+                <ClipboardPaste size={12}/>
+                {dataCount > 0
+                  ? <>Ready to import <span className="font-semibold text-gray-800">{dataCount} plot{dataCount !== 1 ? 's' : ''}</span>{looksHeader ? ' (header row detected)' : ''}.</>
+                  : <span className="text-gray-400">Waiting for rows…</span>}
+              </div>
+            )
+          })()}
+        </div>
+        <div className="flex justify-end gap-2 mt-4">
+          <Button variant="secondary" onClick={() => setPasteModal(false)}>Cancel</Button>
+          <Button
+            onClick={() => pasteBulk.mutate({ projectId: pasteProjectId, text: pasteText })}
+            loading={pasteBulk.isPending}
+            disabled={!pasteProjectId || !pasteText.trim()}
+          ><ClipboardPaste size={14}/>Import plots</Button>
+        </div>
+      </Modal>
+
       {/* ── Delete confirm ───────────────────────────────────────── */}
       <Modal open={!!deleteFor} onClose={() => setDeleteFor(null)} title={`Delete plot #${deleteFor?.plot_no ?? ''}?`} size="sm">
         <div className="rounded-lg bg-red-50 border border-red-200 text-red-900 p-3 text-sm flex items-start gap-2">
@@ -516,11 +676,12 @@ function PlotFormFields({ f, set, projects, totalPreview }: any) {
       <Input label="Size (sqyd) *" type="number" value={f.size_sqyd} onChange={(e: any) => set('size_sqyd', e.target.value)} />
       <Input label="Rate per sqyd (₹)" type="number" value={f.price_per_sqyd} onChange={(e: any) => set('price_per_sqyd', e.target.value)} />
       <Input label="PLC Charges (₹)" type="number" value={f.plc_charges} onChange={(e: any) => set('plc_charges', e.target.value)} placeholder="0" />
-      <Input label="Total Price (₹)" type="number" value={f.total_price} onChange={(e: any) => set('total_price', e.target.value)}
-        placeholder={`auto: ${formatINR(totalPreview)}`} />
-      <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs flex flex-col justify-center">
-        <span className="text-gray-500">Computed total</span>
+      {/* total_price is computed by Postgres (GENERATED column) so it's read-only
+          here -- typing an override hit "cannot insert a non-DEFAULT value" before. */}
+      <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs flex flex-col justify-center col-span-2 sm:col-span-1">
+        <span className="text-gray-500">Total price (auto)</span>
         <span className="font-semibold text-green-700">{formatINR(totalPreview)}</span>
+        <span className="text-[10px] text-gray-400">= size × rate (PLC added on the booking)</span>
       </div>
       <Select label="Category" value={f.category} onChange={(e: any) => set('category', e.target.value)}>
         {CATEGORIES.map(c => <option key={c} value={c} className="capitalize">{c}</option>)}
