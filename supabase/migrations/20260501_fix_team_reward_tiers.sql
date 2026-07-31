@@ -1,5 +1,5 @@
 -- ─────────────────────────────────────────────────────────────────────────────
--- Fix: Team Reward Tiers — correct unit thresholds per Fanbe Group Business Plan
+-- Fix: Team Reward Tiers — correct unit thresholds per Your Company Business Plan
 --
 -- PDF Rules:
 --   1 Unit = 50 Sq Yards
@@ -37,7 +37,7 @@ ALTER TABLE broker_reward_claims
   ADD COLUMN IF NOT EXISTS qualifying_sq_yards  integer NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS capped_sq_yards      integer NOT NULL DEFAULT 0;
 
-COMMENT ON COLUMN team_reward_tiers.required_units     IS '1 unit = 50 sq yards (per Fanbe Business Plan)';
+COMMENT ON COLUMN team_reward_tiers.required_units     IS '1 unit = 50 sq yards (per Sunrise Business Plan)';
 COMMENT ON COLUMN team_reward_tiers.max_team_pct       IS 'Max 33% of any single team business counted (PDF rule)';
 COMMENT ON COLUMN team_reward_tiers.min_payment_pct    IS 'Reward paid only when each plot payment >= 50% (PDF rule)';
 COMMENT ON COLUMN broker_reward_claims.payment_gate_met IS 'True only when all members plot payments >= 50%';

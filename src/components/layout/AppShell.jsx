@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
+import { BRAND } from '@/lib/branding'
 import toast from 'react-hot-toast'
 
 // Five clean groups, no duplicate names. Mirrors the funnel:
@@ -111,11 +112,11 @@ export default function AppShell() {
 
       <aside className={`sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}>
         <div className="sidebar-logo">
-          <div className="sidebar-logo-icon">FB</div>
+          <div className="sidebar-logo-icon">{BRAND.company.slice(0, 2).toUpperCase()}</div>
           {!collapsed && (
             <div className="sidebar-logo-text">
-              <div className="sidebar-logo-title">Fanbe Group</div>
-              <div className="sidebar-logo-sub">Control Panel</div>
+              <div className="sidebar-logo-title">{BRAND.company}</div>
+              <div className="sidebar-logo-sub">{BRAND.tagline}</div>
             </div>
           )}
         </div>
@@ -170,7 +171,7 @@ export default function AppShell() {
           </button>
 
           <div className="topbar-breadcrumb">
-            <span>Fanbe</span>
+            <span>{BRAND.company}</span>
             <Chevron size={12} style={{ opacity: 0.4 }} />
             <span className="crumb-current">{pageTitle}</span>
           </div>

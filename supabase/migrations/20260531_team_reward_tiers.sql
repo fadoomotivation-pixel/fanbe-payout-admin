@@ -1,6 +1,6 @@
 -- The TeamRewards page was reading a table that never existed, so it always showed
 -- "No reward tiers configured yet."  Create it with the default tier slabs from the
--- Fanbe Business Plan PDF so the page renders meaningfully out of the box; admin can
+-- Sunrise Business Plan PDF so the page renders meaningfully out of the box; admin can
 -- edit / disable later via direct DB or a future admin form.
 CREATE TABLE IF NOT EXISTS public.team_reward_tiers (
   id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- FANBE GROUP — DEEP INDIAN DUMMY SEED for live bp_* tables
+-- YOUR COMPANY — DEEP INDIAN DUMMY SEED for live bp_* tables
 -- Goal: every nav page shows realistic data so admin can walk the workflow:
 --   Inquiry → Member → Customer → Booking → Payment → Payout → Withdrawal
 --
@@ -12,9 +12,9 @@
 DO $do$ BEGIN
   insert into bp_projects (id, name, project_code) values
     ('aaaaaaa1-0000-0000-0000-000000000001','Brijvatika Awasiya Yojana',  'BVY-FBD'),
-    ('aaaaaaa1-0000-0000-0000-000000000002','Fanbe Green Valley',         'GV-GGN'),
-    ('aaaaaaa1-0000-0000-0000-000000000003','Fanbe Royal Residency',      'RR-NDA'),
-    ('aaaaaaa1-0000-0000-0000-000000000004','Fanbe Sunrise City',         'SC-FBD'),
+    ('aaaaaaa1-0000-0000-0000-000000000002','Green Valley Heights',         'GV-GGN'),
+    ('aaaaaaa1-0000-0000-0000-000000000003','Royal Residency Park',      'RR-NDA'),
+    ('aaaaaaa1-0000-0000-0000-000000000004','Sunrise City Township',         'SC-FBD'),
     ('aaaaaaa1-0000-0000-0000-000000000005','Yamuna Heights Phase 2',     'YH2-NDA')
   on conflict (id) do nothing;
 EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'bp_projects skipped: %', sqlerrm; END $do$;

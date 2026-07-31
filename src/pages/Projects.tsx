@@ -185,7 +185,7 @@ export default function Projects() {
             onChange={(e: any) => set('name', e.target.value)}
             required
             className="col-span-2"
-            placeholder="e.g. Fanbe Green Valley"
+            placeholder="e.g. Green Valley Heights"
           />
           <Input label="Location" value={form.location} onChange={(e: any) => set('location', e.target.value)} placeholder="e.g. Sector 12, Gurugram, Haryana" className="col-span-2"/>
           <Input label="RERA No" value={form.rera_no} onChange={(e: any) => set('rera_no', e.target.value)} placeholder="e.g. HRERA-GGN-2025-001"/>

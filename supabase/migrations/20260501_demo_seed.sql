@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- FANBE GROUP — FULL DEMO SEED
+-- YOUR COMPANY — FULL DEMO SEED
 -- Covers: brokers (all 15 ranks), sponsor tree, projects, plots, bookings,
 --         payments, payout_distributions (differential), broker_rank_stats,
 --         achievers_club, team_rewards, withdrawals, expenses, tickets, news
@@ -21,9 +21,9 @@ end $$;
 -- ─────────────────────────────────────────────────────────────────────────
 insert into company_bank_accounts (id, bank_name, account_holder, account_no, ifsc, account_type, opening_balance, is_default, active)
 values
-  ('a1000000-0000-0000-0000-000000000001', 'HDFC Bank',  'Fanbe Group Pvt Ltd', '50200012345678', 'HDFC0001234', 'current', 5000000, true,  true),
-  ('a1000000-0000-0000-0000-000000000002', 'SBI',        'Fanbe Group Pvt Ltd', '39876543210987', 'SBIN0012345', 'savings', 1000000, false, true),
-  ('a1000000-0000-0000-0000-000000000003', 'ICICI Bank', 'Fanbe Group Pvt Ltd', '628705001234',   'ICIC0006287', 'current', 2500000, false, true)
+  ('a1000000-0000-0000-0000-000000000001', 'HDFC Bank',  'Your Company Pvt Ltd', '50200012345678', 'HDFC0001234', 'current', 5000000, true,  true),
+  ('a1000000-0000-0000-0000-000000000002', 'SBI',        'Your Company Pvt Ltd', '39876543210987', 'SBIN0012345', 'savings', 1000000, false, true),
+  ('a1000000-0000-0000-0000-000000000003', 'ICICI Bank', 'Your Company Pvt Ltd', '628705001234',   'ICIC0006287', 'current', 2500000, false, true)
 on conflict (id) do nothing;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -31,9 +31,9 @@ on conflict (id) do nothing;
 -- ─────────────────────────────────────────────────────────────────────────
 insert into projects (id, name, location, total_plots, area_sqyards, status, launch_date, description)
 values
-  ('b1000000-0000-0000-0000-000000000001', 'Fanbe Green Valley',    'Sector 12, Gurugram',   200, 10000, 'active',   '2025-06-01', 'Premium plotted development with lush green landscaping.'),
-  ('b1000000-0000-0000-0000-000000000002', 'Fanbe Royal Residency', 'Yamuna Expressway, UP', 350, 18000, 'active',   '2025-09-01', 'Affordable premium plots near Yamuna Expressway.'),
-  ('b1000000-0000-0000-0000-000000000003', 'Fanbe Sunrise City',    'Faridabad, Haryana',    500, 25000, 'upcoming', '2026-07-01', 'Township project with full infrastructure.')
+  ('b1000000-0000-0000-0000-000000000001', 'Green Valley Heights',    'Sector 12, Gurugram',   200, 10000, 'active',   '2025-06-01', 'Premium plotted development with lush green landscaping.'),
+  ('b1000000-0000-0000-0000-000000000002', 'Royal Residency Park', 'Yamuna Expressway, UP', 350, 18000, 'active',   '2025-09-01', 'Affordable premium plots near Yamuna Expressway.'),
+  ('b1000000-0000-0000-0000-000000000003', 'Sunrise City Township',    'Faridabad, Haryana',    500, 25000, 'upcoming', '2026-07-01', 'Township project with full infrastructure.')
 on conflict (id) do nothing;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -361,7 +361,7 @@ on conflict do nothing;
 -- ─────────────────────────────────────────────────────────────────────────
 insert into news_events (id, title, post_type, description, publish_from, publish_to, is_active, state)
 values
-  ('p100-0001','Fanbe Green Valley — Phase 2 Launch!',          'event',  'We are proud to announce Phase 2 of Green Valley with 100 new plots. Book your plot at the early-bird rate before 31st May 2026.','2026-05-01','2026-05-31',true, 'published'),
+  ('p100-0001','Green Valley Heights — Phase 2 Launch!',          'event',  'We are proud to announce Phase 2 of Green Valley with 100 new plots. Book your plot at the early-bird rate before 31st May 2026.','2026-05-01','2026-05-31',true, 'published'),
   ('p100-0002','April 2026 Achievers Club Felicitation',        'news',   '6 top brokers qualified for the April Achievers Club. Total pool: ₹30,00,000. Congratulations to all winners!',              '2026-05-01','2026-05-15',true, 'published'),
   ('p100-0003','Payout Processed — April 2026',                 'news',   'All pending payout distributions for March & April have been processed. Please check your broker wallet.',                  '2026-05-01','2026-05-10',true, 'published'),
   ('p100-0004','Broker Summit — Lucknow, 20th April',           'event',  'Quarterly broker summit held in Lucknow with 120+ attendees. Rank certificates distributed to all promoted brokers.',       '2026-04-20','2026-04-20',false,'archived'),
@@ -389,11 +389,11 @@ on conflict do nothing;
 -- ─────────────────────────────────────────────────────────────────────────
 insert into app_settings (key, value) values
   ('company_info', '{
-    "name": "Fanbe Group Pvt Ltd",
+    "name": "Your Company Pvt Ltd",
     "gstin": "07AABCF1234H1Z5",
     "address": "Plot No. 12, Sector 44, Gurugram, Haryana — 122003",
     "phone": "1800-123-4567",
-    "email": "admin@fanbegroup.com",
+    "email": "admin@example.com",
     "logo": ""
   }'::jsonb)
 on conflict (key) do update

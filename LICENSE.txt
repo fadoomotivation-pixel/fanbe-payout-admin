@@ -1,0 +1,20 @@
+BrokerPay Pro
+Copyright (c) Your Company
+
+This product is licensed under the Envato Marketplace Standard Licenses.
+See the full license text at:
+
+  Regular License:  https://codecanyon.net/licenses/standard
+  Extended License: https://codecanyon.net/licenses/standard_extended
+
+In short:
+
+- One license = one end product (one client / one organisation).
+- You may modify the source code to fit your needs.
+- You may not re-distribute or re-sell this product, in whole or in part.
+- The source code includes third-party open-source libraries listed in
+  package.json — each governed by its own license (typically MIT).
+
+For commercial deployment on multiple distinct end products you need
+multiple licenses.  See the Envato license pages above for the legal
+specifics.

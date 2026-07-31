@@ -97,7 +97,7 @@ export default function PayoutTerms() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Payout Terms</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            Important rules from the Fanbe Group Business Plan brochure
+            Configure how broker commissions are calculated and when payouts are released
           </p>
         </div>
       </div>
