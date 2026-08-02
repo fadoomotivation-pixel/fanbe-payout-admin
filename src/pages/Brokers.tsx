@@ -12,7 +12,7 @@ import { Plus, Search, KeyRound, Copy, Check, Eye, UserPlus, X } from 'lucide-re
 import toast from 'react-hot-toast'
 
 const EMPTY = {
-  name:'', email:'', phone:'', referral_code:'', rank:'Executive', status:'active',
+  name:'', email:'', phone:'', referral_code:'', rank:'Executive', rank_locked:false, status:'active',
   // broker_type splits the directory in two buckets so admin can't accidentally credit
   // a tree-broker on a traditional sale (or vice versa).
   // - 'mlm'         : sits in the sponsor tree, earns via the differential cascade
@@ -139,7 +139,7 @@ export default function Brokers() {
     setShowEditPassword(false)
     setForm(b ? {
       name:b.name, email:b.email||'', phone:b.phone||'', referral_code:b.referral_code||'',
-      rank:b.rank||'Executive', status:b.status||'active', tds_applicable:!!b.tds_applicable,
+      rank:b.rank||'Executive', rank_locked:!!b.rank_locked, status:b.status||'active', tds_applicable:!!b.tds_applicable,
       broker_type: b.broker_type || 'mlm',
       pan_no:b.pan_no||'', gst_no:b.gst_no||'',
       sponsor_id:b.sponsor_id||'', date_of_joining:b.date_of_joining||'',
@@ -532,12 +532,21 @@ export default function Brokers() {
               but it's still required by the DB.  Default to Executive (lowest) and hide
               the picker entirely when broker_type is traditional. */}
           {form.broker_type !== 'traditional' && (
-          <Select label="Rank (from Commission Ranks)" value={form.rank} onChange={(e: any) => set('rank', e.target.value)}>
-            {rankList.length === 0 && <option value="">— no ranks defined yet —</option>}
-            {rankList.map((r: any) => (
-              <option key={r.rank_name} value={r.rank_name}>L{r.level} — {r.rank_name} ({r.commission_pct}%)</option>
-            ))}
-          </Select>
+          <div>
+            {/* Manually changing the rank is a "jump" — lock it so the auto-rank engine
+                (promote-only) won't touch it.  Admin can untick to hand control back to
+                the system, which will then auto-promote when the broker meets a slab. */}
+            <Select label="Rank (from Commission Ranks)" value={form.rank} onChange={(e: any) => setForm((p: any) => ({ ...p, rank: e.target.value, rank_locked: true }))}>
+              {rankList.length === 0 && <option value="">— no ranks defined yet —</option>}
+              {rankList.map((r: any) => (
+                <option key={r.rank_name} value={r.rank_name}>L{r.level} — {r.rank_name} ({r.commission_pct}%)</option>
+              ))}
+            </Select>
+            <label className="mt-1.5 flex items-center gap-2 text-[11px] text-gray-600">
+              <input type="checkbox" checked={!!form.rank_locked} onChange={e => set('rank_locked', e.target.checked)} className="rounded" />
+              Lock rank (manual) — system won't auto-promote/-change it
+            </label>
+          </div>
           )}
           <Select label="Status" value={form.status} onChange={(e: any) => set('status', e.target.value)}>
             <option value="active">Active</option><option value="inactive">Inactive</option><option value="suspended">Suspended</option>
