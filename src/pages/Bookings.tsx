@@ -243,7 +243,7 @@ export default function Bookings() {
     queryFn: async () => {
       // Include broker_type so the booking form can filter the picker by sale mode
       // (MLM brokers for MLM bookings, traditional brokers for traditional bookings).
-      const { data, error } = await supabase.from('brokers').select('id,name,broker_id,rank,broker_type,status')
+      const { data, error } = await supabase.from('brokers').select('id,name,broker_id,rank,broker_type,status,phone')
       if (error) throw error
       return data
     },
@@ -1732,7 +1732,26 @@ export default function Bookings() {
               </div>
             )}
           </div>
-          <Input label="परिचयकर्ता कोड (Upline Code)" value={form.upline_broker_code} onChange={(e: any) => set('upline_broker_code', e.target.value)} />
+          <div>
+            <Input label="परिचयकर्ता कोड (Upline Code)" value={form.upline_broker_code} onChange={(e: any) => set('upline_broker_code', e.target.value)} placeholder="e.g. FNB05012" />
+            {/* Resolve the typed sponsor/upline code to a real broker so admin can
+                confirm the NAME + MOBILE before saving — a mistyped code is caught here
+                instead of crediting the wrong upline. */}
+            {(() => {
+              const code = (form.upline_broker_code || '').trim().toLowerCase()
+              if (!code) return null
+              const match = (brokers as any[]).find((b: any) => (b.broker_id || '').toLowerCase() === code)
+              return match ? (
+                <div className="mt-1 text-[11px] bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg px-2 py-1.5">
+                  ✓ {match.name || '—'}{match.phone ? ` · 📞 ${match.phone}` : ' · no mobile on file'}
+                </div>
+              ) : (
+                <div className="mt-1 text-[11px] bg-amber-50 border border-amber-200 text-amber-900 rounded-lg px-2 py-1.5">
+                  No broker with code “{form.upline_broker_code.trim()}” — check the code.
+                </div>
+              )
+            })()}
+          </div>
           <Input label="Manager Signed By" value={form.manager_signature_by} onChange={(e: any) => set('manager_signature_by', e.target.value)} placeholder="Office manager name" />
           <Select label="Stage" value={form.stage} onChange={(e: any) => set('stage', e.target.value)}>
             {STAGES.map(s => <option key={s} value={s}>{STAGE_META[s].label}</option>)}
