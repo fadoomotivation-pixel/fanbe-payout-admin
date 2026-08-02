@@ -200,7 +200,7 @@ export default function BrokerDashboard() {
       const [{ data: payments }, { data: scheds }] = await Promise.all([
         // Need the full payment row (not just amount) so we can print receipts and show UTR,
         // payment_type, mode, instalment_no, etc. in the customers tab.
-        supabase.from('bp_payments').select('id, booking_id, payment_type, amount, payment_mode, utr_ref, payment_date, receipt_no, instalment_no, drawn_on_bank, branch, sponsor_name, rupees_in_words, verification_status, created_at').in('booking_id', allBookingIds).order('payment_date', { ascending: false }),
+        supabase.from('bp_payments').select('id, booking_id, payment_type, amount, payment_mode, utr_ref, payment_date, receipt_no, instalment_no, drawn_on_bank, branch, sponsor_name, rupees_in_words, verification_status, created_at, print_count').in('booking_id', allBookingIds).order('payment_date', { ascending: false }),
         supabase.from('emi_schedules').select('id, booking_id').in('booking_id', allBookingIds),
       ])
       const bookingsById: Record<string, any> = {}
