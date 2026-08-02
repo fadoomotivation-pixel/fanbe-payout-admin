@@ -867,7 +867,7 @@ function PaymentHistoryList({ booking, customer }: { booking: any; customer: any
     queryFn: async () => {
       const { data, error } = await supabase
         .from('bp_payments')
-        .select('id, amount, payment_type, payment_mode, payment_date, receipt_no, utr_ref, instalment_no, verification_status, notes, created_at')
+        .select('id, amount, payment_type, payment_mode, payment_date, receipt_no, utr_ref, instalment_no, verification_status, notes, created_at, print_count')
         .eq('booking_id', booking.id)
         .eq('verification_status', 'verified')
         .order('payment_date', { ascending: false })

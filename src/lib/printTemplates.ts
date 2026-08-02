@@ -1,4 +1,13 @@
 import { formatINR } from './utils'
+import { supabase } from './supabase'
+
+// Receipts printed more than once must be marked DUPLICATE COPY (admin: "duplicate
+// receipt if customer took 2nd recipt it should show").  We know a reprint two ways:
+//   - the payment row carries print_count > 0 (it was printed in a PAST session), or
+//   - we already printed it in THIS browser session (below).
+// Either signal flags the copy.  We also fire-and-forget an atomic DB bump so the
+// count survives across sessions/devices.
+const printedThisSession = new Set<string>()
 
 function toWordsINR(n: number): string {
   if (!n || isNaN(n)) return ''
@@ -42,9 +51,23 @@ export function printPaymentReceipt(p: any, ctx: { customer?: any; booking?: any
   const inWords = p.rupees_in_words || toWordsINR(amount)
   const title = paymentTypeLabel(p.payment_type)
 
+  // Duplicate detection.  priorPrints = times printed BEFORE this render; if > 0 (or
+  // we already printed it this session) this is a reprint → stamp DUPLICATE.  The
+  // reprint number shown is priorPrints + 1 (so the 2nd copy reads "Reprint #2").
+  const priorPrints = Number(p.print_count ?? 0)
+  const isDuplicate = priorPrints > 0 || (p.id && printedThisSession.has(p.id))
+  const reprintNo = priorPrints + 1
+  if (p.id) {
+    printedThisSession.add(p.id)
+    // Fire-and-forget: bump the stored counter so future sessions know it's a reprint.
+    // Never blocks or breaks the print if it fails (e.g. offline).
+    try { supabase.rpc('bump_receipt_print', { p_payment: p.id }).then(() => {}, () => {}) } catch { /* ignore */ }
+  }
+
   const half = (copyLabel: string) => `
-    <section class="half">
-      <div class="copy-tag">${copyLabel}</div>
+    <section class="half${isDuplicate ? ' dup' : ''}">
+      ${isDuplicate ? '<div class="dup-mark">DUPLICATE</div>' : ''}
+      <div class="copy-tag">${copyLabel}${isDuplicate ? ` · DUPLICATE COPY · Reprint #${reprintNo}` : ''}</div>
       <div class="head">
         <div class="brand">
           FANBE DEVELOPERS
@@ -94,8 +117,15 @@ export function printPaymentReceipt(p: any, ctx: { customer?: any; booking?: any
   * { box-sizing: border-box }
   body { font-family:'Helvetica Neue',Arial,sans-serif; color:#0f172a; font-size:11px; margin:0; padding:0; background:#fff }
   .page { width: 210mm; height: 297mm; padding: 12mm; display: flex; flex-direction: column; gap: 8mm }
-  .half { position: relative; flex: 1 1 0; padding: 6mm 8mm; border: 1px solid #cbd5e1; border-radius: 6px; background:#fff }
-  .copy-tag { position:absolute; top:6mm; right:8mm; font-size:9px; font-weight:700; letter-spacing:1px; color:#94a3b8 }
+  .half { position: relative; flex: 1 1 0; padding: 6mm 8mm; border: 1px solid #cbd5e1; border-radius: 6px; background:#fff; overflow:hidden }
+  .half.dup { border-color:#fecaca }
+  .copy-tag { position:absolute; top:6mm; right:8mm; font-size:9px; font-weight:700; letter-spacing:1px; color:#94a3b8; z-index:2 }
+  .half.dup .copy-tag { color:#dc2626 }
+  /* Big diagonal DUPLICATE watermark behind the content — visible but light so the
+     printed receipt stays readable. */
+  .dup-mark { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%) rotate(-24deg);
+    font-size:54px; font-weight:900; letter-spacing:8px; color:rgba(220,38,38,0.12);
+    border:4px solid rgba(220,38,38,0.14); border-radius:10px; padding:6px 26px; white-space:nowrap; z-index:1; pointer-events:none }
   .cut { display:flex; align-items:center; gap:6px; color:#94a3b8; font-size:9px; letter-spacing:2px }
   .cut .line { flex:1; border-top: 1.2px dashed #94a3b8 }
   .head { display:flex; align-items:flex-start; justify-content:space-between; border-bottom:1.5px solid #0f172a; padding-bottom:5px; margin-bottom:8px }
