@@ -37,6 +37,10 @@ export default function BrokerDashboard() {
   const [payouts, setPayouts] = useState<any[]>([])
   const [withdrawals, setWithdrawals] = useState<any[]>([])
   const [cycleTxns, setCycleTxns] = useState<any[]>([])
+  // Advances taken by this broker (Expense under the "Advance" head) reduce what
+  // they can withdraw — mirrors payoutEngine.loadBrokerWallets so the broker's own
+  // dashboard shows the same 'available' as the admin /withdrawals gate.
+  const [advanceTotal, setAdvanceTotal] = useState(0)
   const [bookings, setBookings] = useState<any[]>([])
   const [customers, setCustomers] = useState<any[]>([])
   const [expandedCust, setExpandedCust] = useState<string | null>(null)
@@ -92,7 +96,7 @@ export default function BrokerDashboard() {
     }
     setBroker(b)
 
-    const [rk, dl, po, wd, bk, cycleTx, kyc] = await Promise.all([
+    const [rk, dl, po, wd, bk, cycleTx, kyc, adv] = await Promise.all([
       supabase.from('commission_ranks').select('*').eq('active', true).order('level', { ascending: true }),
       supabase.from('brokers').select('id, name, broker_id, rank, phone, status').eq('sponsor_id', b.id),
       supabase.from('payout_distributions').select('*, bp_bookings(booking_no, bp_customers(name), bp_plots(plot_no))').eq('beneficiary_broker_id', b.id).order('created_at', { ascending: false }).limit(200),
@@ -108,6 +112,8 @@ export default function BrokerDashboard() {
       // Broker's own KYC docs — feeds the upload modal so they can see what's already been
       // submitted and verified by admin without having to ask.
       supabase.from('bp_broker_kyc').select('*').eq('broker_id', b.id).order('created_at', { ascending: false }),
+      // Advances given to this broker (Expense under the "Advance" head).
+      supabase.from('expenses').select('amount, expense_heads(name)').eq('broker_id', b.id),
     ])
     setRanks(rk.data || [])
     setDownline(dl.data || [])
@@ -116,6 +122,8 @@ export default function BrokerDashboard() {
     setCycleTxns(cycleTx.data || [])
     setBookings(bk.data || [])
     setMyKycDocs(kyc.data || [])
+    setAdvanceTotal((adv.data || []).reduce((s: number, e: any) =>
+      s + ((e.expense_heads?.name || '').toLowerCase() === 'advance' ? Number(e.amount || 0) : 0), 0))
 
     // Downline earnings (their commissions)
     const dlIds = (dl.data || []).map((d: any) => d.id)
@@ -313,11 +321,12 @@ export default function BrokerDashboard() {
     const cyPending  = (cycleTxns || []).filter((t: any) => t.status === 'pending' || t.status === 'approved').reduce((s: number, t: any) => s + Number(t.net_amount || t.amount || 0), 0)
     const paidOut    = wdPaid + cyPaid
     const pending    = wdPending + cyPending
-    const availableBalance = Math.max(0, totalEarned - paidOut - pending)
+    // Advances (money already handed to the broker up front) reduce what's withdrawable.
+    const availableBalance = Math.max(0, totalEarned - paidOut - pending - advanceTotal)
     const totalVolume = confirmed.reduce((s: number, b: any) => s + Number(b.total_amount || b.plot_total_price || 0), 0)
     const teamVolume = Object.values(downlineEarnings).reduce((s, v) => s + v, 0)
     return { totalEarned, earnedThisMonth, paidOut, availableBalance, totalVolume, teamVolume, confirmedCount: confirmed.length, promisedTotal, promisedPending }
-  }, [bookings, withdrawals, downlineEarnings, payouts, cycleTxns])
+  }, [bookings, withdrawals, downlineEarnings, payouts, cycleTxns, advanceTotal])
 
   // Last 6 months earnings bar chart.  MUST use the same source as the "Earned (distributed)"
   // hero card — payout_distributions — so the chart total equals the hero number.  Previously

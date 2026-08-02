@@ -113,7 +113,7 @@ export default function Withdrawals() {
     setOverrideBank(false); setBankOverride({ bank_name: '', account_no: '', ifsc: '', account_holder: '' })
   }
   const selectedBroker = createBrokerId ? brokerLookup[createBrokerId] : null
-  const wallet = selectedBroker ? walletByBroker[selectedBroker.id] || { earned: 0, paid: 0, pending: 0, available: 0 } : null
+  const wallet = selectedBroker ? walletByBroker[selectedBroker.id] || { earned: 0, paid: 0, pending: 0, advance: 0, available: 0 } : null
   const available = wallet?.available ?? 0
   const computeForCreate = useMemo(() => {
     if (!cfg) return null
@@ -426,7 +426,7 @@ export default function Withdrawals() {
                     <div className="border border-gray-200 rounded-lg max-h-48 overflow-y-auto divide-y divide-gray-50">
                       {filteredBrokersForPicker.length === 0 && <div className="p-3 text-xs text-gray-400">No brokers match.</div>}
                       {filteredBrokersForPicker.map(b => {
-                        const w = walletByBroker[b.id] || { earned: 0, paid: 0, pending: 0, available: 0 }
+                        const w = walletByBroker[b.id] || { earned: 0, paid: 0, pending: 0, advance: 0, available: 0 }
                         const avail = Math.max(0, w.earned - w.paid - w.pending)
                         return (
                           <button key={b.id} onClick={() => setCreateBrokerId(b.id)} className="w-full px-3 py-2 text-left hover:bg-emerald-50/60 flex items-center justify-between">
@@ -459,9 +459,10 @@ export default function Withdrawals() {
 
               {/* Wallet snapshot */}
               {selectedBroker && wallet && (
-                <div className="grid grid-cols-3 gap-2">
+                <div className={`grid gap-2 ${wallet.advance > 0 ? 'grid-cols-4' : 'grid-cols-3'}`}>
                   <Mini label="Earned"   value={`₹${wallet.earned.toLocaleString()}`} accent="text-emerald-700"/>
                   <Mini label="Paid out" value={`₹${wallet.paid.toLocaleString()}`}   accent="text-rose-700"/>
+                  {wallet.advance > 0 && <Mini label="Advance" value={`₹${wallet.advance.toLocaleString()}`} accent="text-amber-700"/>}
                   <Mini label="Available" value={`₹${available.toLocaleString()}`}    accent="text-indigo-700" highlight/>
                 </div>
               )}

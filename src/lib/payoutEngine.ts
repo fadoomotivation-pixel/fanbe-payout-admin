@@ -525,17 +525,22 @@ export type BrokerWallet = {
   earned: number          // sum of payout_distributions.net_payout
   paid: number            // withdrawal_requests in paid|closed + bp_payout_transactions in paid
   pending: number         // withdrawal_requests in pending|approved + bp_payout_transactions in pending|approved
-  available: number       // max(0, earned - paid - pending)
+  advance: number         // sum of Advance-head expenses attributed to this broker (money paid up front)
+  available: number       // max(0, earned - paid - pending - advance)
 }
 
 export async function loadBrokerWallets(): Promise<Record<string, BrokerWallet>> {
-  const [{ data: dist }, { data: wds }, { data: txns }] = await Promise.all([
+  const [{ data: dist }, { data: wds }, { data: txns }, { data: advances }] = await Promise.all([
     supabase.from('payout_distributions').select('beneficiary_broker_id, net_payout'),
     supabase.from('withdrawal_requests').select('broker_id, amount, net_amount, status'),
     supabase.from('bp_payout_transactions').select('broker_id, amount, net_amount, status'),
+    // Advances given to a broker (an Expense under the "Advance" head, attributed to
+    // them) reduce what they can WITHDRAW until recovered — earnings history is
+    // untouched, only 'available' drops.  Admin chose "reduce available only".
+    supabase.from('expenses').select('broker_id, amount, expense_heads(name)').not('broker_id', 'is', null),
   ])
   const out: Record<string, BrokerWallet> = {}
-  const ensure = (id: string) => (out[id] ??= { earned: 0, paid: 0, pending: 0, available: 0 })
+  const ensure = (id: string) => (out[id] ??= { earned: 0, paid: 0, pending: 0, advance: 0, available: 0 })
   for (const d of (dist || []) as any[]) {
     if (!d.beneficiary_broker_id) continue
     ensure(d.beneficiary_broker_id).earned += Number(d.net_payout || 0)
@@ -556,7 +561,14 @@ export async function loadBrokerWallets(): Promise<Record<string, BrokerWallet>>
     if (t.status === 'paid')                                 w_.paid    += Number(t.net_amount || t.amount || 0)
     if (t.status === 'pending' || t.status === 'approved')   w_.pending += Number(t.net_amount || t.amount || 0)
   }
-  for (const id in out) out[id].available = Math.max(0, out[id].earned - out[id].paid - out[id].pending)
+  for (const e of (advances || []) as any[]) {
+    if (!e.broker_id) continue
+    // expense_heads is the joined row; only the "Advance" head counts here.
+    const headName = (e.expense_heads?.name || '').toLowerCase()
+    if (headName !== 'advance') continue
+    ensure(e.broker_id).advance += Number(e.amount || 0)
+  }
+  for (const id in out) out[id].available = Math.max(0, out[id].earned - out[id].paid - out[id].pending - out[id].advance)
   return out
 }
 
