@@ -216,18 +216,46 @@ export default function Bookings() {
     },
   })
 
+  // Plot picker options — scoped to the scheme picked on the booking form.  This used
+  // to fetch every available plot in every project, so choosing "Brij Vatika" still
+  // listed Gokul Vatika / Khatushyam plots and admin could book a plot that doesn't
+  // belong to the selected scheme.  Now nothing loads until a project is chosen and
+  // only that project's plots come back.
+  //
+  // Fetched in pages of 1000 because PostgREST caps a single response at max-rows and
+  // the bigger schemes hold more plots than that — without the loop the tail of the
+  // scheme was simply missing from the dropdown.
   const { data: plots = [] } = useQuery({
-    queryKey: ['plots_avail'],
+    queryKey: ['plots_avail', form.project_id],
+    enabled: !!form.project_id,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from('bp_plots')
-        .select('id, plot_no, size_sqyd, price_per_sqyd, plc_charges, total_price, status, project_id, bp_projects(id, name)')
-        .eq('status','available')
-        .order('plot_no')
-      if (error) throw error
-      return data
+      const PAGE = 1000
+      const out: any[] = []
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await supabase
+          .from('bp_plots')
+          .select('id, plot_no, size_sqyd, price_per_sqyd, plc_charges, total_price, status, project_id, bp_projects(id, name)')
+          .eq('project_id', form.project_id)
+          .eq('status', 'available')
+          .order('plot_no')
+          .range(from, from + PAGE - 1)
+        if (error) throw error
+        out.push(...(data || []))
+        if (!data || data.length < PAGE) break
+      }
+      return out
     },
   })
+
+  // While editing, the booking's own plot is already token/booked/sold, so it is not in
+  // the "available" list above — merge it back in or the select renders blank on an
+  // existing booking.
+  const plotOptions = useMemo(() => {
+    const own = editing?.bp_plots
+    if (!own?.id || own.project_id !== form.project_id) return plots as any[]
+    if ((plots as any[]).some((p: any) => p.id === own.id)) return plots as any[]
+    return [own, ...(plots as any[])]
+  }, [plots, editing, form.project_id])
 
   const { data: customers = [] } = useQuery({
     queryKey: ['customers'],
@@ -769,9 +797,10 @@ export default function Bookings() {
   }
 
   const save = async () => {
-    // Broker is now required on every booking — admin asked for it, and the trigger
-    // also needs broker_id to credit any commission.
-    if (!form.broker_id) { toast.error('Pick the broker who made the sale (required)'); return }
+    // Broker is optional — admin asked for the mandatory marker to come off, since
+    // plenty of sales are walk-in / direct with nobody to credit.  When one is picked
+    // the trigger still uses broker_id to credit the commission; when it isn't, the
+    // booking simply saves with no payout attached.
 
     // New-customer block: bp_customers.phone is NOT NULL on this schema, so blocking
     // here avoids hitting the generic "Could not save the booking" toast that admins
@@ -785,24 +814,9 @@ export default function Bookings() {
       toast.error("Pick a customer or switch to 'New customer' to add one."); return
     }
 
-    // Traditional bookings MUST set a commission > 0 — otherwise the trigger has nothing
-    // to distribute and the broker silently earns ₹0 even though the customer paid in
-    // full.  This was the root cause of the "wrong commission" complaint.  Total includes
-    // the primary + any extra brokers admin added in the multi-broker split section.
-    if (form.commission_mode === 'traditional') {
-      const primary = form.traditional_input === 'per_sqyd'
-        ? num(form.traditional_commission_per_sqyd)
-        : num(form.traditional_commission_pct)
-      const extras = (splitBrokers || []).reduce((s, x) => s + num(x.commission_pct), 0)
-      if (primary <= 0 && extras <= 0) {
-        toast.error(
-          form.traditional_input === 'per_sqyd'
-            ? 'Enter a commission rate per gaj (₹/sq.yd) greater than 0 — otherwise the broker earns nothing.'
-            : 'Enter a commission % greater than 0 — otherwise the broker earns nothing.'
-        )
-        return
-      }
-    }
+    // Commission on a traditional booking is optional too — leaving it blank saves the
+    // booking with nothing to distribute (the broker earns ₹0 until admin fills it in
+    // from Edit).  The form shows an inline heads-up instead of blocking the save.
 
     if (!editing) {
       if (form.token_enabled && !num(form.token_amount))     { toast.error('Token amount is required (or uncheck the section)'); return }
@@ -817,14 +831,24 @@ export default function Bookings() {
     setModal(false)
   }
 
+  // Switching scheme drops a plot picked from the previous scheme, so the two selects
+  // can never disagree about which project the booking belongs to.
+  const handleProjectChange = (projectId: string) => {
+    setForm((p: any) => {
+      const cur = plotOptions.find((pl: any) => pl.id === p.plot_id)
+      const keepPlot = !!p.plot_id && cur?.project_id === projectId
+      return { ...p, project_id: projectId, plot_id: keepPlot ? p.plot_id : '' }
+    })
+  }
+
   const handlePlotChange = (plotId: string) => {
     set('plot_id', plotId)
-    const p = (plots as any[]).find((pl: any) => pl.id === plotId)
+    const p = plotOptions.find((pl: any) => pl.id === plotId)
     if (p) {
       if (p.size_sqyd)       set('size_sqyd', String(p.size_sqyd))
       if (p.price_per_sqyd)  set('rate_per_sqyd', String(p.price_per_sqyd))
       if (p.plc_charges != null) set('plc_charges', String(p.plc_charges))
-      if (p.bp_projects?.id) set('project_id', p.bp_projects.id)
+      if (p.project_id) set('project_id', p.project_id)
     }
   }
 
@@ -1265,14 +1289,27 @@ export default function Bookings() {
       <Modal open={modal} onClose={() => setModal(false)} title={editing ? 'Edit Booking' : 'New Booking — आवेदन-पत्र'}>
         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">आवासीय योजना (Scheme) & Plot</div>
         <div className="grid grid-cols-2 gap-3">
-          <Select label="आवासीय योजना का नाम (Project / Scheme)" value={form.project_id} onChange={(e: any) => set('project_id', e.target.value)} className="col-span-2">
+          <Select label="आवासीय योजना का नाम (Project / Scheme)" value={form.project_id} onChange={(e: any) => handleProjectChange(e.target.value)} className="col-span-2">
             <option value="">{(projects as any[]).length === 0 ? 'No projects yet' : 'Select scheme / project'}</option>
             {(projects as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.name}{p.location ? ` · ${p.location}` : ''}</option>)}
           </Select>
-          <Select label="Plot (Available) — प्लॉट नं." value={form.plot_id} onChange={(e: any) => handlePlotChange(e.target.value)} className="col-span-2">
-            <option value="">{(plots as any[]).length === 0 ? 'No available plots' : 'Select Plot'}</option>
-            {(plots as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.plot_no} — {p.size_sqyd} sqyd @ {formatINR(p.price_per_sqyd)}/gaj · {p.bp_projects?.name}</option>)}
+          {/* Plot list is scoped to the scheme selected above — picking Brij Vatika shows
+              Brij Vatika's available plots only. */}
+          <Select label="Plot (Available) — प्लॉट नं." value={form.plot_id} onChange={(e: any) => handlePlotChange(e.target.value)} className="col-span-2" disabled={!form.project_id}>
+            <option value="">
+              {!form.project_id
+                ? 'Select a scheme / project first'
+                : plotOptions.length === 0 ? 'No available plots in this scheme' : 'Select Plot'}
+            </option>
+            {plotOptions.map((p: any) => <option key={p.id} value={p.id}>{p.plot_no} — {p.size_sqyd} sqyd @ {formatINR(p.price_per_sqyd)}/gaj</option>)}
           </Select>
+          {form.project_id && (
+            <div className="col-span-2 -mt-1 text-[11px] text-gray-500">
+              {(plots as any[]).length > 0
+                ? <>{(plots as any[]).length} plot{(plots as any[]).length === 1 ? '' : 's'} available in {(projects as any[]).find((p: any) => p.id === form.project_id)?.name || 'this scheme'}.</>
+                : <>No available plots left in this scheme — add plots from the Plots page or pick another scheme.</>}
+            </div>
+          )}
         </div>
 
         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Pricing Inputs</div>
@@ -1321,6 +1358,21 @@ export default function Bookings() {
                 Direct broker gets paid only; upline cascade is OFF by default.
               </p>
 
+              {/* Commission is no longer mandatory — but a blank value means nothing gets
+                  distributed, so say so plainly instead of blocking the save. */}
+              {(() => {
+                const primary = form.traditional_input === 'per_sqyd'
+                  ? num(form.traditional_commission_per_sqyd)
+                  : num(form.traditional_commission_pct)
+                const extras = (splitBrokers || []).reduce((s, x) => s + num(x.commission_pct), 0)
+                if (primary > 0 || extras > 0) return null
+                return (
+                  <div className="text-[11px] bg-white border border-amber-300 text-amber-900 rounded-lg px-2 py-1.5">
+                    No commission set — the booking will save, but the broker earns ₹0 until you add a value here.
+                  </div>
+                )
+              })()}
+
               {/* Choose the input shape -- a straight % OR Rs/gaj */}
               <div className="flex gap-2 text-xs">
                 <label className={`flex-1 cursor-pointer px-3 py-2 rounded-lg border ${form.traditional_input === 'pct' ? 'border-amber-500 bg-white' : 'border-gray-200 bg-white/60'}`}>
@@ -1336,7 +1388,7 @@ export default function Bookings() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 {form.traditional_input === 'pct' ? (
                   <Input
-                    label="Commission % of each payment"
+                    label="Commission % of each payment (optional)"
                     type="number"
                     value={form.traditional_commission_pct}
                     onChange={(e: any) => set('traditional_commission_pct', e.target.value)}
@@ -1345,7 +1397,7 @@ export default function Bookings() {
                 ) : (
                   <>
                     <Input
-                      label="Commission rate per gaj (₹/sq.yd)"
+                      label="Commission rate per gaj (₹/sq.yd) (optional)"
                       type="number"
                       value={form.traditional_commission_per_sqyd}
                       onChange={(e: any) => set('traditional_commission_per_sqyd', e.target.value)}
@@ -1704,11 +1756,12 @@ export default function Bookings() {
           <Input label="Customer Bank Name" value={form.customer_bank_name} onChange={(e: any) => set('customer_bank_name', e.target.value)} placeholder="e.g. HDFC Bank" />
         </div>
 
-        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Broker (required) & Approvals</div>
+        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Broker & Approvals</div>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-medium text-gray-700 mb-1">
               {form.commission_mode === 'traditional' ? 'Broker / Company (Traditional)' : 'Broker (MLM, Upline)'}
+              <span className="ml-1 font-normal text-gray-400">(optional)</span>
             </label>
             <BrokerCombobox
               value={form.broker_id}
@@ -1716,6 +1769,11 @@ export default function Bookings() {
               onChange={handleBrokerChange}
               placeholder="— Search by name, broker code or phone —"
             />
+            {!form.broker_id && (
+              <div className="mt-1.5 text-[11px] text-gray-500">
+                Leave blank for a direct / walk-in sale — no commission will be credited.
+              </div>
+            )}
             {/* Quick add — admin can create a fresh broker without leaving the booking
                 page.  Auto-sets broker_type from the current booking mode so the new
                 broker shows up in the right pool (traditional or MLM) immediately. */}
