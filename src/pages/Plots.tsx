@@ -15,8 +15,15 @@ const STATUS_COLORS: Record<string, string> = {
   token: 'bg-amber-100 text-amber-700',
   booked: 'bg-blue-100 text-blue-700',
   cancelled: 'bg-red-100 text-red-700',
-  sold: 'bg-purple-100 text-purple-700',
+  // 'registry_done' is the terminal state in bp_plots_status_check.  There is no
+  // 'sold' status -- the picker used to offer one and every such save was rejected
+  // by the constraint.
+  registry_done: 'bg-purple-100 text-purple-700',
 }
+
+// Must stay in step with bp_plots_status_check.
+const PLOT_STATUSES = ['available', 'token', 'booked', 'registry_done', 'cancelled'] as const
+const statusLabel = (s: string) => s === 'registry_done' ? 'Registry done' : s.charAt(0).toUpperCase() + s.slice(1)
 
 const CATEGORIES = ['residential','commercial','industrial','agricultural','villa','apartment'] as const
 const FACINGS    = ['east','west','north','south','north-east','north-west','south-east','south-west'] as const
@@ -440,7 +447,7 @@ export default function Plots() {
       const traditional = bk?.commission_mode === 'traditional'
       return (
         <div className="flex flex-col gap-0.5">
-          <Badge label={r.status || 'available'} className={STATUS_COLORS[r.status] || 'bg-gray-100 text-gray-600'}/>
+          <Badge label={statusLabel(r.status || 'available')} className={STATUS_COLORS[r.status] || 'bg-gray-100 text-gray-600'}/>
           {bk && (
             <Badge
               label={traditional ? 'Sold · Traditional' : 'Sold · MLM'}
@@ -515,7 +522,7 @@ export default function Plots() {
           </select>
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
             <option value="">All Status</option>
-            {['available','token','booked','cancelled','sold'].map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>)}
+            {PLOT_STATUSES.map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}
           </select>
           <select value={saleModeFilter} onChange={e => setSaleModeFilter(e.target.value as any)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" title="Filter by sale mode">
             <option value="">All sale modes</option>
@@ -693,7 +700,7 @@ function PlotFormFields({ f, set, projects, totalPreview }: any) {
       <Input label="Sector" value={f.sector} onChange={(e: any) => set('sector', e.target.value)} placeholder="12"/>
       <Input label="Floor" value={f.floor} onChange={(e: any) => set('floor', e.target.value)} placeholder="optional"/>
       <Select label="Status" value={f.status} onChange={(e: any) => set('status', e.target.value)}>
-        {['available','token','booked','cancelled','sold'].map(s => <option key={s} value={s} className="capitalize">{s}</option>)}
+        {PLOT_STATUSES.map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}
       </Select>
       <label className="col-span-2 flex items-center gap-2 text-sm text-gray-700">
         <input type="checkbox" checked={!!f.is_corner} onChange={e => set('is_corner', e.target.checked)} />

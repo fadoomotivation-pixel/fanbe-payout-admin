@@ -14,7 +14,7 @@ import { ClosureDialog } from '@/components/ClosureDialog'
 import { distributePaymentCommission, reverseBookingCommission } from '@/lib/payoutEngine'
 import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
 import EmiPanel from '@/components/EmiPanel'
-import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info, Banknote, IndianRupee, Lock, Unlock, Search, Download, X, Filter, ChevronDown, Users } from 'lucide-react'
+import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info, Banknote, IndianRupee, Lock, Unlock, Search, Download, X, Filter, ChevronDown, Users, ScrollText } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const STAGES = ['token_received','booking_done','cancelled'] as const
@@ -154,6 +154,11 @@ export default function Bookings() {
   const [emiBooking, setEmiBooking] = useState<any>(null)
   const [recordBookingFor, setRecordBookingFor] = useState<any>(null)
   const [closureFor, setClosureFor] = useState<{ booking: any; action: 'close' | 'reopen' } | null>(null)
+  // Registry completion — the sale's final step: the plot is transferred into the
+  // customer's name at the sub-registrar.  Recorded on the booking, and it moves the
+  // plot(s) to their terminal 'registry_done' state.
+  const [registryFor, setRegistryFor] = useState<any>(null)
+  const [registryForm, setRegistryForm] = useState<any>({ registry_date: '', registry_doc_no: '', registry_office: '', registry_notes: '', ack_balance: false })
   const [bulkCloseFor, setBulkCloseFor] = useState<any[] | null>(null)
   // ── Admin filter / search state ─────────────────────────────────
   const [search, setSearch] = useState('')
@@ -453,10 +458,16 @@ export default function Bookings() {
   }
 
   // Accepts one id or many — a booking can hold several plots and they all move together.
+  //
+  // 'registry_done' is the terminal state: once a plot is registered in the customer's
+  // name, editing the booking or nudging its stage must not walk it back to 'booked'.
+  // Cancelling is the one exception — that releases the plot deliberately.
   async function syncPlotStatus(plotIds: string | string[] | null | undefined, stage: Stage) {
     const ids = (Array.isArray(plotIds) ? plotIds : [plotIds]).filter(Boolean) as string[]
     if (ids.length === 0) return
-    await supabase.from('bp_plots').update({ status: plotStatusForStage(stage) }).in('id', ids)
+    let q = supabase.from('bp_plots').update({ status: plotStatusForStage(stage) }).in('id', ids)
+    if (stage !== 'cancelled') q = q.neq('status', 'registry_done')
+    await q
   }
 
   // Rewrite the booking ↔ plots join rows.  Wipe + re-insert (same shape as the
@@ -867,7 +878,7 @@ export default function Bookings() {
       if (error) throw error
       const soldIds = plotIdsOf(p.booking)
       if (soldIds.length > 0 && p.booking.stage === 'booking_done') {
-        await supabase.from('bp_plots').update({ status: 'sold' }).in('id', soldIds)
+        await supabase.from('bp_plots').update({ status: 'registry_done' }).in('id', soldIds)
       }
       await logClosure({ entityType: 'booking', entityId: p.booking.id, action: 'closed', reason: p.reason, metadata: { booking_no: p.booking.booking_no, stage: p.booking.stage, total: p.booking.total_amount } })
     },
@@ -877,6 +888,76 @@ export default function Bookings() {
       qc.invalidateQueries({ queryKey: ['plots'] })
       toast.success('Booking closed')
       setClosureFor(null)
+    },
+    onError: (e: any) => toast.error(e.message),
+  })
+
+  const openRegistry = (b: any) => {
+    setRegistryForm({
+      registry_date:   b.registry_date || today(),
+      registry_doc_no: b.registry_doc_no || '',
+      registry_office: b.registry_office || '',
+      registry_notes:  b.registry_notes || '',
+      ack_balance: false,
+    })
+    setRegistryFor(b)
+  }
+
+  const saveRegistry = useMutation({
+    mutationFn: async ({ booking, data }: { booking: any; data: any }) => {
+      const userId = await getCurrentUserId()
+      const { error } = await supabase.from('bp_bookings').update({
+        registry_date:         data.registry_date || null,
+        registry_doc_no:       data.registry_doc_no?.trim() || null,
+        registry_office:       data.registry_office?.trim() || null,
+        registry_notes:        data.registry_notes?.trim() || null,
+        registry_completed_at: new Date().toISOString(),
+        registry_completed_by: userId,
+        updated_at: new Date().toISOString(),
+      }).eq('id', booking.id)
+      if (error) throw error
+      // Registry is the end of the road for the plot — mark every plot on this booking
+      // as registered.  This is checked for errors on purpose: 'registry_done' is the
+      // only terminal value bp_plots_status_check accepts.
+      const ids = plotIdsOf(booking)
+      if (ids.length > 0) {
+        const { error: plotErr } = await supabase.from('bp_plots').update({ status: 'registry_done' }).in('id', ids)
+        if (plotErr) throw plotErr
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['bookings'] })
+      qc.invalidateQueries({ queryKey: ['plots_avail'] })
+      qc.invalidateQueries({ queryKey: ['plots'] })
+      setRegistryFor(null)
+      toast.success('Registry recorded — plot marked registered')
+    },
+    onError: (e: any) => { console.error('Registry save failed:', e); toast.error(friendlyError(e, 'Could not save the registry details.')) },
+  })
+
+  // Undo — a registry entered against the wrong booking has to be reversible, and the
+  // plot has to come back with it or the inventory is stuck.
+  const clearRegistry = useMutation({
+    mutationFn: async (booking: any) => {
+      const { error } = await supabase.from('bp_bookings').update({
+        registry_date: null, registry_doc_no: null, registry_office: null,
+        registry_completed_at: null, registry_completed_by: null,
+        updated_at: new Date().toISOString(),
+      }).eq('id', booking.id)
+      if (error) throw error
+      const ids = plotIdsOf(booking)
+      if (ids.length > 0) {
+        await supabase.from('bp_plots')
+          .update({ status: plotStatusForStage(booking.stage as Stage) })
+          .in('id', ids).eq('status', 'registry_done')
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['bookings'] })
+      qc.invalidateQueries({ queryKey: ['plots_avail'] })
+      qc.invalidateQueries({ queryKey: ['plots'] })
+      setRegistryFor(null)
+      toast.success('Registry entry removed')
     },
     onError: (e: any) => toast.error(e.message),
   })
@@ -1225,7 +1306,7 @@ export default function Bookings() {
         if (error) throw error
         const soldIds = plotIdsOf(b)
         if (soldIds.length > 0 && b.stage === 'booking_done') {
-          await supabase.from('bp_plots').update({ status: 'sold' }).in('id', soldIds)
+          await supabase.from('bp_plots').update({ status: 'registry_done' }).in('id', soldIds)
         }
         await logClosure({ entityType: 'booking', entityId: b.id, action: 'closed', reason, metadata: { bulk: true, booking_no: b.booking_no, stage: b.stage } })
       }
@@ -1357,6 +1438,13 @@ export default function Bookings() {
                 <Lock size={9}/>Closed {formatDate(r.closed_at)}
               </span>
             )}
+            {/* Registry status is derived from registry_date alone — there is no separate
+                status column that could drift out of step with the date. */}
+            {r.registry_date && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-teal-800 bg-teal-50 border border-teal-200 px-1.5 py-0.5 rounded">
+                <ScrollText size={9}/>Registry done {formatDate(r.registry_date)}
+              </span>
+            )}
           </div>
         )
       },
@@ -1383,6 +1471,11 @@ export default function Bookings() {
             {!locked && canClose(r) && (
               <Button size="sm" variant="secondary" onClick={() => setClosureFor({ booking: r, action: 'close' })}>
                 <Lock size={12}/>Close
+              </Button>
+            )}
+            {r.stage !== 'cancelled' && (
+              <Button size="sm" variant="ghost" onClick={() => openRegistry(r)}>
+                <ScrollText size={12}/>{r.registry_date ? 'Registry ✓' : 'Registry'}
               </Button>
             )}
           </div>
@@ -2044,6 +2137,73 @@ export default function Bookings() {
           <Button variant="secondary" onClick={() => setModal(false)}>Cancel</Button>
           <Button onClick={save} loading={create.isPending || update.isPending}>{editing ? 'Save changes' : 'Create Booking'}</Button>
         </div>
+      </Modal>
+
+      {/* ── Registry completion ─────────────────────────────────────────── */}
+      <Modal open={!!registryFor} onClose={() => setRegistryFor(null)} title={`Registry — ${registryFor?.booking_no || ''}`} size="sm">
+        {registryFor && (() => {
+          const total   = Number(registryFor.total_amount || registryFor.plot_total_price || 0)
+          const paid    = Number(paidMap[registryFor.id] || 0)
+          const balance = Math.max(0, total - paid)
+          const plotNos = plotNosOf(registryFor)
+          return (
+            <div className="space-y-3">
+              <div className="text-xs bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-2 text-gray-700 grid grid-cols-2 gap-y-1 gap-x-3">
+                <span>Customer: <b>{registryFor.bp_customers?.name || '—'}</b></span>
+                <span>Plot{plotNos.length > 1 ? 's' : ''}: <b>{plotNos.join(', ') || '—'}</b></span>
+                <span>Total: <b>{formatINR(total)}</b></span>
+                <span>Collected: <b>{formatINR(paid)}</b></span>
+              </div>
+
+              {/* You don't normally register a plot with money still outstanding, but
+                  part-payment registries do happen — so warn and require an explicit
+                  acknowledgement rather than blocking outright. */}
+              {balance > 0 && (
+                <label className="flex items-start gap-2 text-xs bg-amber-50 border border-amber-200 text-amber-900 rounded-lg px-2.5 py-2 cursor-pointer">
+                  <input type="checkbox" className="mt-0.5 rounded" checked={!!registryForm.ack_balance}
+                    onChange={e => setRegistryForm((p: any) => ({ ...p, ack_balance: e.target.checked }))}/>
+                  <span>
+                    <b>{formatINR(balance)} is still outstanding</b> on this booking. Tick to confirm the registry is going ahead anyway.
+                  </span>
+                </label>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <Input label="Registry date" type="date" value={registryForm.registry_date}
+                  onChange={(e: any) => setRegistryForm((p: any) => ({ ...p, registry_date: e.target.value }))} />
+                <Input label="Registered document no." value={registryForm.registry_doc_no}
+                  onChange={(e: any) => setRegistryForm((p: any) => ({ ...p, registry_doc_no: e.target.value }))} placeholder="as on the deed" />
+              </div>
+              <Input label="Sub-registrar office" value={registryForm.registry_office}
+                onChange={(e: any) => setRegistryForm((p: any) => ({ ...p, registry_office: e.target.value }))} placeholder="e.g. Tehsil Ballabgarh" />
+              <Textarea label="Notes" rows={2} value={registryForm.registry_notes}
+                onChange={(e: any) => setRegistryForm((p: any) => ({ ...p, registry_notes: e.target.value }))} placeholder="Anything worth recording about the registry" />
+
+              <div className="text-[11px] text-gray-600 bg-teal-50 border border-teal-200 rounded-lg px-2.5 py-2">
+                Saving marks {plotNos.length > 1 ? 'these plots' : 'this plot'} <b>registry done</b> — the terminal state. The plot leaves the available pool and later edits to the booking will not move it back.
+              </div>
+
+              <div className="flex justify-between gap-2 pt-1">
+                {registryFor.registry_date ? (
+                  <Button variant="ghost" className="text-red-600" loading={clearRegistry.isPending}
+                    onClick={() => clearRegistry.mutate(registryFor)}>
+                    Remove registry entry
+                  </Button>
+                ) : <span />}
+                <div className="flex gap-2">
+                  <Button variant="secondary" onClick={() => setRegistryFor(null)}>Cancel</Button>
+                  <Button
+                    loading={saveRegistry.isPending}
+                    disabled={!registryForm.registry_date || (balance > 0 && !registryForm.ack_balance)}
+                    onClick={() => saveRegistry.mutate({ booking: registryFor, data: registryForm })}
+                  >
+                    {registryFor.registry_date ? 'Update registry' : 'Mark registry done'}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
       </Modal>
 
       <EmiPanel booking={emiBooking} open={!!emiBooking} onClose={() => setEmiBooking(null)} />
