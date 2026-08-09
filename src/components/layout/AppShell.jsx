@@ -34,6 +34,9 @@ const NAV = [
     // entries confusing because clicking either landed on the same /bookings page.
     { to: '/bookings',          icon: BookOpen,   label: 'Bookings' },
     { to: '/payments',          icon: CreditCard, label: 'Payments' },
+    // Post-dated cheques are tracked separately from payments on purpose: a cheque
+    // on file is not collected money until it clears.
+    { to: '/pdc-cheques',       icon: Landmark,   label: 'PDC Cheques' },
   ]},
   { group: 'Broker Network', items: [
     { to: '/brokers',          icon: Users,    label: 'Brokers' },
