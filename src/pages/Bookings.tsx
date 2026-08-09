@@ -107,7 +107,11 @@ function friendlyError(err: any, defaultMsg = 'Could not save the booking.  Plea
 }
 
 const EMPTY: any = {
-  plot_id:'', customer_id:'', broker_id:'', project_id:'', stage:'token_received',
+  // One booking can carry several plots (customer buys two adjacent plots on one
+  // application).  plot_ids is the source of truth in the form; bp_bookings.plot_id is
+  // written from plot_ids[0] so every existing read path keeps working.
+  plot_ids: [] as string[],
+  customer_id:'', broker_id:'', project_id:'', stage:'token_received',
   size_sqyd:'', rate_per_sqyd:'',
   dev_charges:'0', plc_charges:'0', discount_amount:'0',
   // Commission mode — 'mlm' (default, rank-based + upline differential) or 'traditional'
@@ -174,7 +178,7 @@ export default function Bookings() {
     queryFn: async () => {
       let q = supabase
         .from('bp_bookings')
-        .select('*,bp_plots(*),bp_customers(*),brokers(name,broker_id),bp_projects(*)')
+        .select('*,bp_plots(*),bp_customers(*),brokers(name,broker_id),bp_projects(*),bp_booking_plots(position,plot_id,bp_plots(*))')
         .in('stage', ['token_received','booking_done','cancelled'])
         .order('created_at', { ascending: false })
       // Server-side filter: don't even fetch MLM rows when admin is on the Traditional
@@ -247,15 +251,45 @@ export default function Bookings() {
     },
   })
 
-  // While editing, the booking's own plot is already token/booked/sold, so it is not in
-  // the "available" list above — merge it back in or the select renders blank on an
+  // While editing, the booking's own plots are already token/booked/sold, so they are not
+  // in the "available" list above — merge them back in or the picker drops them from an
   // existing booking.
   const plotOptions = useMemo(() => {
-    const own = editing?.bp_plots
-    if (!own?.id || own.project_id !== form.project_id) return plots as any[]
-    if ((plots as any[]).some((p: any) => p.id === own.id)) return plots as any[]
-    return [own, ...(plots as any[])]
+    const list = plots as any[]
+    const seen = new Set(list.map((p: any) => p.id))
+    const own: any[] = []
+    for (const p of [...((editing?.bp_booking_plots || []) as any[]).map((r: any) => r.bp_plots), editing?.bp_plots]) {
+      if (!p?.id || p.project_id !== form.project_id || seen.has(p.id)) continue
+      seen.add(p.id)
+      own.push(p)
+    }
+    return own.length > 0 ? [...own, ...list] : list
   }, [plots, editing, form.project_id])
+
+  // Every plot on a booking row — the join table when present, else the legacy single
+  // plot_id.  Used wherever plot status has to follow the booking (stage moves, closing).
+  const plotIdsOf = (b: any): string[] => {
+    const rows = (b?.bp_booking_plots || []) as any[]
+    if (rows.length > 0) {
+      return [...rows].sort((x, y) => (x.position || 1) - (y.position || 1)).map(r => r.plot_id).filter(Boolean)
+    }
+    return b?.plot_id ? [b.plot_id] : []
+  }
+
+  const plotNosOf = (b: any): string[] => {
+    const rows = (b?.bp_booking_plots || []) as any[]
+    return rows.length > 0
+      ? [...rows].sort((x, y) => (x.position || 1) - (y.position || 1)).map(r => r.bp_plots?.plot_no).filter(Boolean)
+      : [b?.bp_plots?.plot_no].filter(Boolean)
+  }
+
+  // "A-101" / "A-101 +2" for the list columns, which only have room for one line.
+  const plotLabelOf = (b: any): string => {
+    const nos = plotNosOf(b)
+    if (nos.length === 0) return '—'
+    if (nos.length === 1) return nos[0]
+    return `${nos[0]} +${nos.length - 1}`
+  }
 
   const { data: customers = [] } = useQuery({
     queryKey: ['customers'],
@@ -297,6 +331,28 @@ export default function Bookings() {
 
   const num = (v: any) => Number(v) || 0
   const round2 = (v: number) => Math.round(v * 100) / 100
+
+  // The plots currently on the form, in the order admin picked them.
+  const selectedPlots = useMemo(
+    () => ((form.plot_ids || []) as string[]).map(id => plotOptions.find((p: any) => p.id === id)).filter(Boolean),
+    [form.plot_ids, plotOptions],
+  )
+
+  // Pricing inputs follow the whole selection: sizes add up, PLC charges add up, and the
+  // rate becomes the size-weighted average so base price still works out to the sum of
+  // each plot's own size × rate.  Admin can still type over any of the three.
+  const pricingForPlots = (picked: any[]) => {
+    if (picked.length === 0) return null
+    const totalSize = picked.reduce((s: number, p: any) => s + num(p.size_sqyd), 0)
+    const totalBase = picked.reduce((s: number, p: any) => s + num(p.size_sqyd) * num(p.price_per_sqyd), 0)
+    const totalPlc  = picked.reduce((s: number, p: any) => s + num(p.plc_charges), 0)
+    return {
+      size_sqyd:     totalSize > 0 ? String(round2(totalSize)) : '',
+      rate_per_sqyd: totalSize > 0 ? String(round2(totalBase / totalSize)) : '',
+      plc_charges:   String(totalPlc),
+    }
+  }
+
   const size  = num(form.size_sqyd)
   const rate  = num(form.rate_per_sqyd)
   const basePrice = Math.round(size * rate)
@@ -396,9 +452,21 @@ export default function Bookings() {
     return 'booked'
   }
 
-  async function syncPlotStatus(plotId: string | null | undefined, stage: Stage) {
-    if (!plotId) return
-    await supabase.from('bp_plots').update({ status: plotStatusForStage(stage) }).eq('id', plotId)
+  // Accepts one id or many — a booking can hold several plots and they all move together.
+  async function syncPlotStatus(plotIds: string | string[] | null | undefined, stage: Stage) {
+    const ids = (Array.isArray(plotIds) ? plotIds : [plotIds]).filter(Boolean) as string[]
+    if (ids.length === 0) return
+    await supabase.from('bp_plots').update({ status: plotStatusForStage(stage) }).in('id', ids)
+  }
+
+  // Rewrite the booking ↔ plots join rows.  Wipe + re-insert (same shape as the
+  // multi-broker split) because admin may have added, removed or re-ordered plots.
+  async function saveBookingPlots(bookingId: string, plotIds: string[]) {
+    await supabase.from('bp_booking_plots').delete().eq('booking_id', bookingId)
+    if (plotIds.length === 0) return
+    await supabase.from('bp_booking_plots').insert(
+      plotIds.map((plot_id, i) => ({ booking_id: bookingId, plot_id, position: i + 1 })),
+    )
   }
 
   const create = useMutation({
@@ -416,6 +484,7 @@ export default function Bookings() {
         customer_id = nc.id
       }
       const stage = autoStage(rest)
+      const plotIds: string[] = (rest.plot_ids || []).filter(Boolean)
       const project = (projects as any[]).find((pj: any) => pj.id === rest.project_id)
       const broker  = (brokers as any[]).find((b: any) => b.id === rest.broker_id)
       const mlmPct = broker ? Number((ranks as any[]).find((r: any) => r.rank_name === broker.rank)?.commission_pct || 0) : 0
@@ -436,7 +505,9 @@ export default function Bookings() {
         ? (tradPct != null ? tradPct : (tradPerSqyd != null && sz > 0 && total > 0 ? round2((tradPerSqyd * sz / total) * 100) : 0))
         : mlmPct
       const bookingPayload: any = {
-        plot_id: rest.plot_id || null, customer_id, broker_id: rest.broker_id || null, project_id: rest.project_id || null,
+        // plot_id stays the position-1 plot so every existing join keeps resolving; the
+        // full set is written to bp_booking_plots right after the insert.
+        plot_id: plotIds[0] || null, customer_id, broker_id: rest.broker_id || null, project_id: rest.project_id || null,
         stage,
         size_sqyd: sz || null, rate_per_sqyd: rt || null, base_price: base || null,
         dev_charges: d, plc_charges: pl, discount_amount: dsc,
@@ -461,6 +532,7 @@ export default function Bookings() {
       }
       const { data: bk, error } = await supabase.from('bp_bookings').insert(bookingPayload).select().single()
       if (error) throw error
+      await saveBookingPlots(bk.id, plotIds)
 
       // Auto-promote: every customer becomes a broker the moment their MLM booking lands,
       // sponsored by the broker who made the sale.  No more "Make broker" chasing in the
@@ -536,7 +608,7 @@ export default function Bookings() {
         const principal = Math.max(0, total - tokenAmt - bookingAmt - fullAmt)
         if (principal > 0) await generateEmiSchedule(bk.id, customer_id, principal, num(rest.emi_n) || 12, rest.emi_freq || 'monthly', rest.emi_start || today())
       }
-      await syncPlotStatus(rest.plot_id, stage)
+      await syncPlotStatus(plotIds, stage)
       return { ...bk, distributed }
     },
     onSuccess: (res: any) => {
@@ -572,11 +644,42 @@ export default function Bookings() {
       const effectivePct  = isTraditional
         ? (tradPct != null ? tradPct : (tradPerSqyd != null && sz > 0 && total > 0 ? round2((tradPerSqyd * sz / total) * 100) : 0))
         : mlmPct
-      const { data: current } = await supabase.from('bp_bookings').select('plot_id').eq('id', id).single()
-      const payload = {
-        plot_id: data.plot_id || null, customer_id: data.customer_id || null,
+      const { data: current } = await supabase
+        .from('bp_bookings')
+        .select('plot_id, token_amount, booking_amount, full_payment_amount, payment_type')
+        .eq('id', id).single()
+      const { data: currentPlotRows } = await supabase
+        .from('bp_booking_plots').select('plot_id').eq('booking_id', id)
+      const oldPlotIds: string[] = [
+        ...((currentPlotRows || []) as any[]).map(r => r.plot_id),
+        ...(current?.plot_id ? [current.plot_id] : []),
+      ].filter((v, i, a) => v && a.indexOf(v) === i)
+      const plotIds: string[] = (data.plot_ids || []).filter(Boolean)
+
+      // Payments can now be added while editing (admin books the plot first with no money
+      // taken, then records the token / booking deposit later).  Only the sections that
+      // are ticked in the form are recorded, and each one becomes a fresh bp_payments row
+      // on top of whatever this booking already collected.
+      const { data: paidRows } = await supabase
+        .from('bp_payments').select('amount').eq('booking_id', id).eq('verification_status', 'verified')
+      const alreadyPaidOnBooking = ((paidRows || []) as any[]).reduce((s: number, r: any) => s + num(r.amount), 0)
+
+      const addTokenAmt   = data.token_enabled   ? num(data.token_amount)   : 0
+      const addBookingAmt = data.booking_enabled ? num(data.booking_amount) : 0
+      // A blank "full payment" means "settle whatever is left", same shorthand the create
+      // form uses — except here the outstanding balance is net of what's already banked.
+      const addFullAmt    = data.full_enabled    ? (num(data.full_amount) || Math.max(0, total - alreadyPaidOnBooking)) : 0
+      const addsPayment   = addTokenAmt > 0 || addBookingAmt > 0 || addFullAmt > 0
+      // A deposit or full payment moves a token-stage booking forward, same rule the
+      // "Receive booking amount" quick action already applies.
+      const stageAfterPayment: Stage = (addBookingAmt > 0 || addFullAmt > 0) && data.stage === 'token_received'
+        ? 'booking_done'
+        : (data.stage as Stage)
+
+      const payload: any = {
+        plot_id: plotIds[0] || null, customer_id: data.customer_id || null,
         broker_id: data.broker_id || null, project_id: data.project_id || null,
-        stage: data.stage,
+        stage: stageAfterPayment,
         size_sqyd: sz || null, rate_per_sqyd: rt || null,
         base_price: base || null,
         dev_charges: d, plc_charges: pl, discount_amount: dsc,
@@ -598,6 +701,26 @@ export default function Bookings() {
         affidavit_accepted: !!data.affidavit_accepted,
         updated_at: new Date().toISOString(),
       }
+      // Roll any newly-recorded amount into the booking's own running totals so the
+      // Final Summary and the receipts stay in step with bp_payments.
+      if (addTokenAmt > 0) {
+        payload.token_amount = num(current?.token_amount) + addTokenAmt
+        payload.token_date   = data.token_date || null
+      }
+      if (addBookingAmt > 0) {
+        payload.booking_amount = num(current?.booking_amount) + addBookingAmt
+        payload.booking_date   = data.booking_date || null
+      }
+      if (addFullAmt > 0) {
+        payload.full_payment_amount = num(current?.full_payment_amount) + addFullAmt
+        payload.full_payment_date   = data.full_date || null
+      }
+      if (addsPayment) {
+        payload.payment_type = data.emi_enabled ? 'emi'
+          : addFullAmt > 0 ? 'full'
+          : addBookingAmt > 0 ? 'booking'
+          : (current?.payment_type || 'token')
+      }
       const { data: d2, error } = await supabase.from('bp_bookings').update(payload).eq('id', id).select().single()
       if (error) throw error
       // Re-sync the multi-broker split rows on edit: wipe + re-insert is simplest because
@@ -615,29 +738,65 @@ export default function Bookings() {
           await supabase.from('bp_booking_brokers').insert(rows)
         }
       }
-      const newPlotId = data.plot_id || null
-      const oldPlotId = current?.plot_id || null
-      if (oldPlotId && oldPlotId !== newPlotId) {
-        await supabase.from('bp_plots').update({ status: 'available' }).eq('id', oldPlotId)
+      await saveBookingPlots(id, plotIds)
+      // Plots dropped from the booking go back into the available pool.
+      const freed = oldPlotIds.filter(pid => !plotIds.includes(pid))
+      if (freed.length > 0) {
+        await supabase.from('bp_plots').update({ status: 'available' }).in('id', freed)
       }
-      await syncPlotStatus(newPlotId, data.stage as Stage)
-      return d2
+      await syncPlotStatus(plotIds, stageAfterPayment)
+
+      // Record the payments admin ticked on this edit, reusing the same path as the
+      // create flow so receipts, UTR checks and MLM distribution all behave identically.
+      const sponsorName = broker?.name || null
+      let distributed = 0
+      if (addTokenAmt > 0) {
+        const r = await recordPaymentRow({ booking_id: id, customer_id: data.customer_id, payment_type: 'token',        amount: addTokenAmt,   payment_date: data.token_date,   payment_mode: data.token_mode,   utr_ref: data.token_utr,   drawn_on_bank: data.token_drawn_on,   branch: data.token_branch,   sponsor_name: sponsorName })
+        distributed += r.distributed
+      }
+      if (addBookingAmt > 0) {
+        const r = await recordPaymentRow({ booking_id: id, customer_id: data.customer_id, payment_type: 'booking',      amount: addBookingAmt, payment_date: data.booking_date, payment_mode: data.booking_mode, utr_ref: data.booking_utr, drawn_on_bank: data.booking_drawn_on, branch: data.booking_branch, sponsor_name: sponsorName })
+        distributed += r.distributed
+      }
+      if (addFullAmt > 0) {
+        const r = await recordPaymentRow({ booking_id: id, customer_id: data.customer_id, payment_type: 'full_payment', amount: addFullAmt,    payment_date: data.full_date,    payment_mode: data.full_mode,    utr_ref: data.full_utr, sponsor_name: sponsorName })
+        distributed += r.distributed
+      }
+      // EMI: only build a schedule if this booking doesn't already have one — the EMI
+      // panel owns an existing schedule and must not be silently duplicated.
+      if (data.emi_enabled) {
+        const { data: existingSched } = await supabase.from('emi_schedules').select('id').eq('booking_id', id).limit(1)
+        if (!existingSched || existingSched.length === 0) {
+          const principal = Math.max(0, total - alreadyPaidOnBooking - addTokenAmt - addBookingAmt - addFullAmt)
+          if (principal > 0) await generateEmiSchedule(id, data.customer_id, principal, num(data.emi_n) || 12, data.emi_freq || 'monthly', data.emi_start || today())
+        }
+      }
+      return { ...d2, distributed, addedPayment: addsPayment }
     },
-    onSuccess: () => {
+    onSuccess: (res: any) => {
       qc.invalidateQueries({ queryKey: ['bookings'] })
       qc.invalidateQueries({ queryKey: ['plots_avail'] })
       qc.invalidateQueries({ queryKey: ['plots'] })
-      toast.success('Booking updated')
+      qc.invalidateQueries({ queryKey: ['payments_by_booking'] })
+      qc.invalidateQueries({ queryKey: ['payments'] })
+      qc.invalidateQueries({ queryKey: ['emi_schedules'] })
+      qc.invalidateQueries({ queryKey: ['emi_schedules_by_booking'] })
+      qc.invalidateQueries({ queryKey: ['payouts'] })
+      qc.invalidateQueries({ queryKey: ['commission_ledger'] })
+      toast.success(res?.addedPayment
+        ? `Booking updated · payment recorded${res.distributed > 0 ? ` · ${res.distributed} commission row(s)` : ''}`
+        : 'Booking updated')
     },
     onError: (e: any) => { console.error('Update booking failed:', e); toast.error(friendlyError(e, 'Could not update the booking. Please check the fields and try again.')) },
   })
 
   const advanceStage = useMutation({
     mutationFn: async ({ id, stage }: { id: string; stage: Stage }) => {
-      const { data: current } = await supabase.from('bp_bookings').select('plot_id').eq('id', id).single()
+      const { data: current } = await supabase
+        .from('bp_bookings').select('plot_id, bp_booking_plots(position, plot_id)').eq('id', id).single()
       const { error } = await supabase.from('bp_bookings').update({ stage, updated_at: new Date().toISOString() }).eq('id', id)
       if (error) throw error
-      await syncPlotStatus(current?.plot_id, stage)
+      await syncPlotStatus(plotIdsOf(current), stage)
       // Per-payment MLM model: commission is distributed when payments are recorded.
       // Stage advance does not redistribute. Cancelling rolls back all commissions for this booking.
       if (stage === 'cancelled') await reverseBookingCommission(id)
@@ -675,7 +834,7 @@ export default function Bookings() {
       }
       const { error } = await supabase.from('bp_bookings').update(updatePayload).eq('id', b.id)
       if (error) throw error
-      await syncPlotStatus(b.plot_id, 'booking_done')
+      await syncPlotStatus(plotIdsOf(b), 'booking_done')
       return { booking: b, openEmiAfter: p.openEmiAfter, distributed: r.distributed }
     },
     onSuccess: (res) => {
@@ -706,8 +865,9 @@ export default function Bookings() {
         updated_at: new Date().toISOString(),
       }).eq('id', p.booking.id)
       if (error) throw error
-      if (p.booking.plot_id && p.booking.stage === 'booking_done') {
-        await supabase.from('bp_plots').update({ status: 'sold' }).eq('id', p.booking.plot_id)
+      const soldIds = plotIdsOf(p.booking)
+      if (soldIds.length > 0 && p.booking.stage === 'booking_done') {
+        await supabase.from('bp_plots').update({ status: 'sold' }).in('id', soldIds)
       }
       await logClosure({ entityType: 'booking', entityId: p.booking.id, action: 'closed', reason: p.reason, metadata: { booking_no: p.booking.booking_no, stage: p.booking.stage, total: p.booking.total_amount } })
     },
@@ -733,7 +893,7 @@ export default function Bookings() {
         updated_at: new Date().toISOString(),
       }).eq('id', p.booking.id)
       if (error) throw error
-      await syncPlotStatus(p.booking.plot_id, p.booking.stage as Stage)
+      await syncPlotStatus(plotIdsOf(p.booking), p.booking.stage as Stage)
       await logClosure({ entityType: 'booking', entityId: p.booking.id, action: 'reopened', reason: p.reason, metadata: { booking_no: p.booking.booking_no } })
     },
     onSuccess: () => {
@@ -750,7 +910,7 @@ export default function Bookings() {
     setEditing(b || null)
     setForm(b ? {
       ...EMPTY,
-      plot_id: b.plot_id || '', customer_id: b.customer_id || '',
+      plot_ids: plotIdsOf(b), customer_id: b.customer_id || '',
       broker_id: b.broker_id || '', project_id: b.project_id || '',
       stage: (STAGES.includes(b.stage) ? b.stage : 'token_received'),
       size_sqyd: b.size_sqyd || b.bp_plots?.size_sqyd || '',
@@ -831,26 +991,43 @@ export default function Bookings() {
     setModal(false)
   }
 
-  // Switching scheme drops a plot picked from the previous scheme, so the two selects
-  // can never disagree about which project the booking belongs to.
+  // Switching scheme drops plots picked from the previous scheme, so the scheme and the
+  // plot list can never disagree about which project the booking belongs to.
   const handleProjectChange = (projectId: string) => {
     setForm((p: any) => {
-      const cur = plotOptions.find((pl: any) => pl.id === p.plot_id)
-      const keepPlot = !!p.plot_id && cur?.project_id === projectId
-      return { ...p, project_id: projectId, plot_id: keepPlot ? p.plot_id : '' }
+      const kept = ((p.plot_ids || []) as string[]).filter(id => {
+        const pl = plotOptions.find((x: any) => x.id === id)
+        return pl?.project_id === projectId
+      })
+      return { ...p, project_id: projectId, plot_ids: kept, ...(pricingForPlots(
+        kept.map(id => plotOptions.find((x: any) => x.id === id)).filter(Boolean),
+      ) || {}) }
     })
   }
 
-  const handlePlotChange = (plotId: string) => {
-    set('plot_id', plotId)
-    const p = plotOptions.find((pl: any) => pl.id === plotId)
-    if (p) {
-      if (p.size_sqyd)       set('size_sqyd', String(p.size_sqyd))
-      if (p.price_per_sqyd)  set('rate_per_sqyd', String(p.price_per_sqyd))
-      if (p.plc_charges != null) set('plc_charges', String(p.plc_charges))
-      if (p.project_id) set('project_id', p.project_id)
-    }
+  // Add / remove a plot, re-deriving size, rate and PLC from whatever is selected after
+  // the change so the pricing block always matches the plots on the booking.
+  const applyPlotIds = (ids: string[]) => {
+    const picked = ids.map(id => plotOptions.find((p: any) => p.id === id)).filter(Boolean)
+    setForm((p: any) => ({
+      ...p,
+      plot_ids: ids,
+      ...(pricingForPlots(picked) || {}),
+      ...(picked[0]?.project_id ? { project_id: picked[0].project_id } : {}),
+    }))
   }
+
+  // What's still on offer in the dropdown — everything in the scheme minus what's picked.
+  const addablePlots = useMemo(
+    () => plotOptions.filter((p: any) => !((form.plot_ids || []) as string[]).includes(p.id)),
+    [plotOptions, form.plot_ids],
+  )
+
+  const addPlot    = (plotId: string) => {
+    if (!plotId || (form.plot_ids || []).includes(plotId)) return
+    applyPlotIds([...(form.plot_ids || []), plotId])
+  }
+  const removePlot = (plotId: string) => applyPlotIds(((form.plot_ids || []) as string[]).filter(id => id !== plotId))
 
   const handleBrokerChange = (brokerId: string) => {
     setForm((p: any) => {
@@ -915,11 +1092,17 @@ export default function Bookings() {
   const all = bookings as any[]
   const totalValue  = all.filter((b: any) => b.stage === 'booking_done').reduce((s: number, b: any) => s + Number(b.total_amount || b.plot_total_price || 0), 0)
 
+  // Money this booking has already banked (edit mode only) — a payment added from the
+  // Edit modal sits on top of it, so previews and the "full payment" default have to
+  // work off the outstanding balance, not the whole plot value.
+  const alreadyPaid = editing ? Number(paidByBooking[editing.id] || 0) : 0
+  const outstanding = Math.max(0, totalNet - alreadyPaid)
+
   const tokenAmt = form.token_enabled ? num(form.token_amount) : 0
   const bookingAmt = form.booking_enabled ? num(form.booking_amount) : 0
-  const fullAmt = form.full_enabled ? (num(form.full_amount) || totalNet) : 0
+  const fullAmt = form.full_enabled ? (num(form.full_amount) || outstanding) : 0
   const paidToday = tokenAmt + bookingAmt + fullAmt
-  const balanceDue = Math.max(0, totalNet - paidToday)
+  const balanceDue = Math.max(0, outstanding - paidToday)
   const principalPreview = balanceDue
   const emiCount = Math.max(1, num(form.emi_n) || 12)
   const emiAmtPreview = principalPreview > 0 ? Math.round(principalPreview / emiCount) : 0
@@ -972,7 +1155,7 @@ export default function Bookings() {
       const q = search.toLowerCase()
       const hay = [
         b.booking_no, b.bp_customers?.name, b.bp_customers?.phone, b.bp_customers?.customer_code,
-        b.bp_plots?.plot_no, b.brokers?.name, b.brokers?.broker_id,
+        ...plotNosOf(b), b.brokers?.name, b.brokers?.broker_id,
         b.bp_projects?.name, b.scheme_name,
       ].filter(Boolean).join(' ').toLowerCase()
       if (!hay.includes(q)) return false
@@ -1008,7 +1191,7 @@ export default function Bookings() {
         b.application_date || '',
         b.bp_customers?.name || '',
         b.bp_customers?.phone || '',
-        b.bp_plots?.plot_no || '',
+        plotNosOf(b).join(' | ') || '',
         b.bp_projects?.name || '',
         b.brokers?.name || '',
         b.brokers?.broker_id || '',
@@ -1040,8 +1223,9 @@ export default function Bookings() {
           reopened_at: null, reopened_by: null, reopen_reason: null, updated_at: now,
         }).eq('id', b.id)
         if (error) throw error
-        if (b.plot_id && b.stage === 'booking_done') {
-          await supabase.from('bp_plots').update({ status: 'sold' }).eq('id', b.plot_id)
+        const soldIds = plotIdsOf(b)
+        if (soldIds.length > 0 && b.stage === 'booking_done') {
+          await supabase.from('bp_plots').update({ status: 'sold' }).in('id', soldIds)
         }
         await logClosure({ entityType: 'booking', entityId: b.id, action: 'closed', reason, metadata: { bulk: true, booking_no: b.booking_no, stage: b.stage } })
       }
@@ -1108,7 +1292,7 @@ export default function Bookings() {
       header: 'Plot / Scheme',
       render: (r: any) => (
         <div>
-          <div className="font-medium text-sm">{r.bp_plots?.plot_no || '—'}</div>
+          <div className="font-medium text-sm" title={plotNosOf(r).join(', ')}>{plotLabelOf(r)}</div>
           <div className="text-xs text-gray-400">{(r.size_sqyd || r.bp_plots?.size_sqyd || '—')} sqyd · {r.bp_projects?.name || r.scheme_name || ''}</div>
         </div>
       ),
@@ -1266,7 +1450,7 @@ export default function Bookings() {
                 <div className="text-sm font-semibold text-gray-900 truncate">{r.bp_customers?.name || '—'}</div>
                 <div className="text-[12px] text-gray-500 truncate">
                   <span className="font-mono">{r.booking_no}</span>
-                  {r.bp_plots?.plot_no && <> · Plot {r.bp_plots.plot_no}</>}
+                  {plotNosOf(r).length > 0 && <> · Plot{plotNosOf(r).length > 1 ? 's' : ''} {plotNosOf(r).join(', ')}</>}
                   {(r.bp_projects?.name || r.scheme_name) && <> · {r.bp_projects?.name || r.scheme_name}</>}
                   {r.brokers?.name && <> · {r.brokers.name}</>}
                 </div>
@@ -1294,15 +1478,51 @@ export default function Bookings() {
             {(projects as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.name}{p.location ? ` · ${p.location}` : ''}</option>)}
           </Select>
           {/* Plot list is scoped to the scheme selected above — picking Brij Vatika shows
-              Brij Vatika's available plots only. */}
-          <Select label="Plot (Available) — प्लॉट नं." value={form.plot_id} onChange={(e: any) => handlePlotChange(e.target.value)} className="col-span-2" disabled={!form.project_id}>
+              Brij Vatika's available plots only.  The select adds a plot to the booking
+              rather than replacing it, so a customer buying two plots gets one booking. */}
+          <Select
+            label="Plot (Available) — प्लॉट नं. (एक से ज़्यादा भी चुन सकते हैं)"
+            value=""
+            onChange={(e: any) => addPlot(e.target.value)}
+            className="col-span-2"
+            disabled={!form.project_id || addablePlots.length === 0}
+          >
             <option value="">
               {!form.project_id
                 ? 'Select a scheme / project first'
-                : plotOptions.length === 0 ? 'No available plots in this scheme' : 'Select Plot'}
+                : addablePlots.length === 0
+                  ? (selectedPlots.length > 0 ? 'No more available plots in this scheme' : 'No available plots in this scheme')
+                  : selectedPlots.length > 0 ? '+ Add another plot' : 'Select Plot'}
             </option>
-            {plotOptions.map((p: any) => <option key={p.id} value={p.id}>{p.plot_no} — {p.size_sqyd} sqyd @ {formatINR(p.price_per_sqyd)}/gaj</option>)}
+            {addablePlots.map((p: any) => <option key={p.id} value={p.id}>{p.plot_no} — {p.size_sqyd} sqyd @ {formatINR(p.price_per_sqyd)}/gaj</option>)}
           </Select>
+
+          {/* Selected plots — chips with the running total, so admin can see (and undo)
+              exactly which plots this one booking covers. */}
+          {selectedPlots.length > 0 && (
+            <div className="col-span-2 -mt-1">
+              <div className="flex flex-wrap gap-1.5">
+                {selectedPlots.map((p: any, i: number) => (
+                  <span key={p.id} className="inline-flex items-center gap-1.5 bg-blue-50 border border-blue-200 text-blue-900 rounded-lg pl-2 pr-1 py-1 text-xs">
+                    <b>{p.plot_no}</b>
+                    <span className="text-blue-700/70">{p.size_sqyd} sqyd @ {formatINR(p.price_per_sqyd)}/gaj</span>
+                    {i === 0 && selectedPlots.length > 1 && <span className="text-[9px] uppercase tracking-wide bg-blue-600 text-white rounded px-1 py-0.5">main</span>}
+                    <button type="button" onClick={() => removePlot(p.id)} className="text-blue-500 hover:text-rose-600 hover:bg-white rounded p-0.5" title="Remove this plot">
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+              {selectedPlots.length > 1 && (
+                <div className="mt-1.5 text-[11px] text-blue-800 bg-blue-50/60 border border-blue-200 rounded-lg px-2 py-1.5">
+                  {selectedPlots.length} plots on this booking — total{' '}
+                  <b>{round2(selectedPlots.reduce((s: number, p: any) => s + num(p.size_sqyd), 0))} sqyd</b>.
+                  Size, rate and PLC below are filled from all of them (rate is the size-weighted average); you can still type over them.
+                </div>
+              )}
+            </div>
+          )}
+
           {form.project_id && (
             <div className="col-span-2 -mt-1 text-[11px] text-gray-500">
               {(plots as any[]).length > 0
@@ -1501,10 +1721,27 @@ export default function Bookings() {
           )}
         </div>
 
-        {!editing && (
-          <>
-            <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Payment Plan</div>
-            <div className="text-[11px] text-gray-500 mb-3">Tick everything the customer is paying today. Token + Booking + EMI combinations are supported.</div>
+        {/* Payment plan is available while editing too — admin books the plot first with
+            no money taken (just to get the ID out), then reopens the booking and records
+            the token / booking deposit when it actually arrives.  Anything ticked here on
+            an edit is recorded as a NEW payment on top of what the booking already
+            collected; nothing that was already received is re-posted. */}
+        <>
+            <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">
+              {editing ? 'Add a payment' : 'Payment Plan'}
+            </div>
+            <div className="text-[11px] text-gray-500 mb-3">
+              {editing
+                ? 'Tick only what the customer is paying NOW — it is added on top of whatever this booking has already collected. Leave everything unticked to just save the other edits.'
+                : 'Tick everything the customer is paying today. Token + Booking + EMI combinations are supported.'}
+            </div>
+            {editing && (
+              <div className="text-[11px] mb-3 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-2 text-gray-700">
+                Already collected on this booking: <b>{formatINR(paidMap[editing.id] || 0)}</b>
+                {' '}of {formatINR(Number(editing.total_amount || editing.plot_total_price || 0))}
+                {emiByBooking[editing.id] && <> · EMI schedule already set up — manage it from the EMI panel.</>}
+              </div>
+            )}
 
             <PayBlock checked={form.token_enabled} onCheck={v => set('token_enabled', v)} label="Token amount" subtitle={
               form.token_enabled && !form.booking_enabled
@@ -1632,8 +1869,8 @@ export default function Bookings() {
               </div>
             </PayBlock>
 
-            <PayBlock checked={form.full_enabled} onCheck={v => set('full_enabled', v)} label="Full payment today" subtitle="Customer settles the entire net total in one shot" color="violet">
-              <PayFields prefix="full" form={form} set={set} amountPlaceholder={totalNet ? `Defaults to total ${formatINR(totalNet)}` : ''} hideBranch />
+            <PayBlock checked={form.full_enabled} onCheck={v => set('full_enabled', v)} label="Full payment today" subtitle={editing ? 'Customer settles the outstanding balance in one shot' : 'Customer settles the entire net total in one shot'} color="violet">
+              <PayFields prefix="full" form={form} set={set} amountPlaceholder={outstanding ? `Defaults to ${editing ? 'balance' : 'total'} ${formatINR(outstanding)}` : ''} hideBranch />
             </PayBlock>
 
             {/* Pricing summary moved here — appears below payment plan so admin sees a final commit summary */}
@@ -1675,25 +1912,7 @@ export default function Bookings() {
               )}
             </div>
           </>
-        )}
 
-        {/* Edit mode: show simplified totals (no payment plan exists in edit) */}
-        {editing && (
-          <div className="mt-4 p-3 bg-gray-50 border border-gray-200 rounded-lg text-sm">
-            <div className="grid grid-cols-2 gap-y-1.5 gap-x-4">
-              <div className="text-gray-600">Base price <span className="text-[10px] text-gray-400">({size || 0} × ₹{rate || 0})</span></div>
-              <div className="text-right font-semibold">{formatINR(basePrice)}</div>
-              <div className="text-gray-600">+ Development charges</div>
-              <div className="text-right font-semibold">{formatINR(dev)}</div>
-              <div className="text-gray-600">+ PLC charges</div>
-              <div className="text-right font-semibold">{formatINR(plc)}</div>
-              <div className="text-gray-600">− Discount</div>
-              <div className="text-right font-semibold text-red-700">{disc > 0 ? '−' : ''}{formatINR(disc)}</div>
-              <div className="text-gray-900 font-semibold border-t border-gray-300 pt-1.5">कुल नेट / Total net value</div>
-              <div className="text-right text-green-700 font-bold text-base border-t border-gray-300 pt-1.5">{formatINR(totalNet)}</div>
-            </div>
-          </div>
-        )}
 
         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100 flex items-center justify-between">
           <span>Customer</span>
@@ -2037,7 +2256,13 @@ function RecordBookingPaymentModal({ booking, paid, onClose, onSubmit, submittin
     <Modal open={!!booking} onClose={onClose} title={`Record Booking — ${booking.bp_customers?.name || booking.booking_no}`}>
       <div className="grid grid-cols-2 gap-y-1 gap-x-4 p-3 bg-blue-50 rounded-lg text-xs mb-4 text-blue-900">
         <span>Booking: <b>{booking.booking_no}</b></span>
-        <span>Plot: <b>{booking.bp_plots?.plot_no || '—'}</b></span>
+        <span>Plot: <b>{
+          ([...(booking.bp_booking_plots || [])]
+            .sort((a: any, b: any) => (a.position || 1) - (b.position || 1))
+            .map((r: any) => r.bp_plots?.plot_no)
+            .filter(Boolean)
+            .join(', ')) || booking.bp_plots?.plot_no || '—'
+        }</b></span>
         <span>Total: <b>{formatINR(total)}</b></span>
         <span>Already paid: <b>{formatINR(paid)}</b></span>
         <span className="col-span-2 pt-1 border-t border-blue-200">Outstanding balance: <b className="text-orange-700">{formatINR(balance)}</b></span>
