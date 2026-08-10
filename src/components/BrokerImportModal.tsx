@@ -26,7 +26,7 @@ import { supabase } from '@/lib/supabase'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { Button } from '@/components/ui/Button.tsx'
 import { Select } from '@/components/ui/Input.tsx'
-import { ClipboardPaste, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { ClipboardPaste, AlertTriangle, CheckCircle2, Download } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 // Column order the paste is read in.  Matches the order admin already keeps in the
@@ -69,7 +69,10 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
   const [result, setResult] = useState<{ ok: number; failed: { line: number; name: string; reason: string }[] } | null>(null)
 
   const parsed = useMemo<Row[]>(() => {
-    const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
+    // '#' marks the sample rows in the downloadable template.  Skipping them means the
+    // examples can be pasted back by mistake without creating three fake brokers —
+    // and admin turns an example into a real row just by deleting the '#'.
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
     if (lines.length === 0) return []
 
     // Drop a header row if the sheet was copied with one.
@@ -187,6 +190,32 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
 
   const close = () => { setText(''); setResult(null); onClose() }
 
+  // A filled-in sample sheet so admin can see the shape instead of guessing it.  Sample
+  // rows are '#'-prefixed, so the file can be pasted back as-is and only the real rows
+  // admin adds get imported.  Opens straight in Excel / Google Sheets.
+  const downloadTemplate = () => {
+    const csv = [
+      'Broker ID,Name,Phone,Email,PAN,Date of Joining',
+      '# --- The lines starting with # are examples. Delete them, or just remove the # to import that row. ---',
+      '# TR814,RAJESH KUMAR,9811100011,rajesh@example.com,ABCPK1234A,01/04/2024',
+      '# TR815,SUNITA DEVI,9811100012,,,15/07/2023          <- email/PAN blank is fine',
+      '# ,MOHIT SAXENA,9811100013,,,                        <- Broker ID blank = a new code is generated',
+      '#',
+      '# Only Name is required. Keep the columns in this order and do not add new ones.',
+      '# Broker ID  : the code this broker already uses. Leave blank for a new one.',
+      '# Phone      : 10 digits. This is the broker login, so it must not repeat.',
+      '# Email      : optional. Left blank, one is built from the phone number.',
+      '# Date       : dd/mm/yyyy, dd-mm-yyyy or yyyy-mm-dd.',
+      '',
+    ].join('\n')
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'broker-import-template.csv'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <Modal open={open} onClose={close} title="Import brokers from Excel" size="lg">
       <div className="space-y-3">
@@ -195,6 +224,15 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
         </div>
         <div className="font-mono text-[11px] bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-700 overflow-x-auto whitespace-nowrap">
           Broker ID → Name → Phone → Email → PAN → Date of joining
+        </div>
+        <div className="flex items-center gap-2 text-xs bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-2">
+          <span className="text-emerald-900 flex-1">
+            Not sure how to lay the sheet out? Download the sample file, fill your brokers into it, then copy the rows back here.
+          </span>
+          <button type="button" onClick={downloadTemplate}
+            className="shrink-0 inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700">
+            <Download size={13}/>Sample sheet
+          </button>
         </div>
         <div className="text-[11px] text-gray-500">
           Only <b>Name</b> is required. Leave <b>Broker ID</b> blank to have a fresh code generated; fill it in to keep the code the broker already has.
