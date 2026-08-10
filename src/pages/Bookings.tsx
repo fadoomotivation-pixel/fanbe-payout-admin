@@ -14,7 +14,8 @@ import { ClosureDialog } from '@/components/ClosureDialog'
 import { distributePaymentCommission, reverseBookingCommission } from '@/lib/payoutEngine'
 import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
 import EmiPanel from '@/components/EmiPanel'
-import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info, Banknote, IndianRupee, Lock, Unlock, Search, Download, X, Filter, ChevronDown, Users, ScrollText } from 'lucide-react'
+import BookingImportModal from '@/components/BookingImportModal'
+import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info, Banknote, IndianRupee, Lock, Unlock, Search, Download, X, Filter, ChevronDown, Users, ScrollText, ClipboardPaste } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const STAGES = ['token_received','booking_done','cancelled'] as const
@@ -157,6 +158,8 @@ export default function Bookings() {
   // Registry completion — the sale's final step: the plot is transferred into the
   // customer's name at the sub-registrar.  Recorded on the booking, and it moves the
   // plot(s) to their terminal 'registry_done' state.
+  // Bulk import of bookings that predate the system — see BookingImportModal.
+  const [importOpen, setImportOpen] = useState(false)
   const [registryFor, setRegistryFor] = useState<any>(null)
   const [registryForm, setRegistryForm] = useState<any>({ registry_date: '', registry_doc_no: '', registry_office: '', registry_notes: '', ack_balance: false })
   const [bulkCloseFor, setBulkCloseFor] = useState<any[] | null>(null)
@@ -1521,6 +1524,10 @@ export default function Bookings() {
           className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-full bg-gray-900 text-white text-sm font-semibold hover:bg-black shadow-sm transition">
           <Plus size={14}/>New Booking
         </button>
+        <button onClick={() => setImportOpen(true)}
+          className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-full bg-white border border-gray-200 text-gray-700 text-sm hover:border-gray-300 transition">
+          <ClipboardPaste size={14}/>Import old bookings
+        </button>
         <Link to="/customer-pipeline"
           className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-full bg-white border border-gray-200 text-gray-700 text-sm hover:border-gray-300 transition">
           <Users size={14}/>Open Customer Pipeline
@@ -2205,6 +2212,18 @@ export default function Bookings() {
           )
         })()}
       </Modal>
+
+      <BookingImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={() => {
+          qc.invalidateQueries({ queryKey: ['bookings'] })
+          qc.invalidateQueries({ queryKey: ['customers'] })
+          qc.invalidateQueries({ queryKey: ['payments_by_booking'] })
+          qc.invalidateQueries({ queryKey: ['plots_avail'] })
+          qc.invalidateQueries({ queryKey: ['plots'] })
+        }}
+      />
 
       <EmiPanel booking={emiBooking} open={!!emiBooking} onClose={() => setEmiBooking(null)} />
 
