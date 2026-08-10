@@ -8,7 +8,8 @@ import { Input, Select } from '@/components/ui/Input.tsx'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { KYC_COLORS, formatINR } from '@/lib/utils'
-import { Plus, Search, KeyRound, Copy, Check, Eye, UserPlus, X } from 'lucide-react'
+import { Plus, Search, KeyRound, Copy, Check, Eye, UserPlus, X, ClipboardPaste } from 'lucide-react'
+import BrokerImportModal from '@/components/BrokerImportModal'
 import toast from 'react-hot-toast'
 
 const EMPTY = {
@@ -128,6 +129,8 @@ export default function Brokers() {
   const [q, setQ] = useState('')
   // '' = all brokers, 'mlm' = only tree brokers, 'traditional' = only standalone brokers
   const [typeFilter, setTypeFilter] = useState<'' | 'mlm' | 'traditional'>('')
+  // Bulk import of brokers that already exist on paper — see BrokerImportModal.
+  const [importOpen, setImportOpen] = useState(false)
   const [copiedKey, setCopiedKey] = useState<string|null>(null)
   const [loginResult, setLoginResult] = useState<any>(null)
   const [editPassword, setEditPassword] = useState('')
@@ -397,7 +400,10 @@ export default function Brokers() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <div><h1 className="text-xl font-bold text-gray-900">Brokers</h1><p className="text-sm text-gray-500">{allBrokers.length} brokers · click a name for the full earnings profile</p></div>
-        <Button onClick={() => open()}><Plus size={14} />Add Broker</Button>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={() => setImportOpen(true)}><ClipboardPaste size={14} />Import from Excel</Button>
+          <Button onClick={() => open()}><Plus size={14} />Add Broker</Button>
+        </div>
       </div>
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
         <div className="p-4 border-b border-gray-100 flex gap-3 items-center flex-wrap">
@@ -497,6 +503,13 @@ export default function Brokers() {
           })}
         </div>
       </div>
+
+      <BrokerImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        existing={allBrokers}
+        onImported={() => qc.invalidateQueries({ queryKey: ['brokers'] })}
+      />
 
       <Modal open={modal} onClose={() => setModal(false)} title={editing ? `Edit Broker — ${editing.broker_id || ''}` : 'Add Broker'}>
         {/* Broker-type toggle promoted to the TOP of the modal so admin sees it before
