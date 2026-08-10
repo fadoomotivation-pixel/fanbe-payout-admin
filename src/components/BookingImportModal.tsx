@@ -55,10 +55,6 @@ function parseDate(raw: string): string | null {
   return null
 }
 
-// booking_no shapes that generate_booking_no() treats as "unassigned" and overwrites.
-// Anything else admin types is kept, so we warn only for these.
-const AUTO_OVERWRITTEN = /^(BK-\d+|BK-\d{4}-\d+|TR-\d{4}-\d+)$/i
-
 type Row = {
   line: number
   booking_no: string
@@ -113,7 +109,7 @@ export default function BookingImportModal({ open, onClose, onImported }: {
         supabase.from('bp_projects').select('id, name'),
         supabase.from('bp_customers').select('id, name, phone'),
         supabase.from('brokers').select('id, broker_id, name'),
-        supabase.from('bp_bookings').select('booking_no, plot_id'),
+        supabase.from('bp_bookings').select('legacy_booking_no, plot_id'),
       ])
       return {
         plots,
@@ -140,7 +136,7 @@ export default function BookingImportModal({ open, onClose, onImported }: {
     for (const p of ref.plots) plotsByKey.set(`${p.project_id}|${norm(p.plot_no)}`, p)
 
     const takenPlots = new Set(ref.bookings.map((b: any) => b.plot_id).filter(Boolean))
-    const takenNos   = new Set(ref.bookings.map((b: any) => norm(b.booking_no)).filter(Boolean))
+    const takenNos   = new Set(ref.bookings.map((b: any) => norm(b.legacy_booking_no)).filter(Boolean))
     const seenPlots  = new Set<string>()
     const seenNos    = new Set<string>()
 
@@ -191,11 +187,9 @@ export default function BookingImportModal({ open, onClose, onImported }: {
 
       if (booking_no) {
         const k = norm(booking_no)
-        if (seenNos.has(k) || takenNos.has(k)) warnings.push(`Booking No ${booking_no} is already used — imported anyway, so check these two`)
+        if (seenNos.has(k) || takenNos.has(k)) warnings.push(`Old register no ${booking_no} appears more than once — imported anyway, so check these`)
         else seenNos.add(k)
-        if (AUTO_OVERWRITTEN.test(booking_no)) {
-          warnings.push(`${booking_no} looks system-generated and will be replaced — use the old register number or leave it blank`)
-        }
+
       }
 
       let broker: any = null
@@ -263,7 +257,11 @@ export default function BookingImportModal({ open, onClose, onImported }: {
         }
 
         const { data: bk, error: bErr } = await supabase.from('bp_bookings').insert({
-          ...(r.booking_no ? { booking_no: r.booking_no } : {}),
+          // The register number goes in its OWN column.  Putting it in booking_no used to
+          // replace the system id, so one imported row read "341" while every other row
+          // read "CR-0010" -- two kinds of identifier in one column.  booking_no is left
+          // blank here so generate_booking_no() issues the usual CR-xxxx.
+          legacy_booking_no: r.booking_no || null,
           customer_id,
           plot_id: r.plot_id,
           project_id: r.project_id,
@@ -322,7 +320,7 @@ export default function BookingImportModal({ open, onClose, onImported }: {
 
   const downloadTemplate = () => {
     const csv = [
-      'Booking No,Booking Date,Project,Plot No,Size (sqyd),Rate per sqyd,Customer Name,Phone,Father/Husband Name,Address,PAN,Broker Code,Amount Received,Total Amount',
+      'Old Booking No,Booking Date,Project,Plot No,Size (sqyd),Rate per sqyd,Customer Name,Phone,Father/Husband Name,Address,PAN,Broker Code,Amount Received,Total Amount',
       '# --- Lines starting with # are examples/notes. Delete them, or remove the # to import that row. ---',
       '# OLD-101,15/07/2023,BRIJ VATIKA,A-101,100,5000,RAJESH KUMAR,9811100011,SHYAM KUMAR,"Ballabgarh, Faridabad",ABCPK1234A,TR805,200000,500000',
       '# ,01/04/2024,SHREE GOKUL VATIKA,B-22,,,SUNITA DEVI,9811100012,RAM DEVI,,,,,',
@@ -330,8 +328,8 @@ export default function BookingImportModal({ open, onClose, onImported }: {
       '# Nothing is compulsory - fill in whatever you have and correct the rest in the app later.',
       '# The more you fill, the less there is to fix: Project + Plot No link the plot,',
       '#   Size + Rate (or Total Amount) set the value, Phone links repeat customers.',
-      '# Booking No     : the old number from your register. Leave blank to have one generated.',
-      '#                  Do NOT use BK-123 / TR-2024-0001 style numbers - the system replaces those.',
+      '# Old Booking No : the number from your paper register. It is kept and shown next to',
+      '#                  the system id (CR-0011) - it does not replace it. Leave blank if none.',
       '# Project        : must match the name on the Projects page exactly.',
       '# Plot No        : must exist in that project and must not already be on a booking.',
       '# Phone          : 10 digits. Same phone on two rows = one customer with two bookings.',
@@ -353,7 +351,7 @@ export default function BookingImportModal({ open, onClose, onImported }: {
           Paste the rows straight out of Excel or Google Sheets — one booking per line, in this column order:
         </div>
         <div className="font-mono text-[11px] bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-700 overflow-x-auto whitespace-nowrap">
-          Booking No → Date → Project → Plot No → Size → Rate/sqyd → Customer Name → Phone → Father/Husband → Address → PAN → Broker Code → Amount Received → Total
+          Old Booking No → Date → Project → Plot No → Size → Rate/sqyd → Customer Name → Phone → Father/Husband → Address → PAN → Broker Code → Amount Received → Total
         </div>
         <div className="flex items-center gap-2 text-xs bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-2">
           <span className="text-emerald-900 flex-1">
@@ -399,7 +397,7 @@ export default function BookingImportModal({ open, onClose, onImported }: {
               <table className="w-full text-xs">
                 <thead className="bg-gray-50 sticky top-0">
                   <tr>
-                    {['#', 'Booking No', 'Project / Plot', 'Customer', 'Phone', 'Total', 'Received', 'Broker', 'Status'].map(h => (
+                    {['#', 'Old No', 'Project / Plot', 'Customer', 'Phone', 'Total', 'Received', 'Broker', 'Status'].map(h => (
                       <th key={h} className="text-left px-2 py-1.5 font-semibold text-gray-500 whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
@@ -408,7 +406,7 @@ export default function BookingImportModal({ open, onClose, onImported }: {
                   {parsed.map(r => (
                     <tr key={r.line} className={r.warnings.length ? 'bg-amber-50/40' : ''}>
                       <td className="px-2 py-1 text-gray-400">{r.line}</td>
-                      <td className="px-2 py-1 font-mono">{r.booking_no || <span className="text-gray-400">auto</span>}</td>
+                      <td className="px-2 py-1 font-mono">{r.booking_no || <span className="text-gray-400">—</span>}</td>
                       <td className="px-2 py-1">{r.project_name || '—'} · <b>{r.plot_no || '—'}</b></td>
                       <td className="px-2 py-1">
                         {r.customer_name || '—'}
