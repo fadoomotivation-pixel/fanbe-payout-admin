@@ -149,7 +149,7 @@ export default function CustomerPipeline() {
       let q = supabase
         .from('bp_bookings')
         .select(`
-          id, booking_no, stage, application_date, total_amount, plot_total_price,
+          id, booking_no, legacy_booking_no, stage, application_date, total_amount, plot_total_price,
           token_amount, booking_amount, full_payment_amount,
           expected_booking_amount, commission_amount, commission_rate,
           commission_mode, traditional_commission_pct, traditional_commission_per_sqyd, traditional_pay_upline,
@@ -172,6 +172,9 @@ export default function CustomerPipeline() {
         const orParts: string[] = []
         if (searchScope === 'all' || searchScope === 'booking') {
           orParts.push(`booking_no.ilike.%${debouncedSearch}%`)
+          // Imported bookings also carry their old paper-register number, and admin
+          // searches by whichever one is in front of them.
+          orParts.push(`legacy_booking_no.ilike.%${debouncedSearch}%`)
         }
         if ((searchScope === 'all' || searchScope === 'customer') && searchTargets?.customerIds?.length) {
           orParts.push(`customer_id.in.(${searchTargets.customerIds.join(',')})`)
@@ -651,6 +654,14 @@ export default function CustomerPipeline() {
                   {/* Subline 1: identity (booking_no · plot · project · sale mode badge) */}
                   <div className="text-[13px] text-gray-500 mt-0.5 truncate flex items-center gap-1.5 flex-wrap">
                     <span className="font-mono">{r.booking_no}</span>
+                    {/* The number from the old paper register, kept next to the system id
+                        rather than replacing it, so a row can be matched against the
+                        old files without the two ever being confused. */}
+                    {r.legacy_booking_no && (
+                      <span className="text-[11px] text-gray-400 font-mono" title="Number from the old register">
+                        (पुराना {r.legacy_booking_no})
+                      </span>
+                    )}
                     {r.bp_plots?.plot_no && <span>· Plot {r.bp_plots.plot_no}</span>}
                     {r.bp_plots?.size_sqyd && <span>· {r.bp_plots.size_sqyd} sqyd</span>}
                     {(r.bp_projects?.name || r.scheme_name) && <span>· {r.bp_projects?.name || r.scheme_name}</span>}

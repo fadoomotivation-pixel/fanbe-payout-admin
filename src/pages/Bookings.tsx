@@ -1238,7 +1238,7 @@ export default function Bookings() {
     if (search.trim()) {
       const q = search.toLowerCase()
       const hay = [
-        b.booking_no, b.bp_customers?.name, b.bp_customers?.phone, b.bp_customers?.customer_code,
+        b.booking_no, b.legacy_booking_no, b.bp_customers?.name, b.bp_customers?.phone, b.bp_customers?.customer_code,
         ...plotNosOf(b), b.brokers?.name, b.brokers?.broker_id,
         b.bp_projects?.name, b.scheme_name,
       ].filter(Boolean).join(' ').toLowerCase()
@@ -1266,12 +1266,13 @@ export default function Bookings() {
   const exportCSV = () => {
     const rows = filtered
     if (rows.length === 0) return toast.error('Nothing to export')
-    const headers = ['Booking No','Date','Customer','Phone','Plot','Project','Broker','Broker Code','Stage','Total','Paid','Balance','Closed']
+    const headers = ['Booking No','Old Register No','Date','Customer','Phone','Plot','Project','Broker','Broker Code','Stage','Total','Paid','Balance','Closed']
     const data = rows.map((b: any) => {
       const total = Number(b.total_amount || b.plot_total_price || 0)
       const paid  = Number(paidMap[b.id] || 0)
       return [
         b.booking_no || '',
+        b.legacy_booking_no || '',
         b.application_date || '',
         b.bp_customers?.name || '',
         b.bp_customers?.phone || '',
@@ -1341,6 +1342,11 @@ export default function Bookings() {
     { header: 'Booking No', render: (r: any) => (
       <div className="leading-tight">
         <span className="font-mono text-xs font-semibold text-blue-700">{r.booking_no}</span>
+        {/* Old paper-register number sits beside the system id instead of replacing it,
+            so the column always reads the same shape and both can be looked up. */}
+        {r.legacy_booking_no && (
+          <div className="font-mono text-[10px] text-gray-400" title="Number from the old register">पुराना {r.legacy_booking_no}</div>
+        )}
         {/* Sale-mode badge — admin can scan the list and spot Traditional sales without
             opening each row.  Default MLM is not badged because every booking is MLM
             unless explicitly switched. */}
@@ -1550,6 +1556,7 @@ export default function Bookings() {
                 <div className="text-sm font-semibold text-gray-900 truncate">{r.bp_customers?.name || '—'}</div>
                 <div className="text-[12px] text-gray-500 truncate">
                   <span className="font-mono">{r.booking_no}</span>
+                  {r.legacy_booking_no && <span className="font-mono text-gray-400"> (पुराना {r.legacy_booking_no})</span>}
                   {plotNosOf(r).length > 0 && <> · Plot{plotNosOf(r).length > 1 ? 's' : ''} {plotNosOf(r).join(', ')}</>}
                   {(r.bp_projects?.name || r.scheme_name) && <> · {r.bp_projects?.name || r.scheme_name}</>}
                   {r.brokers?.name && <> · {r.brokers.name}</>}
