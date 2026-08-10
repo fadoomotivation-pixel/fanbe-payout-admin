@@ -5,15 +5,19 @@
 // paper, so the importer takes the broker_id from the sheet rather than minting a new
 // one; assign_broker_id() only fills a BLANK broker_id, so a supplied code survives.
 //
-// Everything is validated and shown row-by-row BEFORE anything is written.  The rules
-// that matter (each one is a real way this could go wrong):
+// NOTHING is mandatory: admin wants the sheet in fast and will tidy up inside the app
+// afterwards, so a row is never refused.  Anything missing or clashing is fixed up to
+// something safe and reported as a warning, because the alternative -- writing it
+// as-is -- would hit a DB constraint and lose the row entirely:
 //
-//   * broker_id repeated inside the paste, or already on file  -> blocked.  UNIQUE.
-//   * phone repeated / already on file                          -> blocked.  Phone is
-//     the broker's LOGIN; two brokers sharing one is an auth mess, not a cosmetic dupe.
-//   * email is NOT NULL + UNIQUE on brokers, and sheets rarely carry one -> derived
-//     from the phone (b<digits>@fanbegroup.com, the same shape the Add Broker form
-//     uses) or from the broker code, then checked for collisions like any other field.
+//   * name is NOT NULL          -> blank becomes "NAME MISSING", which admin can search.
+//   * broker_id is UNIQUE       -> a clashing code is dropped so assign_broker_id() mints
+//     a fresh one; the broker still lands and the code can be corrected on their page.
+//   * email is NOT NULL+UNIQUE and sheets rarely carry one -> derived from the phone
+//     (b<digits>@fanbegroup.com, the shape the Add Broker form uses), else the code,
+//     else the line number, and a '-2' suffix is added until it is genuinely unique.
+//   * phone has no DB constraint, so a duplicate is kept -- but it IS the broker's
+//     login, so it is called out loudly rather than accepted in silence.
 //   * after writing, sync_broker_id_sequences() pushes broker_id_tr_seq past the
 //     highest imported TR id -- otherwise the NEXT broker created through the UI draws
 //     an id that the import already took, and it fails for someone else entirely.
@@ -30,7 +34,7 @@ import { ClipboardPaste, AlertTriangle, CheckCircle2, Download } from 'lucide-re
 import toast from 'react-hot-toast'
 
 // Column order the paste is read in.  Matches the order admin already keeps in the
-// sheet; only Name is mandatory.
+// sheet.  Every one of them is optional.
 const COLUMNS = ['broker_id', 'name', 'phone', 'email', 'pan_no', 'date_of_joining'] as const
 
 const digitsOnly = (s: string) => (s || '').replace(/\D/g, '')
@@ -92,46 +96,67 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
       const cells = (line.includes('\t') ? line.split('\t') : line.split(',')).map(c => c.trim())
       const get = (k: typeof COLUMNS[number]) => cells[COLUMNS.indexOf(k)] || ''
 
-      const errors: string[] = []
-      const broker_id = get('broker_id')
-      const name      = get('name')
-      const phone     = digitsOnly(get('phone'))
-      const pan_no    = get('pan_no').toUpperCase()
-      const rawDate   = get('date_of_joining')
+      // Nothing here blocks a row.  Admin wants the sheet in fast and will tidy up
+      // inside the app afterwards, so anything missing or clashing is fixed up to
+      // something safe and reported as a warning instead of stopping the import.
+      const warnings: string[] = []
+      let broker_id = get('broker_id')
+      let name      = get('name')
+      const phone   = digitsOnly(get('phone'))
+      const pan_no  = get('pan_no').toUpperCase()
+      const rawDate = get('date_of_joining')
 
-      if (!name) errors.push('Name is missing')
+      // brokers.name is NOT NULL — a searchable placeholder beats refusing the row.
+      if (!name) { name = 'NAME MISSING'; warnings.push('No name — saved as "NAME MISSING", search that to fix them later') }
 
+      // broker_id is UNIQUE in the DB, so a clash cannot simply be written.  Drop the
+      // supplied code and let assign_broker_id() mint a fresh one; the broker still
+      // lands, and admin can correct the code on the broker's page.
       const idKey = broker_id.toLowerCase()
       if (broker_id) {
-        if (seenId.has(idKey)) errors.push(`Broker ID ${broker_id} is already used`)
-        else seenId.add(idKey)
+        if (seenId.has(idKey)) {
+          warnings.push(`Broker ID ${broker_id} is already taken — a new code will be generated instead`)
+          broker_id = ''
+        } else seenId.add(idKey)
       }
 
+      // Phone has no DB constraint, so a clash is admin's to resolve — but it IS the
+      // broker's login, so say so loudly rather than silently accepting it.
+      if (phone && phone.length < 10) warnings.push(`Phone ${phone} is shorter than 10 digits`)
       if (phone) {
-        if (phone.length < 10) errors.push('Phone is shorter than 10 digits')
-        else if (seenPhone.has(phone)) errors.push(`Phone ${phone} is already used`)
+        if (seenPhone.has(phone)) warnings.push(`Phone ${phone} is already used by another broker — both would share a login`)
         else seenPhone.add(phone)
       }
 
-      // brokers.email is NOT NULL + UNIQUE, so every row needs one whether the sheet
-      // has it or not.  Phone-derived first (matches the Add Broker form), then code.
+      // brokers.email is NOT NULL + UNIQUE, so every row needs one whether the sheet has
+      // it or not, and it has to be unique no matter what.  Phone-derived first (matches
+      // the Add Broker form), then the code, then the line number as a last resort.
       let email = get('email').toLowerCase()
       if (!email) {
         if (phone) email = `b${phone}@fanbegroup.com`
         else if (broker_id) email = `${idKey.replace(/[^a-z0-9]/g, '')}@fanbegroup.com`
+        else email = `broker-line${i + 1}@fanbegroup.com`
       }
-      if (!email) errors.push('No email, phone or broker ID to build an email from')
-      else if (seenEmail.has(email)) errors.push(`Email ${email} is already used`)
-      else seenEmail.add(email)
+      if (seenEmail.has(email)) {
+        const [local, domain] = email.split('@')
+        let n = 2
+        while (seenEmail.has(`${local}-${n}@${domain}`)) n++
+        const fixed = `${local}-${n}@${domain}`
+        warnings.push(`Email ${email} was already used — saved as ${fixed}`)
+        email = fixed
+      }
+      seenEmail.add(email)
 
       const date_of_joining = parseDate(rawDate)
-      if (rawDate && !date_of_joining) errors.push(`Date "${rawDate}" is not dd/mm/yyyy or yyyy-mm-dd`)
+      if (rawDate && !date_of_joining) warnings.push(`Date "${rawDate}" not understood — left blank`)
 
-      return { line: i + 1, broker_id, name, phone, email, pan_no, date_of_joining, errors }
+      return { line: i + 1, broker_id, name, phone, email, pan_no, date_of_joining, errors: warnings }
     })
   }, [text, existing])
 
-  const valid   = parsed.filter(r => r.errors.length === 0)
+  // Every parsed row is importable now — `errors` only ever carries warnings, so the
+  // count below is "rows that will need a look afterwards", not "rows being dropped".
+  const valid   = parsed
   const invalid = parsed.filter(r => r.errors.length > 0)
 
   const runImport = async () => {
@@ -201,7 +226,8 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
       '# TR815,SUNITA DEVI,9811100012,,,15/07/2023          <- email/PAN blank is fine',
       '# ,MOHIT SAXENA,9811100013,,,                        <- Broker ID blank = a new code is generated',
       '#',
-      '# Only Name is required. Keep the columns in this order and do not add new ones.',
+      '# Nothing is compulsory - fill in whatever you have and correct the rest in the app later.',
+      '# Keep the columns in this order and do not add new ones.',
       '# Broker ID  : the code this broker already uses. Leave blank for a new one.',
       '# Phone      : 10 digits. This is the broker login, so it must not repeat.',
       '# Email      : optional. Left blank, one is built from the phone number.',
@@ -235,7 +261,7 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
           </button>
         </div>
         <div className="text-[11px] text-gray-500">
-          Only <b>Name</b> is required. Leave <b>Broker ID</b> blank to have a fresh code generated; fill it in to keep the code the broker already has.
+          <b>Nothing is compulsory</b> — fill in whatever you have and fix the rest inside the app later. Leave <b>Broker ID</b> blank to have a fresh code generated; fill it in to keep the code the broker already has.
           Dates can be <code>dd/mm/yyyy</code> or <code>yyyy-mm-dd</code>. A header row is skipped automatically.
         </div>
 
@@ -261,8 +287,8 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
         {parsed.length > 0 && (
           <>
             <div className="flex flex-wrap gap-3 text-xs">
-              <span className="inline-flex items-center gap-1 text-emerald-700"><CheckCircle2 size={13}/><b>{valid.length}</b> ready to import</span>
-              {invalid.length > 0 && <span className="inline-flex items-center gap-1 text-red-700"><AlertTriangle size={13}/><b>{invalid.length}</b> need fixing (they will be skipped)</span>}
+              <span className="inline-flex items-center gap-1 text-emerald-700"><CheckCircle2 size={13}/><b>{valid.length}</b> will be imported</span>
+              {invalid.length > 0 && <span className="inline-flex items-center gap-1 text-amber-700"><AlertTriangle size={13}/><b>{invalid.length}</b> imported with gaps — tidy up in the app afterwards</span>}
             </div>
 
             <div className="max-h-64 overflow-auto rounded-lg border border-gray-200">
@@ -276,10 +302,10 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {parsed.map(r => (
-                    <tr key={r.line} className={r.errors.length ? 'bg-red-50/50' : ''}>
+                    <tr key={r.line} className={r.errors.length ? 'bg-amber-50/40' : ''}>
                       <td className="px-2 py-1 text-gray-400">{r.line}</td>
                       <td className="px-2 py-1 font-mono">{r.broker_id || <span className="text-gray-400">auto</span>}</td>
-                      <td className="px-2 py-1">{r.name || <span className="text-red-600">—</span>}</td>
+                      <td className="px-2 py-1">{r.name}</td>
                       <td className="px-2 py-1 font-mono">{r.phone || '—'}</td>
                       <td className="px-2 py-1 text-gray-500 max-w-[180px] truncate" title={r.email}>{r.email || '—'}</td>
                       <td className="px-2 py-1 font-mono">{r.pan_no || '—'}</td>
@@ -287,7 +313,7 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
                       <td className="px-2 py-1">
                         {r.errors.length === 0
                           ? <span className="text-emerald-700">OK</span>
-                          : <span className="text-red-700">{r.errors.join('; ')}</span>}
+                          : <span className="text-amber-700">{r.errors.join('; ')}</span>}
                       </td>
                     </tr>
                   ))}

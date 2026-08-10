@@ -79,7 +79,6 @@ type Row = {
   broker_id: string | null
   amount_received: number
   warnings: string[]
-  errors: string[]
 }
 
 export default function BookingImportModal({ open, onClose, onImported }: {
@@ -148,65 +147,68 @@ export default function BookingImportModal({ open, onClose, onImported }: {
     return body.map((line, i) => {
       const cells = (line.includes('\t') ? line.split('\t') : line.split(',')).map(c => c.trim())
       const get = (k: Col) => cells[COLUMNS.indexOf(k)] || ''
-      const errors: string[] = []
+      // NOTHING blocks a row.  Admin wants years of history in fast and will correct it
+      // inside the app, so a missing or unmatched value is imported as a gap and
+      // reported — never refused.  The one thing that is never guessed is the plot
+      // link: an unmatched or already-sold plot is left off the booking rather than
+      // risking the same plot sitting on two bookings.
       const warnings: string[] = []
 
       const booking_no    = get('booking_no')
       const rawDate       = get('booking_date')
       const project_name  = get('project')
       const plot_no       = get('plot_no')
-      const customer_name = get('customer_name')
+      let   customer_name = get('customer_name')
       const phone         = digitsOnly(get('phone'))
       const broker_code   = get('broker_code')
 
-      if (!customer_name) errors.push('Customer name is missing')
-      if (!phone)         errors.push('Phone is missing (needed to create the customer)')
-      else if (phone.length < 10) errors.push('Phone is shorter than 10 digits')
+      // bp_customers.name is NOT NULL — a searchable placeholder beats losing the row.
+      if (!customer_name) { customer_name = 'NAME MISSING'; warnings.push('No customer name — saved as "NAME MISSING"') }
+      if (!phone) warnings.push('No phone — this booking gets its own customer record')
+      else if (phone.length < 10) warnings.push(`Phone ${phone} is shorter than 10 digits`)
 
       const booking_date = parseDate(rawDate)
-      if (rawDate && !booking_date) errors.push(`Date "${rawDate}" is not dd/mm/yyyy or yyyy-mm-dd`)
+      if (rawDate && !booking_date) warnings.push(`Date "${rawDate}" not understood — left blank`)
 
       // Project → plot.  Plot numbers repeat across schemes, so the plot is only ever
       // looked up inside its own project.
       const project = project_name ? projectByName.get(norm(project_name)) : null
-      if (!project_name) errors.push('Project is missing')
-      else if (!project) errors.push(`Project "${project_name}" not found — check the spelling against the Projects page`)
+      if (!project_name) warnings.push('No project — add it on the booking later')
+      else if (!project) warnings.push(`Project "${project_name}" not found — imported without a project`)
 
       let plot: any = null
       if (project && plot_no) {
-        plot = plotsByKey.get(`${project.id}|${norm(plot_no)}`)
-        if (!plot) errors.push(`Plot "${plot_no}" not found in ${project_name}`)
-        else {
-          const key = plot.id
-          if (seenPlots.has(key)) errors.push(`Plot ${plot_no} is used twice in this sheet`)
-          else if (takenPlots.has(key)) errors.push(`Plot ${plot_no} is already on another booking`)
-          else seenPlots.add(key)
-        }
+        const found = plotsByKey.get(`${project.id}|${norm(plot_no)}`)
+        if (!found) warnings.push(`Plot "${plot_no}" not found in ${project_name} — imported without a plot`)
+        else if (seenPlots.has(found.id)) warnings.push(`Plot ${plot_no} is used twice in this sheet — left off this booking`)
+        else if (takenPlots.has(found.id)) warnings.push(`Plot ${plot_no} is already on another booking — left off this one`)
+        else { plot = found; seenPlots.add(found.id) }
+      } else if (plot_no && !project) {
+        warnings.push(`Plot "${plot_no}" needs a matching project before it can be linked`)
       } else if (project && !plot_no) {
-        errors.push('Plot no is missing')
+        warnings.push('No plot no — add it on the booking later')
       }
 
       if (booking_no) {
         const k = norm(booking_no)
-        if (seenNos.has(k)) errors.push(`Booking No ${booking_no} is used twice in this sheet`)
-        else if (takenNos.has(k)) errors.push(`Booking No ${booking_no} already exists`)
+        if (seenNos.has(k) || takenNos.has(k)) warnings.push(`Booking No ${booking_no} is already used — imported anyway, so check these two`)
         else seenNos.add(k)
         if (AUTO_OVERWRITTEN.test(booking_no)) {
-          warnings.push(`${booking_no} looks like a system-generated number and will be replaced — use the customer's own old number or leave it blank`)
+          warnings.push(`${booking_no} looks system-generated and will be replaced — use the old register number or leave it blank`)
         }
       }
 
       let broker: any = null
       if (broker_code) {
         broker = brokerByCode.get(norm(broker_code))
-        if (!broker) errors.push(`Broker code "${broker_code}" not found`)
+        if (!broker) warnings.push(`Broker code "${broker_code}" not found — imported without a broker`)
       }
 
       // Sizes fall back to the plot's own figures when the sheet leaves them out.
       const size_sqyd     = num(get('size_sqyd'))     || Number(plot?.size_sqyd || 0)
       const rate_per_sqyd = num(get('rate_per_sqyd')) || Number(plot?.price_per_sqyd || 0)
       const total         = num(get('total_amount'))  || Math.round(size_sqyd * rate_per_sqyd)
-      if (total <= 0) errors.push('Total works out to 0 — give Size + Rate, or a Total Amount')
+      if (total <= 0) warnings.push('No value yet — add Size + Rate or a Total on the booking later')
 
       const amount_received = num(get('amount_received'))
       if (amount_received > total && total > 0) {
@@ -223,13 +225,14 @@ export default function BookingImportModal({ open, onClose, onImported }: {
         customer_id: existingCust?.id || null, customer_name, phone,
         father_name: get('father_name'), address: get('address'), pan: get('pan').toUpperCase(),
         broker_id: broker?.id || null,
-        amount_received, warnings, errors,
+        amount_received, warnings,
       }
     })
   }, [text, ref])
 
-  const valid   = parsed.filter(r => r.errors.length === 0)
-  const invalid = parsed.filter(r => r.errors.length > 0)
+  // Every parsed row imports — the counts below are "clean" vs "imported with gaps".
+  const valid   = parsed
+  const invalid = parsed.filter(r => r.warnings.length > 0)
 
   const runImport = async () => {
     if (valid.length === 0) return
@@ -246,7 +249,10 @@ export default function BookingImportModal({ open, onClose, onImported }: {
         if (!customer_id) {
           const { data: c, error: cErr } = await supabase.from('bp_customers').insert({
             name: r.customer_name,
-            phone: r.phone,
+            // NOT NULL on bp_customers.  An empty string satisfies it, and blank phones
+            // are excluded from the match map, so two phone-less rows never collapse
+            // into one customer.
+            phone: r.phone || '',
             father_or_husband_name: r.father_name || null,
             address: r.address || null,
             pan: r.pan || null,
@@ -267,7 +273,7 @@ export default function BookingImportModal({ open, onClose, onImported }: {
           rate_per_sqyd: r.rate_per_sqyd || null,
           base_price: Math.round(r.size_sqyd * r.rate_per_sqyd) || null,
           dev_charges: 0, plc_charges: 0, discount_amount: 0,
-          plot_total_price: r.total, total_amount: r.total,
+          plot_total_price: r.total || null, total_amount: r.total || null,
           application_date: r.booking_date,
           // See the header note: 0% traditional means recompute_booking_payouts() derives
           // direct_pct = 0 and inserts nothing, now and on every future recompute.
@@ -321,8 +327,9 @@ export default function BookingImportModal({ open, onClose, onImported }: {
       '# OLD-101,15/07/2023,BRIJ VATIKA,A-101,100,5000,RAJESH KUMAR,9811100011,SHYAM KUMAR,"Ballabgarh, Faridabad",ABCPK1234A,TR805,200000,500000',
       '# ,01/04/2024,SHREE GOKUL VATIKA,B-22,,,SUNITA DEVI,9811100012,RAM DEVI,,,,,',
       '#',
-      '# Only these are required: Project, Plot No, Customer Name, Phone, and a value for the total',
-      '#   (either Size + Rate per sqyd, or Total Amount directly).',
+      '# Nothing is compulsory - fill in whatever you have and correct the rest in the app later.',
+      '# The more you fill, the less there is to fix: Project + Plot No link the plot,',
+      '#   Size + Rate (or Total Amount) set the value, Phone links repeat customers.',
       '# Booking No     : the old number from your register. Leave blank to have one generated.',
       '#                  Do NOT use BK-123 / TR-2024-0001 style numbers - the system replaces those.',
       '# Project        : must match the name on the Projects page exactly.',
@@ -383,8 +390,8 @@ export default function BookingImportModal({ open, onClose, onImported }: {
         {parsed.length > 0 && (
           <>
             <div className="flex flex-wrap gap-3 text-xs">
-              <span className="inline-flex items-center gap-1 text-emerald-700"><CheckCircle2 size={13}/><b>{valid.length}</b> ready</span>
-              {invalid.length > 0 && <span className="inline-flex items-center gap-1 text-red-700"><AlertTriangle size={13}/><b>{invalid.length}</b> need fixing (skipped)</span>}
+              <span className="inline-flex items-center gap-1 text-emerald-700"><CheckCircle2 size={13}/><b>{valid.length}</b> will be imported</span>
+              {invalid.length > 0 && <span className="inline-flex items-center gap-1 text-amber-700"><AlertTriangle size={13}/><b>{invalid.length}</b> with gaps — fix in the app afterwards</span>}
               <span className="text-gray-500">Total value {formatINR(valid.reduce((s, r) => s + r.total, 0))} · received {formatINR(valid.reduce((s, r) => s + r.amount_received, 0))}</span>
             </div>
 
@@ -399,7 +406,7 @@ export default function BookingImportModal({ open, onClose, onImported }: {
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {parsed.map(r => (
-                    <tr key={r.line} className={r.errors.length ? 'bg-red-50/50' : r.warnings.length ? 'bg-amber-50/40' : ''}>
+                    <tr key={r.line} className={r.warnings.length ? 'bg-amber-50/40' : ''}>
                       <td className="px-2 py-1 text-gray-400">{r.line}</td>
                       <td className="px-2 py-1 font-mono">{r.booking_no || <span className="text-gray-400">auto</span>}</td>
                       <td className="px-2 py-1">{r.project_name || '—'} · <b>{r.plot_no || '—'}</b></td>
@@ -412,11 +419,9 @@ export default function BookingImportModal({ open, onClose, onImported }: {
                       <td className="px-2 py-1 tabular-nums">{r.amount_received ? formatINR(r.amount_received) : '—'}</td>
                       <td className="px-2 py-1">{r.broker_id ? '✓' : '—'}</td>
                       <td className="px-2 py-1">
-                        {r.errors.length > 0
-                          ? <span className="text-red-700">{r.errors.join('; ')}</span>
-                          : r.warnings.length > 0
-                            ? <span className="text-amber-700">{r.warnings.join('; ')}</span>
-                            : <span className="text-emerald-700">OK</span>}
+                        {r.warnings.length > 0
+                          ? <span className="text-amber-700">{r.warnings.join('; ')}</span>
+                          : <span className="text-emerald-700">OK</span>}
                       </td>
                     </tr>
                   ))}
