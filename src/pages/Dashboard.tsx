@@ -27,7 +27,16 @@ export default function Dashboard() {
   const [topBroker, setTopBroker] = useState<{ id: string; name: string; code: string; rank: string; earned: number } | null>(null)
   // Spend and the money left after it — the dashboard showed what came IN but never
   // what went out, so 'how are we actually doing this month' wasn't answerable here.
-  const [money, setMoney] = useState({ collected: 0, spend: 0, prevSpend: 0, advances: 0 })
+  const [money, setMoney] = useState({
+    collectedAll: 0, collectedMonth: 0, collectedPrev: 0,
+    spendAll: 0, spendMonth: 0, spendPrev: 0, advances: 0,
+  })
+  // Default is All time.  A month-scoped dashboard reads as a dead business in any
+  // quiet month, which is what admin was looking at.
+  const [moneyPeriod, setMoneyPeriod] = useState<'all' | 'month' | 'prev'>('all')
+  // How many of the dashboard's queries came back broken, so zeros can be told
+  // apart from 'nothing happened'.
+  const [dataIssues, setDataIssues] = useState(0)
   // Bookings whose EMI has run past the 90-day lapsation window — the ones whose
   // receipts are now held back, so admin can see them without hunting.
   const [lapsed, setLapsed] = useState({ bookings: 0, amount: 0 })
@@ -52,13 +61,12 @@ export default function Dashboard() {
       const ninety = new Date(); ninety.setDate(ninety.getDate() - 90)
       const ninetyDaysAgo = ninety.toISOString().slice(0, 10)
 
-      const [
-        brokerCount, customerCount, bookingDoneCount, projectsCount, plotsCount,
-        payments, distributions, payoutTxns, openWds,
-        recentBk, recentPm, newBrokersRes, newCustomersRes,
-        plotsBreakdown, weekBookings,
-        kycPendingQ, pipelineActiveQ, emiOverdueQ, expensesQ, lapsedQ,
-      ] = await Promise.all([
+      // allSettled, NOT all.  With Promise.all a single failing query rejects the whole
+      // batch, the rest of load() is skipped, and every tile keeps its initial value —
+      // which is exactly the "everything reads 0" the admin saw, even though the data
+      // was there.  Now a bad query costs its own tile and nothing else, and the count
+      // of failures is surfaced instead of being silently swallowed.
+      const settled = await Promise.allSettled([
         supabase.from('brokers').select('id', { count: 'exact', head: true }).eq('status', 'active'),
         supabase.from('bp_customers').select('id', { count: 'exact', head: true }),
         supabase.from('bp_bookings').select('id', { count: 'exact', head: true }).eq('stage', 'booking_done'),
@@ -77,10 +85,34 @@ export default function Dashboard() {
         supabase.from('brokers').select('id', { count: 'exact', head: true }).eq('kyc_status', 'pending'),
         supabase.from('bp_bookings').select('id', { count: 'exact', head: true }).not('stage', 'in', '(booking_done,cancelled)'),
         supabase.from('emi_installments').select('amount, status, due_date').neq('status', 'paid').lt('due_date', today),
-        supabase.from('expenses').select('amount, expense_date, broker_id, expense_heads(name)').gte('expense_date', prevMonthStartDay),
+        supabase.from('expenses').select('amount, expense_date, broker_id, expense_heads(name)'),
         // Past the 90-day grace window -> receipts are held back on these bookings.
         supabase.from('emi_installments').select('amount, due_date, emi_schedules!inner(booking_id)').neq('status', 'paid').lt('due_date', ninetyDaysAgo),
       ])
+
+      // Named in the same order as the queries above, so a failure says WHICH one rather
+      // than leaving a silent zero to be reverse-engineered from the UI.
+      const QUERY_LABELS = [
+        'active brokers', 'customers', 'confirmed bookings', 'projects', 'plots',
+        'payments', 'payout distributions', 'payout transactions', 'open withdrawals',
+        'recent bookings', 'recent payments', 'new brokers', 'new customers',
+        'plot status breakdown', 'week bookings',
+        'kyc pending', 'pipeline active', 'emi overdue', 'expenses', 'lapsed emi',
+      ]
+      const broken = settled
+        .map((r: any, i: number) => (r.status === 'rejected' || r.value?.error
+          ? `${QUERY_LABELS[i] || `query ${i}`}: ${r.reason?.message || r.value?.error?.message || 'failed'}`
+          : null))
+        .filter(Boolean)
+      if (broken.length > 0) console.error('Dashboard queries failed →', broken)
+      setDataIssues(broken.length)
+      const [
+        brokerCount, customerCount, bookingDoneCount, projectsCount, plotsCount,
+        payments, distributions, payoutTxns, openWds,
+        recentBk, recentPm, newBrokersRes, newCustomersRes,
+        plotsBreakdown, weekBookings,
+        kycPendingQ, pipelineActiveQ, emiOverdueQ, expensesQ, lapsedQ,
+      ] = settled.map((r: any) => (r.status === 'fulfilled' ? r.value : { data: null, count: 0 })) as any[]
 
       const totalRevenue = (payments.data || []).reduce((s, p) => s + Number(p.amount || 0), 0)
       const revenueThisMonth = (payments.data || []).filter(p => (p.payment_date || '') >= monthStartDay).reduce((s, p) => s + Number(p.amount || 0), 0)
@@ -169,11 +201,17 @@ export default function Dashboard() {
       // Spend split into this month vs last, plus advances outstanding (money already
       // handed to brokers, which their withdrawable balance is reduced by).
       const exp = (expensesQ.data || []) as any[]
-      const spendThisMonth = exp.filter(e => (e.expense_date || '') >= monthStartDay).reduce((acc, e) => acc + Number(e.amount || 0), 0)
-      const spendPrevMonth = exp.filter(e => (e.expense_date || '') < monthStartDay).reduce((acc, e) => acc + Number(e.amount || 0), 0)
-      const advancesOut = exp.filter(e => (e.expense_heads?.name || '').toLowerCase() === 'advance' && e.broker_id)
-        .reduce((acc, e) => acc + Number(e.amount || 0), 0)
-      setMoney({ collected: revenueThisMonth, spend: spendThisMonth, prevSpend: spendPrevMonth, advances: advancesOut })
+      const sumExp = (f: (e: any) => boolean) => exp.filter(f).reduce((acc, e) => acc + Number(e.amount || 0), 0)
+      const inPrevMonth = (d: string) => d >= prevMonthStartDay && d < monthStartDay
+      setMoney({
+        collectedAll:   totalRevenue,
+        collectedMonth: revenueThisMonth,
+        collectedPrev:  revenuePrevMonth,
+        spendAll:       sumExp(() => true),
+        spendMonth:     sumExp(e => (e.expense_date || '') >= monthStartDay),
+        spendPrev:      sumExp(e => inPrevMonth(e.expense_date || '')),
+        advances:       sumExp(e => (e.expense_heads?.name || '').toLowerCase() === 'advance' && e.broker_id),
+      })
 
       const lapsedRows = (lapsedQ.data || []) as any[]
       setLapsed({
@@ -220,6 +258,16 @@ export default function Dashboard() {
           <Link to="/payouts"     className="text-xs font-medium px-3 py-1.5 rounded-lg bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 inline-flex items-center gap-1"><Banknote size={12}/>Pay brokers</Link>
         </div>
       </div>
+
+      {dataIssues > 0 && (
+        <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+          <ShieldAlert size={16} className="text-amber-600 mt-0.5 shrink-0"/>
+          <span className="text-amber-900">
+            {dataIssues} of the dashboard's queries didn't come back, so some figures below may read low or zero.
+            Reload the page; if it keeps happening the browser console has the details.
+          </span>
+        </div>
+      )}
 
       {/* Receipts are held back on these bookings (90-day EMI lapsation).  Surfaced here
           because a blocked receipt is discovered at the counter otherwise. */}
@@ -271,52 +319,71 @@ export default function Dashboard() {
         })}
       </div>
 
-      {/* Money this month — what came in, what went out, what is left.  Collected is
-          verified payments only; spend is every expense dated inside the month. */}
+      {/* Money — what came in, what went out, what is left.  Collected is verified
+          payments only; spend is every expense dated inside the window.  Defaults to
+          All time: a month-scoped headline reads as a dead business in a quiet month. */}
       <div className="rounded-2xl border border-gray-200 bg-gradient-to-br from-slate-50 to-white p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-gray-900">Money this month</h2>
-          <Link to="/expenses" className="text-xs text-blue-700 hover:underline">Expenses →</Link>
-        </div>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <div>
-            <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Collected</p>
-            <p className="text-2xl font-bold text-emerald-700 mt-1">{formatINR(money.collected)}</p>
-            <p className="text-[11px] text-gray-400">verified payments</p>
-          </div>
-          <div>
-            <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Spend</p>
-            <p className="text-2xl font-bold text-rose-700 mt-1">{formatINR(money.spend)}</p>
-            <p className="text-[11px] text-gray-400">
-              {money.prevSpend > 0
-                ? `${Math.abs(Math.round(((money.spend - money.prevSpend) / money.prevSpend) * 100))}% ${money.spend >= money.prevSpend ? 'more' : 'less'} than last month`
-                : 'no spend last month'}
-            </p>
-          </div>
-          <div>
-            <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Net</p>
-            <p className={`text-2xl font-bold mt-1 ${money.collected - money.spend >= 0 ? 'text-gray-900' : 'text-rose-700'}`}>
-              {formatINR(money.collected - money.spend)}
-            </p>
-            <p className="text-[11px] text-gray-400">collected − spend</p>
-          </div>
-          <div>
-            <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Advances out</p>
-            <p className="text-2xl font-bold text-amber-700 mt-1">{formatINR(money.advances)}</p>
-            <p className="text-[11px] text-gray-400">reduces broker payouts</p>
-          </div>
-        </div>
-        {/* Proportional bar: how much of what came in went straight back out. */}
-        {money.collected > 0 && (
-          <div className="mt-4">
-            <div className="h-2 rounded-full bg-emerald-100 overflow-hidden flex">
-              <div className="h-full bg-rose-500" style={{ width: `${Math.min(100, (money.spend / money.collected) * 100)}%` }}/>
+        <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+          <h2 className="text-sm font-semibold text-gray-900">Money</h2>
+          <div className="flex items-center gap-2">
+            <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden text-xs bg-white">
+              {([['all', 'All time'], ['month', 'This month'], ['prev', 'Last month']] as const).map(([v, label]) => (
+                <button key={v} onClick={() => setMoneyPeriod(v)}
+                  className={`px-3 py-1.5 ${moneyPeriod === v ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-50'}`}>
+                  {label}
+                </button>
+              ))}
             </div>
-            <p className="text-[11px] text-gray-500 mt-1">
-              {Math.round((money.spend / money.collected) * 100)}% of what was collected this month has gone back out as expenses.
-            </p>
+            <Link to="/expenses" className="text-xs text-blue-700 hover:underline">Expenses →</Link>
           </div>
-        )}
+        </div>
+        {(() => {
+          const collected = moneyPeriod === 'all' ? money.collectedAll : moneyPeriod === 'month' ? money.collectedMonth : money.collectedPrev
+          const spend     = moneyPeriod === 'all' ? money.spendAll     : moneyPeriod === 'month' ? money.spendMonth     : money.spendPrev
+          const windowLabel = moneyPeriod === 'all' ? 'all time' : moneyPeriod === 'month' ? 'this month' : 'last month'
+          return (
+            <>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <div>
+                  <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Collected</p>
+                  <p className="text-2xl font-bold text-emerald-700 mt-1">{formatINR(collected)}</p>
+                  <p className="text-[11px] text-gray-400">verified payments · {windowLabel}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Spend</p>
+                  <p className="text-2xl font-bold text-rose-700 mt-1">{formatINR(spend)}</p>
+                  <p className="text-[11px] text-gray-400">
+                    {moneyPeriod === 'month' && money.spendPrev > 0
+                      ? `${Math.abs(Math.round(((money.spendMonth - money.spendPrev) / money.spendPrev) * 100))}% ${money.spendMonth >= money.spendPrev ? 'more' : 'less'} than last month`
+                      : `expenses · ${windowLabel}`}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Net</p>
+                  <p className={`text-2xl font-bold mt-1 ${collected - spend >= 0 ? 'text-gray-900' : 'text-rose-700'}`}>
+                    {formatINR(collected - spend)}
+                  </p>
+                  <p className="text-[11px] text-gray-400">collected − spend</p>
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Advances out</p>
+                  <p className="text-2xl font-bold text-amber-700 mt-1">{formatINR(money.advances)}</p>
+                  <p className="text-[11px] text-gray-400">reduces broker payouts · all time</p>
+                </div>
+              </div>
+              {collected > 0 && (
+                <div className="mt-4">
+                  <div className="h-2 rounded-full bg-emerald-100 overflow-hidden flex">
+                    <div className="h-full bg-rose-500" style={{ width: `${Math.min(100, (spend / collected) * 100)}%` }}/>
+                  </div>
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    {Math.round((spend / collected) * 100)}% of what was collected {windowLabel} has gone back out as expenses.
+                  </p>
+                </div>
+              )}
+            </>
+          )
+        })()}
       </div>
 
       {/* Inventory row — projects + plot status */}
