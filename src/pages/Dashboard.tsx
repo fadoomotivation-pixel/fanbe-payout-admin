@@ -25,6 +25,12 @@ export default function Dashboard() {
   const [plotSegments, setPlotSegments] = useState<{ label: string; value: number; color: string }[]>([])
   const [dailyGrowth, setDailyGrowth] = useState<{ date: string; label: string; amount: number }[]>([])
   const [topBroker, setTopBroker] = useState<{ id: string; name: string; code: string; rank: string; earned: number } | null>(null)
+  // Spend and the money left after it — the dashboard showed what came IN but never
+  // what went out, so 'how are we actually doing this month' wasn't answerable here.
+  const [money, setMoney] = useState({ collected: 0, spend: 0, prevSpend: 0, advances: 0 })
+  // Bookings whose EMI has run past the 90-day lapsation window — the ones whose
+  // receipts are now held back, so admin can see them without hunting.
+  const [lapsed, setLapsed] = useState({ bookings: 0, amount: 0 })
 
   useEffect(() => {
     // Wrapped in try/finally so a single bad query (missing table, RLS error, network
@@ -43,12 +49,15 @@ export default function Dashboard() {
       const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6); sevenDaysAgo.setHours(0,0,0,0)
       const sevenDayStart = sevenDaysAgo.toISOString().slice(0, 10)
 
+      const ninety = new Date(); ninety.setDate(ninety.getDate() - 90)
+      const ninetyDaysAgo = ninety.toISOString().slice(0, 10)
+
       const [
         brokerCount, customerCount, bookingDoneCount, projectsCount, plotsCount,
         payments, distributions, payoutTxns, openWds,
         recentBk, recentPm, newBrokersRes, newCustomersRes,
         plotsBreakdown, weekBookings,
-        kycPendingQ, pipelineActiveQ, emiOverdueQ,
+        kycPendingQ, pipelineActiveQ, emiOverdueQ, expensesQ, lapsedQ,
       ] = await Promise.all([
         supabase.from('brokers').select('id', { count: 'exact', head: true }).eq('status', 'active'),
         supabase.from('bp_customers').select('id', { count: 'exact', head: true }),
@@ -68,6 +77,9 @@ export default function Dashboard() {
         supabase.from('brokers').select('id', { count: 'exact', head: true }).eq('kyc_status', 'pending'),
         supabase.from('bp_bookings').select('id', { count: 'exact', head: true }).not('stage', 'in', '(booking_done,cancelled)'),
         supabase.from('emi_installments').select('amount, status, due_date').neq('status', 'paid').lt('due_date', today),
+        supabase.from('expenses').select('amount, expense_date, broker_id, expense_heads(name)').gte('expense_date', prevMonthStartDay),
+        // Past the 90-day grace window -> receipts are held back on these bookings.
+        supabase.from('emi_installments').select('amount, due_date, emi_schedules!inner(booking_id)').neq('status', 'paid').lt('due_date', ninetyDaysAgo),
       ])
 
       const totalRevenue = (payments.data || []).reduce((s, p) => s + Number(p.amount || 0), 0)
@@ -113,7 +125,9 @@ export default function Dashboard() {
       }
       const segColors: Record<string, string> = {
         available: '#14b8a6', token: '#f59e0b', booked: '#6366f1',
-        sold: '#22c55e', cancelled: '#ef4444', blocked: '#94a3b8', unknown: '#94a3b8',
+        // 'registry_done' is the terminal status in bp_plots_status_check; the old
+        // 'sold' key never matched anything, so registered plots fell through to grey.
+        registry_done: '#22c55e', cancelled: '#ef4444', unknown: '#94a3b8',
       }
       const segments = Object.entries(statusCounts).map(([k, v]) => ({ label: k, value: v, color: segColors[k] || '#94a3b8' }))
 
@@ -152,6 +166,21 @@ export default function Dashboard() {
         emiOverdueAmount: emiOverdueAmt,
         openWithdrawals: openWdCount,
       })
+      // Spend split into this month vs last, plus advances outstanding (money already
+      // handed to brokers, which their withdrawable balance is reduced by).
+      const exp = (expensesQ.data || []) as any[]
+      const spendThisMonth = exp.filter(e => (e.expense_date || '') >= monthStartDay).reduce((acc, e) => acc + Number(e.amount || 0), 0)
+      const spendPrevMonth = exp.filter(e => (e.expense_date || '') < monthStartDay).reduce((acc, e) => acc + Number(e.amount || 0), 0)
+      const advancesOut = exp.filter(e => (e.expense_heads?.name || '').toLowerCase() === 'advance' && e.broker_id)
+        .reduce((acc, e) => acc + Number(e.amount || 0), 0)
+      setMoney({ collected: revenueThisMonth, spend: spendThisMonth, prevSpend: spendPrevMonth, advances: advancesOut })
+
+      const lapsedRows = (lapsedQ.data || []) as any[]
+      setLapsed({
+        bookings: new Set(lapsedRows.map(r => r.emi_schedules?.booking_id).filter(Boolean)).size,
+        amount: lapsedRows.reduce((acc, r) => acc + Number(r.amount || 0), 0),
+      })
+
       setPayables({ accrued: earned, paidThisMonth, pending, brokerCount: brokerSet.size, openWdCount })
       setRecentBookings(recentBk.data || [])
       setRecentPayments(recentPm.data || [])
@@ -192,6 +221,21 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Receipts are held back on these bookings (90-day EMI lapsation).  Surfaced here
+          because a blocked receipt is discovered at the counter otherwise. */}
+      {lapsed.bookings > 0 && (
+        <Link to="/customer-pipeline?tab=emi_active"
+          className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 hover:border-rose-300 transition">
+          <ShieldAlert size={16} className="text-rose-600 mt-0.5 shrink-0"/>
+          <div className="text-sm">
+            <span className="font-semibold text-rose-900">
+              {lapsed.bookings} booking{lapsed.bookings === 1 ? '' : 's'} past the 90-day EMI limit
+            </span>
+            <span className="text-rose-800"> · {formatINR(lapsed.amount)} in arrears. Receipts on these are held back until the dues are cleared.</span>
+          </div>
+        </Link>
+      )}
+
       {/* Follow-ups strip — coloured when there's work waiting */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <FollowUp icon={<ShieldAlert size={14}/>}   label="KYC pending"      value={String(followUps.kycPending)}      href="/kyc"                              active={followUps.kycPending > 0}      tone="amber"/>
@@ -225,6 +269,54 @@ export default function Dashboard() {
           )
           return t.href ? <Link key={i} to={t.href}>{card}</Link> : card
         })}
+      </div>
+
+      {/* Money this month — what came in, what went out, what is left.  Collected is
+          verified payments only; spend is every expense dated inside the month. */}
+      <div className="rounded-2xl border border-gray-200 bg-gradient-to-br from-slate-50 to-white p-5">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-gray-900">Money this month</h2>
+          <Link to="/expenses" className="text-xs text-blue-700 hover:underline">Expenses →</Link>
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div>
+            <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Collected</p>
+            <p className="text-2xl font-bold text-emerald-700 mt-1">{formatINR(money.collected)}</p>
+            <p className="text-[11px] text-gray-400">verified payments</p>
+          </div>
+          <div>
+            <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Spend</p>
+            <p className="text-2xl font-bold text-rose-700 mt-1">{formatINR(money.spend)}</p>
+            <p className="text-[11px] text-gray-400">
+              {money.prevSpend > 0
+                ? `${Math.abs(Math.round(((money.spend - money.prevSpend) / money.prevSpend) * 100))}% ${money.spend >= money.prevSpend ? 'more' : 'less'} than last month`
+                : 'no spend last month'}
+            </p>
+          </div>
+          <div>
+            <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Net</p>
+            <p className={`text-2xl font-bold mt-1 ${money.collected - money.spend >= 0 ? 'text-gray-900' : 'text-rose-700'}`}>
+              {formatINR(money.collected - money.spend)}
+            </p>
+            <p className="text-[11px] text-gray-400">collected − spend</p>
+          </div>
+          <div>
+            <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Advances out</p>
+            <p className="text-2xl font-bold text-amber-700 mt-1">{formatINR(money.advances)}</p>
+            <p className="text-[11px] text-gray-400">reduces broker payouts</p>
+          </div>
+        </div>
+        {/* Proportional bar: how much of what came in went straight back out. */}
+        {money.collected > 0 && (
+          <div className="mt-4">
+            <div className="h-2 rounded-full bg-emerald-100 overflow-hidden flex">
+              <div className="h-full bg-rose-500" style={{ width: `${Math.min(100, (money.spend / money.collected) * 100)}%` }}/>
+            </div>
+            <p className="text-[11px] text-gray-500 mt-1">
+              {Math.round((money.spend / money.collected) * 100)}% of what was collected this month has gone back out as expenses.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Inventory row — projects + plot status */}

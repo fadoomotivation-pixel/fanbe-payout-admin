@@ -24,6 +24,37 @@ function toWordsINR(n: number): string {
   return (out.trim() || 'Zero') + ' only'
 }
 
+// Days an instalment may sit unpaid before the booking counts as lapsed.  Same number
+// payoutEngine uses for commission lapsation (lapsation_grace_days), kept in step so
+// "overdue" means one thing across the app.
+const LAPSE_GRACE_DAYS = 90
+
+/**
+ * The worst unpaid instalment on a booking, if any has run past the grace window.
+ * Returns null when the booking is clean, has no EMI schedule, or can't be checked —
+ * a lookup failure must never be the reason a receipt won't print.
+ */
+async function findLapsedInstalment(bookingId: string | undefined | null) {
+  if (!bookingId) return null
+  const cutoff = new Date()
+  cutoff.setDate(cutoff.getDate() - LAPSE_GRACE_DAYS)
+  try {
+    const { data, error } = await supabase
+      .from('emi_installments')
+      .select('seq, due_date, amount, status, emi_schedules!inner(booking_id)')
+      .eq('emi_schedules.booking_id', bookingId)
+      .neq('status', 'paid')
+      .lt('due_date', cutoff.toISOString().slice(0, 10))
+      .order('due_date', { ascending: true })
+    if (error || !data || data.length === 0) return null
+    const worst: any = data[0]
+    const daysOverdue = Math.floor((Date.now() - new Date(worst.due_date).getTime()) / 86400000)
+    return { seq: worst.seq, due_date: worst.due_date, amount: Number(worst.amount || 0), daysOverdue, count: data.length }
+  } catch {
+    return null
+  }
+}
+
 function paymentTypeLabel(t: string | undefined): string {
   switch (t) {
     case 'token':        return 'TOKEN RECEIPT'
@@ -40,7 +71,29 @@ function paymentTypeLabel(t: string | undefined): string {
  *   Bottom half → keep in office binder (company copy)
  * A dashed cut-line and "✂ Cut here" hint sit between the halves.
  */
-export function printPaymentReceipt(p: any, ctx: { customer?: any; booking?: any; project?: any; plot?: any } = {}) {
+export async function printPaymentReceipt(p: any, ctx: { customer?: any; booking?: any; project?: any; plot?: any } = {}) {
+  // Receipts are held back on a booking whose EMI has gone unpaid past the 90-day
+  // lapsation window (the same grace period payoutEngine uses).  Admin asked for the
+  // block here rather than at each button because this function is the single
+  // chokepoint every one of the six print sites goes through.
+  //
+  // It asks rather than hard-blocks: the payment being receipted may be the very one
+  // clearing the arrears, and a receipt the customer is standing there waiting for must
+  // never be permanently unreachable.  The warning names the worst instalment so the
+  // decision is an informed one.
+  const lapse = await findLapsedInstalment(p.booking_id || ctx.booking?.id)
+  if (lapse) {
+    const proceed = window.confirm(
+      `⚠️  EMI overdue on this booking\n\n` +
+      `Instalment #${lapse.seq} of ${formatINR(lapse.amount)} was due on ${new Date(lapse.due_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} ` +
+      `— ${lapse.daysOverdue} days ago (past the 90-day limit).` +
+      (lapse.count > 1 ? `\n${lapse.count} instalments are overdue in total.` : '') +
+      `\n\nReceipts are held back until the arrears are cleared.\n\n` +
+      `Print anyway?`,
+    )
+    if (!proceed) return
+  }
+
   const { customer, booking, project, plot } = ctx
   const cust = customer || p.bp_bookings?.bp_customers || {}
   const bk   = booking || p.bp_bookings || {}
