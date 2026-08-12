@@ -37,6 +37,8 @@ const NAV = [
     // Post-dated cheques are tracked separately from payments on purpose: a cheque
     // on file is not collected money until it clears.
     { to: '/pdc-cheques',       icon: Landmark,   label: 'PDC Cheques' },
+    // Registry is the last step of a sale, so it sits after the money entries.
+    { to: '/registry',          icon: ScrollText, label: 'Registry' },
   ]},
   { group: 'Broker Network', items: [
     { to: '/brokers',          icon: Users,    label: 'Brokers' },
