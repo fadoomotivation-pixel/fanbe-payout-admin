@@ -23,8 +23,12 @@
 //   * PLOTS.  A plot can only belong to one booking, so a plot already used earlier in
 //     the sheet, or already sitting on a booking, is refused rather than double-sold.
 //
-//   * CUSTOMERS.  Matched on phone.  A phone repeated inside the sheet reuses the
-//     customer created moments earlier instead of making a second one.
+//   * CUSTOMERS.  Matched on phone AND name together.  Phone alone is not an identity:
+//     sheets are full of placeholders like 9999999999, and matching on one of those
+//     merged eight different buyers onto a single customer -- who happened to be a
+//     broker, so every booking number inherited their FNB code as well.  A placeholder
+//     number, or a real number already on file under a different name, means a fresh
+//     customer record and a warning.
 import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
@@ -43,6 +47,23 @@ const COLUMNS = [
 type Col = typeof COLUMNS[number]
 
 const digitsOnly = (s: string) => (s || '').replace(/\D/g, '')
+
+// A phone is only an identity if it is actually a phone.  Sheets are full of
+// placeholders — 9999999999, 0000000000, 1234567890 — and matching on those merges
+// unrelated buyers into one customer record.  Anything under 10 digits, or made of a
+// single repeated digit, or plainly sequential, is treated as "no phone given".
+const PLACEHOLDER_PHONES = new Set(['1234567890', '0123456789', '9876543210'])
+const isRealPhone = (p: string) =>
+  p.length >= 10 && !/^(\d)\1+$/.test(p) && !PLACEHOLDER_PHONES.has(p)
+
+// Two names are the same person if they normalise equal, or one clearly contains the
+// other ("RAJESH KUMAR" vs "RAJESH KUMAR/SUNITA").  Anything else is a different buyer.
+const nameKey = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+const namesMatch = (a: string, b: string) => {
+  const x = nameKey(a), y = nameKey(b)
+  if (!x || !y) return false
+  return x === y || x.includes(y) || y.includes(x)
+}
 const num = (s: string) => Number(String(s || '').replace(/[₹,\s]/g, '')) || 0
 const norm = (s: string) => (s || '').trim().toLowerCase()
 
@@ -130,7 +151,9 @@ export default function BookingImportModal({ open, onClose, onImported }: {
       ? lines.slice(1) : lines
 
     const projectByName = new Map(ref.projects.map((p: any) => [norm(p.name), p]))
-    const custByPhone   = new Map(ref.customers.map((c: any) => [digitsOnly(c.phone || ''), c]).filter(([k]: any) => k))
+    const custByPhone   = new Map(
+      ref.customers.map((c: any) => [digitsOnly(c.phone || ''), c]).filter(([k]: any) => isRealPhone(k)),
+    )
     const brokerByCode  = new Map(ref.brokers.map((b: any) => [norm(b.broker_id), b]))
     const plotsByKey    = new Map<string, any>()
     for (const p of ref.plots) plotsByKey.set(`${p.project_id}|${norm(p.plot_no)}`, p)
@@ -209,7 +232,22 @@ export default function BookingImportModal({ open, onClose, onImported }: {
         warnings.push(`Received ${formatINR(amount_received)} is more than the total ${formatINR(total)}`)
       }
 
-      const existingCust = phone ? custByPhone.get(phone) : null
+      // Reuse an existing customer ONLY when the phone is a real one AND the name agrees.
+      // Matching on the phone alone is what merged eight different buyers into a single
+      // record: they all carried 9999999999 in the sheet, so every booking landed on the
+      // one customer who already had that number — and because that customer was also a
+      // broker, the booking numbers inherited their FNB code too.
+      let existingCust: any = null
+      if (isRealPhone(phone)) {
+        const candidate = custByPhone.get(phone)
+        if (candidate && namesMatch(candidate.name, customer_name)) {
+          existingCust = candidate
+        } else if (candidate) {
+          warnings.push(`Phone ${phone} is already on file for "${candidate.name}" — a separate customer was created for ${customer_name}`)
+        }
+      } else if (phone) {
+        warnings.push(`${phone} looks like a placeholder, not a real number — this booking gets its own customer record`)
+      }
 
       return {
         line: i + 1, booking_no, booking_date,
@@ -239,7 +277,10 @@ export default function BookingImportModal({ open, onClose, onImported }: {
 
     for (const r of valid) {
       try {
-        let customer_id = r.customer_id || createdCustomers.get(r.phone) || null
+        // Same rule inside the run: only a real phone can identify a repeat buyer, so
+        // several rows sharing a placeholder number stay separate people.
+        const cacheKey = isRealPhone(r.phone) ? `${r.phone}|${nameKey(r.customer_name)}` : ''
+        let customer_id = r.customer_id || (cacheKey ? createdCustomers.get(cacheKey) : null) || null
         if (!customer_id) {
           const { data: c, error: cErr } = await supabase.from('bp_customers').insert({
             name: r.customer_name,
@@ -253,7 +294,7 @@ export default function BookingImportModal({ open, onClose, onImported }: {
           }).select('id').single()
           if (cErr || !c) throw cErr || new Error('Could not create the customer')
           customer_id = c.id
-          createdCustomers.set(r.phone, customer_id)
+          if (cacheKey) createdCustomers.set(cacheKey, customer_id)
         }
 
         const { data: bk, error: bErr } = await supabase.from('bp_bookings').insert({
