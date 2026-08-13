@@ -14,7 +14,7 @@ import EmiPanel from '@/components/EmiPanel'
 import {
   Users, Search, Filter, ChevronRight, Banknote, Calculator, ArrowUpRight,
   CheckCircle2, AlertTriangle, Coins, Phone, MessageCircle, IndianRupee, X, ExternalLink,
-  FileText, Printer,
+  FileText, Printer, Pencil,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -55,6 +55,7 @@ export default function CustomerPipeline() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [emiBooking, setEmiBooking] = useState<any>(null)
   const [payFor, setPayFor] = useState<{ booking: any; type: 'token' | 'booking' } | null>(null)
+  const [editCustomer, setEditCustomer] = useState<any>(null)
 
   // Fetch the focused customer's profile + aggregate stats across ALL their bookings.
   // This is the data that used to live on the deleted /customer-history page — it gives
@@ -423,6 +424,27 @@ export default function CustomerPipeline() {
     onError: (e: any) => toast.error(e.message),
   })
 
+  const updateCustomer = useMutation({
+    mutationFn: async (p: { id: string; name: string; phone: string; father_or_husband_name?: string; email?: string; pan?: string; address?: string; dob?: string; aadhaar?: string; nominee_name?: string; nominee_relation?: string }) => {
+      const { id, ...fields } = p
+      const { error } = await supabase.from('bp_customers').update({
+        ...fields,
+        dob: fields.dob || null,
+        updated_at: new Date().toISOString(),
+      }).eq('id', id)
+      if (error) throw error
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['cp_bookings_page'] })
+      qc.invalidateQueries({ queryKey: ['cp_customer_focus'] })
+      qc.invalidateQueries({ queryKey: ['cp_search_targets'] })
+      qc.invalidateQueries({ queryKey: ['bookings'] })
+      toast.success('Customer updated')
+      setEditCustomer(null)
+    },
+    onError: (e: any) => toast.error(e.message),
+  })
+
   // ── Derive per-row state ───────────────────────────────────────────
   const rows = useMemo(() => {
     return (bookings as any[]).map((b: any) => {
@@ -527,9 +549,14 @@ export default function CustomerPipeline() {
               </div>
               {customerFocus.customer.address && <div className="text-xs text-gray-500 mt-0.5 truncate">📍 {customerFocus.customer.address}</div>}
             </div>
-            <button onClick={clearCustomerFocus} className="text-xs text-blue-700 hover:text-blue-900 underline shrink-0">
-              Clear filter →
-            </button>
+            <div className="flex flex-col gap-1.5 shrink-0">
+              <button onClick={() => setEditCustomer(customerFocus.customer)} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white">
+                <Pencil size={12}/>Edit
+              </button>
+              <button onClick={clearCustomerFocus} className="text-xs text-blue-700 hover:text-blue-900 underline">
+                Clear filter →
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mt-4">
@@ -648,9 +675,14 @@ export default function CustomerPipeline() {
                   <div className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-full px-2 py-0.5 mb-1">
                     <Users size={10}/>CUSTOMER
                   </div>
-                  <Link to={`/customer-pipeline?customer=${r.customer_id}`} className="text-[17px] font-semibold text-gray-900 hover:text-blue-700 truncate block">
-                    {cust?.name || '—'}
-                  </Link>
+                  <div className="flex items-center gap-1.5">
+                    <Link to={`/customer-pipeline?customer=${r.customer_id}`} className="text-[17px] font-semibold text-gray-900 hover:text-blue-700 truncate">
+                      {cust?.name || '—'}
+                    </Link>
+                    <button onClick={() => setEditCustomer(cust)} title="Edit customer" className="p-0.5 rounded hover:bg-gray-200 text-gray-400 hover:text-gray-700 shrink-0">
+                      <Pencil size={12}/>
+                    </button>
+                  </div>
                   {/* Subline 1: identity (booking_no · plot · project · sale mode badge) */}
                   <div className="text-[13px] text-gray-500 mt-0.5 truncate flex items-center gap-1.5 flex-wrap">
                     <span className="font-mono">{r.booking_no}</span>
@@ -865,7 +897,71 @@ export default function CustomerPipeline() {
         onSubmit={(form: any) => recordPay.mutate({ booking: payFor!.booking, type: payFor!.type, ...form })}
         submitting={recordPay.isPending}
       />
+
+      {/* Edit customer modal */}
+      <EditCustomerModal
+        customer={editCustomer}
+        open={!!editCustomer}
+        onClose={() => setEditCustomer(null)}
+        onSubmit={(data: any) => updateCustomer.mutate(data)}
+        submitting={updateCustomer.isPending}
+      />
     </div>
+  )
+}
+
+function EditCustomerModal({ customer, open, onClose, onSubmit, submitting }: any) {
+  const [f, setF] = useState<any>({})
+  useEffect(() => {
+    if (!open || !customer) return
+    setF({
+      name: customer.name || '',
+      phone: customer.phone || '',
+      father_or_husband_name: customer.father_or_husband_name || '',
+      email: customer.email || '',
+      pan: customer.pan || '',
+      aadhaar: customer.aadhaar || '',
+      address: customer.address || '',
+      dob: customer.dob || '',
+      nominee_name: customer.nominee_name || '',
+      nominee_relation: customer.nominee_relation || '',
+    })
+  }, [open, customer?.id])
+  const set = (k: string, v: string) => setF((p: any) => ({ ...p, [k]: v }))
+  if (!customer) return null
+  const isMissing = (customer.name || '').startsWith('NAME MISSING')
+  return (
+    <Modal open={open} onClose={onClose} title="Edit Customer" size="md">
+      {isMissing && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4 text-[12px] text-amber-800">
+          This customer was auto-created during a data repair. Please fill in the real name and phone from the original Excel sheet.
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-3">
+        <Input label="Full Name" value={f.name} onChange={(e: any) => set('name', e.target.value)} autoFocus />
+        <Input label="Mobile" value={f.phone} onChange={(e: any) => set('phone', e.target.value)} />
+        <Input label="Father / Husband" value={f.father_or_husband_name} onChange={(e: any) => set('father_or_husband_name', e.target.value)} />
+        <Input label="Date of Birth" type="date" value={f.dob} onChange={(e: any) => set('dob', e.target.value)} />
+        <Input label="Email" value={f.email} onChange={(e: any) => set('email', e.target.value)} />
+        <Input label="PAN" value={f.pan} onChange={(e: any) => set('pan', e.target.value.toUpperCase())} />
+        <Input label="Aadhaar" value={f.aadhaar} onChange={(e: any) => set('aadhaar', e.target.value)} />
+        <div />
+        <div className="col-span-2">
+          <Input label="Address" value={f.address} onChange={(e: any) => set('address', e.target.value)} />
+        </div>
+        <Input label="Nominee Name" value={f.nominee_name} onChange={(e: any) => set('nominee_name', e.target.value)} />
+        <Input label="Nominee Relation" value={f.nominee_relation} onChange={(e: any) => set('nominee_relation', e.target.value)} />
+      </div>
+      <div className="flex justify-between items-center mt-5">
+        <span className="text-[11px] text-gray-400 font-mono">{customer.customer_code}</span>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => onSubmit({ id: customer.id, ...f })} loading={submitting}>
+            Save
+          </Button>
+        </div>
+      </div>
+    </Modal>
   )
 }
 
