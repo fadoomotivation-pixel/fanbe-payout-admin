@@ -429,13 +429,13 @@ export default function Bookings() {
       const conflict = await findUtrConflict(trimmedUtr)
       if (conflict) throw new Error(utrConflictMessage(conflict))
     }
-    const { data: rn } = await supabase.rpc('generate_receipt_no', { p_customer_id: p.customer_id })
+    // receipt_no is assigned by the trg_bp_payments_receipt_no trigger as the row is
+    // written, so it can't collide with a concurrent save the way a read-then-insert could.
     const { data: inserted, error } = await supabase.from('bp_payments').insert({
       booking_id: p.booking_id, customer_id: p.customer_id,
       payment_type: p.payment_type, amount: p.amount, payment_mode: p.payment_mode,
       utr_ref: trimmedUtr || null, payment_date: p.payment_date,
       verification_status: 'verified', verified_at: new Date().toISOString(),
-      receipt_no: rn || null,
       drawn_on_bank: p.drawn_on_bank || (p.payment_mode === 'cash' ? 'Cash' : null),
       branch: p.branch || null, sponsor_name: p.sponsor_name || null,
     }).select('id').single()

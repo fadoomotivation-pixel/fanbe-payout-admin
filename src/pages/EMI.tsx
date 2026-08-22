@@ -165,28 +165,26 @@ export default function EMI() {
       const advance = remaining
       const closes  = allocations.filter(a => a.willClose).length
 
+      // Attach the payment to the buyer as well as the booking: every other payment path
+      // does, and the receipt number is built from the customer.
       const { data: bkRow } = await supabase.from('bp_bookings').select('customer_id').eq('id', bookingId).single()
-      const custId = bkRow?.customer_id
-      const { data: rn } = custId
-        ? await supabase.rpc('generate_receipt_no', { p_customer_id: custId })
-        : await supabase.rpc('next_receipt_no')
-      const receipt_no = rn || ''
       const { data: payment, error: pErr } = await supabase.from('bp_payments').insert({
         booking_id: bookingId,
+        customer_id: bkRow?.customer_id || null,
         payment_type: 'emi',
         amount: incoming,
         payment_mode: params.mode,
         payment_date: params.date,
         verification_status: 'verified',
         verified_at: new Date().toISOString(),
-        receipt_no,
         instalment_no: firstSeq || null,
         utr_ref: params.utr || null,
         drawn_on_bank: params.drawnOn || (params.mode === 'cash' ? 'Cash' : null),
         branch: params.branch || null,
         notes: params.notes || `EMI payment · ${closes} closed${advance > 0 ? ` · ₹${advance} advance` : ''}`,
-      }).select('id').single()
+      }).select('id, receipt_no').single()
       if (pErr) throw pErr
+      const receipt_no = payment?.receipt_no || ''
 
       for (const a of allocations) {
         const newPaid = a.alreadyPaid + a.apply

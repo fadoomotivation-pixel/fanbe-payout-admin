@@ -126,9 +126,6 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
     const incoming = Number(amount) || 0
     if (incoming <= 0) { toast.error('Enter an amount greater than zero'); return }
 
-    const { data: rn } = await supabase.rpc('generate_receipt_no', { p_customer_id: booking.customer_id })
-    const receipt_no = rn || ''
-
     // Order: by seq (oldest first). Apply against pending/partial installments.
     const queue = (allInsts as any[])
       .filter(i => i.status !== 'paid')
@@ -156,16 +153,19 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
       if (conflict) { toast.error(utrConflictMessage(conflict)); return }
     }
 
-    // Insert ONE payment row for the full incoming amount
+    // Insert ONE payment row for the full incoming amount.
+    // customer_id is set so the row is attached to the buyer like every other payment —
+    // without it the receipt number can't be built from the customer and falls back to
+    // the old global RCT- sequence.
     const { data: payment, error: pErr } = await supabase.from('bp_payments').insert({
       booking_id: booking.id,
+      customer_id: booking.customer_id || null,
       payment_type: 'emi',
       amount: incoming,
       payment_mode: mode,
       payment_date: date,
       verification_status: 'verified',
       verified_at: new Date().toISOString(),
-      receipt_no,
       instalment_no: firstSeq || null,
       utr_ref: trimmedUtr || null,
       drawn_on_bank: drawnOn || (mode === 'cash' ? 'Cash' : null),
@@ -176,6 +176,7 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
       notes: notes || `EMI payment · ${closes} closed${advance > 0 ? ` · ₹${advance} advance` : ''}`,
     }).select('*').single()
     if (pErr) { toast.error(pErr.message); return }
+    const receipt_no = payment?.receipt_no || ''
 
     // Update each allocated installment
     for (const a of allocations) {
