@@ -86,11 +86,8 @@ export default function Payments() {
 
   const create = useMutation({
     mutationFn: async (p: any) => {
-      // Auto-assign receipt no via DB sequence if not provided
-      if (!p.receipt_no) {
-        const { data: rn } = await supabase.rpc('next_receipt_no')
-        if (rn) p.receipt_no = rn
-      }
+      // A receipt no typed in by hand is kept; otherwise the trg_bp_payments_receipt_no
+      // trigger assigns one as the row is written and it comes back on `data`.
       const { data, error } = await supabase.from('bp_payments').insert(p).select().single()
       if (error) throw error
       // Per-payment MLM distribution — only fire when the payment is created already verified.

@@ -359,13 +359,13 @@ export default function CustomerPipeline() {
         const conflict = await findUtrConflict(trimmedUtr)
         if (conflict) throw new Error(utrConflictMessage(conflict))
       }
-      const { data: rn } = await supabase.rpc('next_receipt_no')
+      // receipt_no comes back from the trigger on the inserted row — the printed receipt
+      // below reads it off `payment`, so it is always the number actually stored.
       const { data: payment, error } = await supabase.from('bp_payments').insert({
         booking_id: p.booking.id, customer_id: p.booking.customer_id,
         payment_type: p.type, amount: p.amount, payment_mode: p.mode,
         payment_date: p.date, verification_status: 'verified',
         verified_at: new Date().toISOString(),
-        receipt_no: rn || null,
         utr_ref: trimmedUtr || null,
         drawn_on_bank: p.drawn_on || (p.mode === 'cash' ? 'Cash' : null),
         branch: p.branch || null,

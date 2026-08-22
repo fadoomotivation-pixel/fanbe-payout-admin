@@ -126,7 +126,15 @@ export default function PaymentQueue() {
         const conflict = await findUtrConflict(trimmedUtr)
         if (conflict) throw new Error(utrConflictMessage(conflict))
       }
-      const receiptNo = `RCP-${Date.now().toString().slice(-8)}`
+      // Same receipt number goes onto the queue entry, the receipt row and the payment, so
+      // it is reserved up front rather than assigned by the trigger on the payment insert.
+      // generate_receipt_no() bumps the customer's counter atomically, so two approvals
+      // running at once can never come away with the same number.
+      const { data: bkCust } = await supabase
+        .from('bp_bookings').select('customer_id').eq('id', item.booking_id).single()
+      const { data: rn } = await supabase
+        .rpc('generate_receipt_no', { p_customer_id: bkCust?.customer_id ?? null })
+      const receiptNo = rn || `RCP-${Date.now().toString().slice(-8)}`
       const now = new Date().toISOString()
 
       // 1. Mark queue entry approved
@@ -181,6 +189,7 @@ export default function PaymentQueue() {
       // 4. Mirror to bp_payments so it shows in the unified ledger + triggers MLM
       const { data: payment } = await supabase.from('bp_payments').insert({
         booking_id: item.booking_id,
+        customer_id: bkCust?.customer_id ?? null,
         payment_type: item.payment_type,
         amount: item.amount,
         payment_mode: item.payment_mode,
