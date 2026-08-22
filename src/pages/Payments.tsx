@@ -87,8 +87,8 @@ export default function Payments() {
   const create = useMutation({
     mutationFn: async (p: any) => {
       // Auto-assign receipt no via DB sequence if not provided
-      if (!p.receipt_no) {
-        const { data: rn } = await supabase.rpc('next_receipt_no')
+      if (!p.receipt_no && p.customer_id) {
+        const { data: rn } = await supabase.rpc('generate_receipt_no', { p_customer_id: p.customer_id })
         if (rn) p.receipt_no = rn
       }
       const { data, error } = await supabase.from('bp_payments').insert(p).select().single()

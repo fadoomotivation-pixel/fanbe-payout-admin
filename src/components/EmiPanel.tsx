@@ -126,7 +126,7 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
     const incoming = Number(amount) || 0
     if (incoming <= 0) { toast.error('Enter an amount greater than zero'); return }
 
-    const { data: rn } = await supabase.rpc('next_receipt_no')
+    const { data: rn } = await supabase.rpc('generate_receipt_no', { p_customer_id: booking.customer_id })
     const receipt_no = rn || ''
 
     // Order: by seq (oldest first). Apply against pending/partial installments.

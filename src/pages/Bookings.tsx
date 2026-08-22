@@ -429,7 +429,7 @@ export default function Bookings() {
       const conflict = await findUtrConflict(trimmedUtr)
       if (conflict) throw new Error(utrConflictMessage(conflict))
     }
-    const { data: rn } = await supabase.rpc('next_receipt_no')
+    const { data: rn } = await supabase.rpc('generate_receipt_no', { p_customer_id: p.customer_id })
     const { data: inserted, error } = await supabase.from('bp_payments').insert({
       booking_id: p.booking_id, customer_id: p.customer_id,
       payment_type: p.payment_type, amount: p.amount, payment_mode: p.payment_mode,

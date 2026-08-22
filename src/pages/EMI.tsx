@@ -165,7 +165,11 @@ export default function EMI() {
       const advance = remaining
       const closes  = allocations.filter(a => a.willClose).length
 
-      const { data: rn } = await supabase.rpc('next_receipt_no')
+      const { data: bkRow } = await supabase.from('bp_bookings').select('customer_id').eq('id', bookingId).single()
+      const custId = bkRow?.customer_id
+      const { data: rn } = custId
+        ? await supabase.rpc('generate_receipt_no', { p_customer_id: custId })
+        : await supabase.rpc('next_receipt_no')
       const receipt_no = rn || ''
       const { data: payment, error: pErr } = await supabase.from('bp_payments').insert({
         booking_id: bookingId,

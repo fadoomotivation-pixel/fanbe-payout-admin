@@ -359,7 +359,7 @@ export default function CustomerPipeline() {
         const conflict = await findUtrConflict(trimmedUtr)
         if (conflict) throw new Error(utrConflictMessage(conflict))
       }
-      const { data: rn } = await supabase.rpc('next_receipt_no')
+      const { data: rn } = await supabase.rpc('generate_receipt_no', { p_customer_id: p.booking.customer_id })
       const { data: payment, error } = await supabase.from('bp_payments').insert({
         booking_id: p.booking.id, customer_id: p.booking.customer_id,
         payment_type: p.type, amount: p.amount, payment_mode: p.mode,
