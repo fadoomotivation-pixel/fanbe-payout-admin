@@ -76,6 +76,7 @@ export default function PdcCheques() {
   const [filterStatus, setFilterStatus] = useState('')
   const [dueFilter, setDueFilter] = useState<'' | 'overdue' | 'soon' | 'open'>('')
   const [bounceFor, setBounceFor] = useState<any>(null)
+  const [deleteFor, setDeleteFor] = useState<any>(null)
   const [bounceReason, setBounceReason] = useState('')
   const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }))
 
@@ -224,6 +225,27 @@ export default function PdcCheques() {
     window.open(url, '_blank')
   }
 
+  // Delete is for a cheque entered wrongly -- a typo in the number, a duplicate row from a
+  // series added twice.  A CLEARED cheque is never deletable: it has already created a
+  // payment receipt, and bp_pdc_cheques.payment_id is what ties the two together.  Removing
+  // it would leave a receipt in the books that no cheque accounts for.  Bounce it first,
+  // which deletes the payment and reverses the commission properly, then delete.
+  const removeCheque = useMutation({
+    mutationFn: async (row: any) => {
+      if (row.status === 'cleared' || row.payment_id) {
+        throw new Error('This cheque has cleared and created a receipt. Mark it bounced first, then delete it.')
+      }
+      const { error } = await supabase.from('bp_pdc_cheques').delete().eq('id', row.id)
+      if (error) throw error
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['pdc_cheques'] })
+      setDeleteFor(null)
+      toast.success('Cheque removed from the register')
+    },
+    onError: (e: any) => toast.error(e.message || 'Could not delete the cheque.'),
+  })
+
   const rows = (cheques as any[]).filter((c: any) => {
     if (filterStatus && c.status !== filterStatus) return false
     // The tiles double as filters: reading "6 overdue" and then hunting for those six in
@@ -346,9 +368,15 @@ export default function PdcCheques() {
         }
         if (r.status === 'bounced' || r.status === 'cancelled') {
           return (
-            <button onClick={() => setStatus.mutate({ row: r, status: 'pending' })} className="text-xs px-2 py-1 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">
-              Reopen
-            </button>
+            <div className="flex flex-wrap gap-1">
+              <button onClick={() => setStatus.mutate({ row: r, status: 'pending' })} className="text-xs px-2 py-1 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50">
+                Reopen
+              </button>
+              <button onClick={() => setDeleteFor(r)} title="Remove a wrongly entered cheque"
+                className="text-xs px-2 py-1 rounded-md border border-red-200 text-red-600 hover:bg-red-50">
+                Delete
+              </button>
+            </div>
           )
         }
         return (
@@ -371,6 +399,10 @@ export default function PdcCheques() {
             </button>
             <button onClick={() => setStatus.mutate({ row: r, status: 'cancelled' })} className="text-xs px-2 py-1 rounded-md border border-gray-200 text-gray-500 hover:bg-gray-50">
               Void
+            </button>
+            <button onClick={() => setDeleteFor(r)} title="Remove a wrongly entered cheque"
+              className="text-xs px-2 py-1 rounded-md border border-red-200 text-red-600 hover:bg-red-50">
+              Delete
             </button>
           </div>
         )
@@ -533,6 +565,33 @@ export default function PdcCheques() {
       </Modal>
 
       {/* ── Bounce ────────────────────────────────────────────────────────── */}
+      <Modal open={!!deleteFor} onClose={() => setDeleteFor(null)} title="Delete cheque" size="sm">
+        {deleteFor && (
+          <div className="space-y-3">
+            <p className="text-sm text-gray-700">
+              Remove cheque <b className="font-mono">{deleteFor.cheque_no}</b>
+              {deleteFor.bank_name ? ` (${deleteFor.bank_name})` : ''} for <b>{formatINR(Number(deleteFor.amount || 0))}</b>,
+              dated {formatDate(deleteFor.cheque_date)}?
+            </p>
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
+              Use this only for a cheque entered by mistake — a wrong number, or a duplicate row.
+              If the customer actually gave this cheque and it later failed, mark it <b>Bounced</b>
+              instead so the register still shows what happened.
+            </div>
+            <p className="text-xs text-gray-500">
+              Nothing else changes: a cheque on file was never counted as money, so no receipt and no
+              commission depend on it.
+            </p>
+          </div>
+        )}
+        <div className="flex justify-end gap-2 mt-5">
+          <Button variant="secondary" onClick={() => setDeleteFor(null)}>Cancel</Button>
+          <Button variant="danger" loading={removeCheque.isPending} onClick={() => removeCheque.mutate(deleteFor)}>
+            Delete cheque
+          </Button>
+        </div>
+      </Modal>
+
       <Modal open={!!bounceFor} onClose={() => { setBounceFor(null); setBounceReason('') }} title="Mark cheque bounced" size="sm">
         {bounceFor && (
           <div className="space-y-3">
