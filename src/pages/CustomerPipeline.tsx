@@ -205,28 +205,44 @@ export default function CustomerPipeline() {
 
   const bookingIds = useMemo(() => bookings.map((b: any) => b.id), [bookings])
 
-  const { data: paymentsByBooking = {} } = useQuery<Record<string, { token: number; booking: number; emi: number; full: number; total: number; last_date: string | null }>>({
+  // Also carries the latest receipt's UTR / receipt no / mode / amount.  Admin asked for
+  // these on the row itself: the reference is what a customer quotes on the phone and what
+  // a bank line is matched against, and having to expand a row to see it made every such
+  // check a two-step job.
+  const { data: paymentsByBooking = {} } = useQuery<Record<string, { token: number; booking: number; emi: number; full: number; total: number; last_date: string | null; last_utr: string | null; last_receipt: string | null; last_mode: string | null; last_amount: number; count: number }>>({
     queryKey: ['cp_payments', bookingIds],
     enabled: bookingIds.length > 0,
     queryFn: async () => {
       const { data, error } = await supabase
         .from('bp_payments')
-        .select('booking_id, amount, payment_type, payment_date, verification_status')
+        .select('booking_id, amount, payment_type, payment_date, verification_status, utr_ref, receipt_no, payment_mode, created_at')
         .in('booking_id', bookingIds)
         .eq('verification_status', 'verified')
       if (error) throw error
       const m: Record<string, any> = {}
       for (const p of (data || [])) {
         if (!p.booking_id) continue
-        if (!m[p.booking_id]) m[p.booking_id] = { token: 0, booking: 0, emi: 0, full: 0, total: 0, last_date: null }
+        if (!m[p.booking_id]) m[p.booking_id] = { token: 0, booking: 0, emi: 0, full: 0, total: 0, last_date: null, last_utr: null, last_receipt: null, last_mode: null, last_amount: 0, count: 0, _lastKey: '' }
+        const row = m[p.booking_id]
         const amt = Number(p.amount || 0)
-        m[p.booking_id].total += amt
-        if (p.payment_type === 'token')        m[p.booking_id].token   += amt
-        if (p.payment_type === 'booking')      m[p.booking_id].booking += amt
-        if (p.payment_type === 'emi')          m[p.booking_id].emi     += amt
-        if (p.payment_type === 'full_payment') m[p.booking_id].full    += amt
-        if (!m[p.booking_id].last_date || (p.payment_date && p.payment_date > m[p.booking_id].last_date)) {
-          m[p.booking_id].last_date = p.payment_date
+        row.total += amt
+        row.count += 1
+        if (p.payment_type === 'token')        row.token   += amt
+        if (p.payment_type === 'booking')      row.booking += amt
+        if (p.payment_type === 'emi')          row.emi     += amt
+        if (p.payment_type === 'full_payment') row.full    += amt
+        if (!row.last_date || (p.payment_date && p.payment_date > row.last_date)) {
+          row.last_date = p.payment_date
+        }
+        // Latest receipt by date, falling back to created_at so same-day payments still
+        // resolve to the one actually entered last.
+        const key = `${p.payment_date || ''}|${p.created_at || ''}`
+        if (key >= row._lastKey) {
+          row._lastKey     = key
+          row.last_utr     = p.utr_ref || null
+          row.last_receipt = p.receipt_no || null
+          row.last_mode    = p.payment_mode || null
+          row.last_amount  = amt
         }
       }
       return m
@@ -448,7 +464,7 @@ export default function CustomerPipeline() {
   // ── Derive per-row state ───────────────────────────────────────────
   const rows = useMemo(() => {
     return (bookings as any[]).map((b: any) => {
-      const pm = paymentsByBooking[b.id] || { token: 0, booking: 0, emi: 0, full: 0, total: 0, last_date: null }
+      const pm = paymentsByBooking[b.id] || { token: 0, booking: 0, emi: 0, full: 0, total: 0, last_date: null, last_utr: null, last_receipt: null, last_mode: null, last_amount: 0, count: 0 }
       const total = Number(b.total_amount || b.plot_total_price || 0)
       const paid  = pm.total
       const balance = Math.max(0, total - paid)
@@ -744,6 +760,45 @@ export default function CustomerPipeline() {
                 <div className="ml-auto text-[12px] text-gray-400 tabular-nums shrink-0">{pct}%</div>
               </div>
               <div className="mt-2 text-[12px] text-gray-500">{nextHint}</div>
+
+              {/* The details admin was opening every row to read — phone, and the last
+                  receipt with its bank reference — kept on the row itself.  Each one is a
+                  live control: tap the number to dial, tap the UTR to copy it. */}
+              <div className="mt-2 flex items-center gap-x-3 gap-y-1 flex-wrap text-[11.5px]">
+                {cust?.phone && (
+                  <a href={`tel:${cust.phone}`} onClick={e => e.stopPropagation()}
+                    className="inline-flex items-center gap-1 text-gray-600 hover:text-blue-700 font-medium">
+                    <Phone size={11}/>{cust.phone}
+                  </a>
+                )}
+                {r.pm.last_utr && (
+                  <button
+                    onClick={() => { navigator.clipboard?.writeText(r.pm.last_utr); toast.success(`UTR ${r.pm.last_utr} copied`) }}
+                    title="Copy UTR / reference"
+                    className="inline-flex items-center gap-1 text-gray-600 hover:text-blue-700 font-mono">
+                    <Banknote size={11}/>UTR {r.pm.last_utr}
+                  </button>
+                )}
+                {r.pm.last_receipt && (
+                  <span className="inline-flex items-center gap-1 text-gray-500 font-mono" title="Latest receipt number">
+                    <Printer size={11}/>{r.pm.last_receipt}
+                  </span>
+                )}
+                {r.pm.last_date && (
+                  <span className="text-gray-500">
+                    last {formatINR(r.pm.last_amount)}
+                    {r.pm.last_mode ? ` · ${String(r.pm.last_mode).toUpperCase()}` : ''} · {formatDate(r.pm.last_date)}
+                  </span>
+                )}
+                {r.pm.count > 0 && (
+                  <span className="text-gray-400">{r.pm.count} receipt{r.pm.count === 1 ? '' : 's'}</span>
+                )}
+                {r.emi?.overdue > 0 && (
+                  <span className="inline-flex items-center gap-1 text-rose-700 bg-rose-50 border border-rose-200 rounded-full px-1.5 py-0.5 font-semibold">
+                    <AlertTriangle size={10}/>{r.emi.overdue} EMI overdue
+                  </span>
+                )}
+              </div>
 
               {/* Single primary CTA + minimal secondary affordances */}
               <div className="mt-4 flex items-center gap-3 flex-wrap">

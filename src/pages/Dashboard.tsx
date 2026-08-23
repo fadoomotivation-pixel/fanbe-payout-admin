@@ -37,6 +37,12 @@ export default function Dashboard() {
   // How many of the dashboard's queries came back broken, so zeros can be told
   // apart from 'nothing happened'.
   const [dataIssues, setDataIssues] = useState(0)
+  // Set when the page loaded without a live session.  RLS on emi_installments, expenses,
+  // payout_distributions and withdrawal_requests only admits the `authenticated` role, and
+  // a denied SELECT comes back as an EMPTY LIST, not an error — so without this the page
+  // renders a confident ₹0 everywhere and nothing looks wrong.  That is exactly the
+  // "sab 0" admin reported while Analytics, opened later on a warm session, read fine.
+  const [signedOut, setSignedOut] = useState(false)
   // Bookings whose EMI has run past the 90-day lapsation window — the ones whose
   // receipts are now held back, so admin can see them without hunting.
   const [lapsed, setLapsed] = useState({ bookings: 0, amount: 0 })
@@ -48,6 +54,12 @@ export default function Dashboard() {
     // tiles DID succeed.
     async function load() {
       try {
+      // Read the session first.  Every figure below depends on being `authenticated`;
+      // querying without one returns empty lists that are indistinguishable from a quiet
+      // month, so say so instead of drawing zeros.
+      const { data: { session } } = await supabase.auth.getSession()
+      setSignedOut(!session)
+
       const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0,0,0,0)
       const monthStartISO = monthStart.toISOString()
       const monthStartDay = monthStartISO.slice(0, 10)
@@ -114,6 +126,20 @@ export default function Dashboard() {
         kycPendingQ, pipelineActiveQ, emiOverdueQ, expensesQ, lapsedQ,
       ] = settled.map((r: any) => (r.status === 'fulfilled' ? r.value : { data: null, count: 0 })) as any[]
 
+      // Each block below owns one part of the page and carries its own try.  They used to
+      // share a single one: the first line to throw left every later setState unreached, so
+      // the tiles, inventory, follow-ups, money and payables all kept their initial zeros
+      // and the page looked like a business with no data rather than a page with a bug.
+      // Now a broken section costs only itself and names itself in the console.
+      const sectionFailures: string[] = []
+      const section = (label: string, fn: () => void) => {
+        try { fn() } catch (e: any) {
+          sectionFailures.push(label)
+          // eslint-disable-next-line no-console
+          console.error(`Dashboard section "${label}" failed:`, e?.message || e)
+        }
+      }
+
       const totalRevenue = (payments.data || []).reduce((s, p) => s + Number(p.amount || 0), 0)
       const revenueThisMonth = (payments.data || []).filter(p => (p.payment_date || '') >= monthStartDay).reduce((s, p) => s + Number(p.amount || 0), 0)
       const revenuePrevMonth = (payments.data || [])
@@ -144,9 +170,16 @@ export default function Dashboard() {
       }
       let topBrokerOut: { id: string; name: string; code: string; rank: string; earned: number } | null = null
       if (monthlyByBroker.size > 0) {
-        const [topId, topAmt] = Array.from(monthlyByBroker.entries()).sort((a, b) => b[1] - a[1])[0]
-        const { data: bInfo } = await supabase.from('brokers').select('id, name, broker_id, rank').eq('id', topId).maybeSingle()
-        if (bInfo) topBrokerOut = { id: bInfo.id, name: bInfo.name, code: bInfo.broker_id, rank: bInfo.rank, earned: topAmt }
+        // Its own try: this is the only await left in the middle of the page's own
+        // calculations, so a failure here must not cost the tiles below it.
+        try {
+          const [topId, topAmt] = Array.from(monthlyByBroker.entries()).sort((a, b) => b[1] - a[1])[0]
+          const { data: bInfo } = await supabase.from('brokers').select('id, name, broker_id, rank').eq('id', topId).maybeSingle()
+          if (bInfo) topBrokerOut = { id: bInfo.id, name: bInfo.name, code: bInfo.broker_id, rank: bInfo.rank, earned: topAmt }
+        } catch (e: any) {
+          // eslint-disable-next-line no-console
+          console.error('Dashboard top-broker lookup failed:', e?.message || e)
+        }
       }
 
       // Plot status breakdown — for the donut.  Categorise by status with friendly colours.
@@ -175,58 +208,65 @@ export default function Dashboard() {
       }
 
       // Headline tiles
-      setTiles([
+      section('headline tiles', () => setTiles([
         { label: 'Active Brokers',     value: String(brokerCount.count || 0), color: 'text-blue-700',     href: '/brokers' },
         { label: 'Total Customers',    value: String(customerCount.count || 0), color: 'text-gray-900',   href: '/customer-pipeline' },
         { label: 'Confirmed Bookings', value: String(bookingDoneCount.count || 0), color: 'text-emerald-700', href: '/customer-pipeline?tab=settled' },
         { label: 'Revenue (verified)', value: formatINR(totalRevenue), sub: `This month: ${formatINR(revenueThisMonth)}`, color: 'text-green-700', href: '/payments', delta: revenueDelta },
-      ])
+      ]))
 
       // Inventory row — projects + plot status, with deep links
-      const plots = plotsCount.count || 0
-      setInventory([
+      section('inventory', () => setInventory([
         { label: 'Total Projects',  value: String(projectsCount.count || 0), color: 'text-indigo-700', href: '/projects' },
-        { label: 'Total Plots',     value: String(plots),                    color: 'text-teal-700',   href: '/plots' },
+        { label: 'Total Plots',     value: String(plotsCount.count || 0),     color: 'text-teal-700',   href: '/plots' },
         { label: 'Available Plots', value: String(statusCounts.available || 0), color: 'text-emerald-700', href: '/plots' },
         { label: 'Booked / Token',  value: String((statusCounts.booked || 0) + (statusCounts.token || 0)), color: 'text-purple-700', href: '/plots' },
-      ])
+      ]))
 
-      setFollowUps({
+      section('follow-ups', () => setFollowUps({
         kycPending:      kycPendingQ.count || 0,
         pipelineActive:  pipelineActiveQ.count || 0,
         emiOverdue:      emiOverdueCount,
         emiOverdueAmount: emiOverdueAmt,
         openWithdrawals: openWdCount,
-      })
+      }))
       // Spend split into this month vs last, plus advances outstanding (money already
       // handed to brokers, which their withdrawable balance is reduced by).
-      const exp = (expensesQ.data || []) as any[]
-      const sumExp = (f: (e: any) => boolean) => exp.filter(f).reduce((acc, e) => acc + Number(e.amount || 0), 0)
-      const inPrevMonth = (d: string) => d >= prevMonthStartDay && d < monthStartDay
-      setMoney({
-        collectedAll:   totalRevenue,
-        collectedMonth: revenueThisMonth,
-        collectedPrev:  revenuePrevMonth,
-        spendAll:       sumExp(() => true),
-        spendMonth:     sumExp(e => (e.expense_date || '') >= monthStartDay),
-        spendPrev:      sumExp(e => inPrevMonth(e.expense_date || '')),
-        advances:       sumExp(e => (e.expense_heads?.name || '').toLowerCase() === 'advance' && e.broker_id),
+      section('money', () => {
+        const exp = (expensesQ.data || []) as any[]
+        const sumExp = (f: (e: any) => boolean) => exp.filter(f).reduce((acc, e) => acc + Number(e.amount || 0), 0)
+        const inPrevMonth = (d: string) => d >= prevMonthStartDay && d < monthStartDay
+        setMoney({
+          collectedAll:   totalRevenue,
+          collectedMonth: revenueThisMonth,
+          collectedPrev:  revenuePrevMonth,
+          spendAll:       sumExp(() => true),
+          spendMonth:     sumExp(e => (e.expense_date || '') >= monthStartDay),
+          spendPrev:      sumExp(e => inPrevMonth(e.expense_date || '')),
+          advances:       sumExp(e => (e.expense_heads?.name || '').toLowerCase() === 'advance' && e.broker_id),
+        })
       })
 
-      const lapsedRows = (lapsedQ.data || []) as any[]
-      setLapsed({
-        bookings: new Set(lapsedRows.map(r => r.emi_schedules?.booking_id).filter(Boolean)).size,
-        amount: lapsedRows.reduce((acc, r) => acc + Number(r.amount || 0), 0),
+      section('lapsed emi', () => {
+        const lapsedRows = (lapsedQ.data || []) as any[]
+        setLapsed({
+          bookings: new Set(lapsedRows.map(r => r.emi_schedules?.booking_id).filter(Boolean)).size,
+          amount: lapsedRows.reduce((acc, r) => acc + Number(r.amount || 0), 0),
+        })
       })
 
-      setPayables({ accrued: earned, paidThisMonth, pending, brokerCount: brokerSet.size, openWdCount })
-      setRecentBookings(recentBk.data || [])
-      setRecentPayments(recentPm.data || [])
-      setNewBrokers(newBrokersRes.data || [])
-      setNewCustomers(newCustomersRes.data || [])
-      setPlotSegments(segments)
-      setDailyGrowth(Object.values(growthMap))
-      setTopBroker(topBrokerOut)
+      section('payables',        () => setPayables({ accrued: earned, paidThisMonth, pending, brokerCount: brokerSet.size, openWdCount }))
+      section('recent bookings', () => setRecentBookings(recentBk.data || []))
+      section('recent payments', () => setRecentPayments(recentPm.data || []))
+      section('new brokers',     () => setNewBrokers(newBrokersRes.data || []))
+      section('new customers',   () => setNewCustomers(newCustomersRes.data || []))
+      section('plot donut',      () => setPlotSegments(segments))
+      section('growth chart',    () => setDailyGrowth(Object.values(growthMap)))
+      section('top broker',      () => setTopBroker(topBrokerOut))
+
+      // Fold any section failure into the same counter the query failures use, so the
+      // banner covers "a figure could not be worked out" as well as "a query did not come back".
+      if (sectionFailures.length > 0) setDataIssues(n => n + sectionFailures.length)
       } catch (e: any) {
         // Don't surface to the user — the empty/zero tiles speak for themselves and the
         // skeleton is the real bug we're protecting against.  Logged so we can debug if
@@ -238,6 +278,16 @@ export default function Dashboard() {
       }
     }
     load()
+
+    // The dashboard is the landing page, so it can mount while the stored token is still
+    // being refreshed.  Reads issued in that window come back empty (RLS), which is why it
+    // could sit on zeros while Analytics — opened a minute later — read fine.  Re-running
+    // on sign-in / token refresh means the page fills itself in instead of staying wrong
+    // until someone thinks to reload.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') load()
+    })
+    return () => subscription.unsubscribe()
   }, [])
 
   const maxGrowth = Math.max(...dailyGrowth.map(d => d.amount), 1)
@@ -258,6 +308,16 @@ export default function Dashboard() {
           <Link to="/payouts"     className="text-xs font-medium px-3 py-1.5 rounded-lg bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 inline-flex items-center gap-1"><Banknote size={12}/>Pay brokers</Link>
         </div>
       </div>
+
+      {signedOut && (
+        <div className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm">
+          <ShieldAlert size={16} className="text-rose-600 mt-0.5 shrink-0"/>
+          <span className="text-rose-900">
+            Your session isn't active, so EMI, expense, commission and withdrawal figures can't be
+            read and will show as zero. Sign in again to see the real numbers.
+          </span>
+        </div>
+      )}
 
       {dataIssues > 0 && (
         <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
