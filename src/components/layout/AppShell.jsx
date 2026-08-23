@@ -18,6 +18,7 @@ const NAV = [
     { to: '/',               icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/analytics',      icon: BarChart2,        label: 'Analytics' },
     { to: '/reports',        icon: FileText,         label: 'Reports' },
+    { to: '/activity',       icon: History,          label: 'Activity Log' },
   ]},
   { group: 'Sales Pipeline', items: [
     { to: '/inquiries',       icon: Inbox,    label: 'Inquiries' },

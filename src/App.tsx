@@ -15,6 +15,7 @@ import Bookings from '@/pages/Bookings'
 import Payments from '@/pages/Payments'
 import PdcCheques from '@/pages/PdcCheques'
 import Registry from '@/pages/Registry'
+import ActivityLog from '@/pages/ActivityLog'
 import KYC from '@/pages/KYC'
 import Analytics from '@/pages/Analytics'
 import Reports from '@/pages/Reports'
@@ -99,6 +100,7 @@ export default function App(){
         <Route path="/payments" element={<Payments/>}/>
         <Route path="/pdc-cheques" element={<PdcCheques/>}/>
         <Route path="/registry" element={<Registry/>}/>
+        <Route path="/activity" element={<ActivityLog/>}/>
         <Route path="/emi" element={<Navigate to="/customer-pipeline" replace/>}/>
         <Route path="/brokers" element={<Brokers/>}/>
         <Route path="/team-tree" element={<BrokerTree/>}/>
