@@ -223,7 +223,46 @@ export async function printPaymentReceipt(p: any, ctx: { customer?: any; booking
   if (w) { w.document.write(html); w.document.close() }
 }
 
-export function printApplicationForm(b: any, ctx: { customer?: any; project?: any; plot?: any; broker?: any; payments?: any[] } = {}) {
+const FORM_CSS = `
+  @page{size:A4;margin:10mm}
+  body{font-family:'Helvetica Neue',Arial,sans-serif;color:#0f172a;font-size:12px;max-width:760px;margin:auto;padding:14px}
+  .header{display:flex;align-items:center;gap:14px;border-bottom:3px solid #1d4ed8;padding-bottom:10px}
+  .logo{width:54px;height:54px;border-radius:10px;background:#1d4ed8;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:22px}
+  .title{font-size:22px;font-weight:900;color:#1d4ed8;letter-spacing:1px}
+  .sub{text-align:center;margin:14px 0 6px}
+  .sub h2{font-size:18px;color:#3730a3;margin:0}
+  .sub h3{font-size:13px;color:#dc2626;text-decoration:underline;margin:4px 0 0;display:inline-block}
+  .row{display:flex;gap:14px;margin:5px 0}
+  .field{flex:1;display:flex;align-items:flex-end;gap:6px;border-bottom:1px dotted #64748b;padding-bottom:2px;font-size:11px}
+  .field b{color:#64748b;font-weight:500;white-space:nowrap}
+  .field span{font-weight:700;flex:1}
+  .section-title{font-weight:700;color:#7c2d12;margin-top:14px;font-size:13px;border-bottom:1px solid #fdba74;padding-bottom:2px}
+  .aff{font-size:10px;margin-top:14px}
+  .aff h4{margin:0 0 4px;color:#7c2d12;font-size:13px}
+  .aff ol{padding-left:20px;line-height:1.5;color:#1e293b}
+  .accept{margin-top:10px;font-size:11px;font-style:italic}
+  .sigrow{display:flex;justify-content:space-between;margin-top:30px}
+  .sigbox{flex:1;text-align:center;font-size:10px;color:#64748b;padding-top:4px;border-top:1px solid #0f172a;margin:0 8px}
+  .pay{width:100%;border-collapse:collapse;font-size:10px;margin-top:6px;border:1px solid #cbd5e1}
+  .pay thead th{background:#f1f5f9;color:#475569;text-align:left;padding:5px 6px;font-size:9.5px;letter-spacing:0.4px;border-bottom:1px solid #cbd5e1}
+  .pay tbody td{padding:5px 6px;border-bottom:1px dotted #e2e8f0}
+  .pay tbody tr:last-child td{border-bottom:none}
+  .pay .num{text-align:right;font-variant-numeric:tabular-nums}
+  .pay .mono{font-family:'SFMono-Regular',Consolas,monospace;font-size:9.5px}
+  .pay tfoot td{padding:5px 6px;border-top:1px solid #cbd5e1}
+  .pay .ftr{background:#f8fafc;font-weight:600;color:#0f172a}
+  .toolbar{position:fixed;top:0;left:0;right:0;display:flex;gap:10px;justify-content:center;align-items:center;padding:10px;background:#0f172a;z-index:9999}
+  .toolbar button{font:600 13px/1 'Helvetica Neue',Arial,sans-serif;padding:9px 18px;border-radius:8px;border:0;cursor:pointer}
+  .toolbar .pr{background:#16a34a;color:#fff}
+  .toolbar .cl{background:#334155;color:#e2e8f0}
+  .toolbar span{color:#94a3b8;font:500 11px/1.3 'Helvetica Neue',Arial,sans-serif}
+  @media print{body{padding:0} .toolbar,.toolbar-spacer{display:none !important}}
+`
+
+// Builds one form's markup only.  Kept separate from the window/CSS wrapper so that
+// printing twenty forms is the same template repeated, not a second copy of it that can
+// drift away from the single-form version.
+function applicationFormBody(b: any, ctx: { customer?: any; project?: any; plot?: any; broker?: any; payments?: any[] } = {}) {
   const cust = ctx.customer || b.bp_customers || {}
   const pj   = ctx.project  || b.bp_projects  || {}
   const pl   = ctx.plot     || b.bp_plots     || {}
@@ -270,50 +309,7 @@ export function printApplicationForm(b: any, ctx: { customer?: any; project?: an
       </tfoot>
     </table>
   `
-  const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"/><title>Application Form — ${b.booking_no || ''}</title>
-<style>
-  @page{size:A4;margin:10mm}
-  body{font-family:'Helvetica Neue',Arial,sans-serif;color:#0f172a;font-size:12px;max-width:760px;margin:auto;padding:14px}
-  .header{display:flex;align-items:center;gap:14px;border-bottom:3px solid #1d4ed8;padding-bottom:10px}
-  .logo{width:54px;height:54px;border-radius:10px;background:#1d4ed8;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:22px}
-  .title{font-size:22px;font-weight:900;color:#1d4ed8;letter-spacing:1px}
-  .sub{text-align:center;margin:14px 0 6px}
-  .sub h2{font-size:18px;color:#3730a3;margin:0}
-  .sub h3{font-size:13px;color:#dc2626;text-decoration:underline;margin:4px 0 0;display:inline-block}
-  .row{display:flex;gap:14px;margin:5px 0}
-  .field{flex:1;display:flex;align-items:flex-end;gap:6px;border-bottom:1px dotted #64748b;padding-bottom:2px;font-size:11px}
-  .field b{color:#64748b;font-weight:500;white-space:nowrap}
-  .field span{font-weight:700;flex:1}
-  .section-title{font-weight:700;color:#7c2d12;margin-top:14px;font-size:13px;border-bottom:1px solid #fdba74;padding-bottom:2px}
-  .aff{font-size:10px;margin-top:14px}
-  .aff h4{margin:0 0 4px;color:#7c2d12;font-size:13px}
-  .aff ol{padding-left:20px;line-height:1.5;color:#1e293b}
-  .accept{margin-top:10px;font-size:11px;font-style:italic}
-  .sigrow{display:flex;justify-content:space-between;margin-top:30px}
-  .sigbox{flex:1;text-align:center;font-size:10px;color:#64748b;padding-top:4px;border-top:1px solid #0f172a;margin:0 8px}
-  .pay{width:100%;border-collapse:collapse;font-size:10px;margin-top:6px;border:1px solid #cbd5e1}
-  .pay thead th{background:#f1f5f9;color:#475569;text-align:left;padding:5px 6px;font-size:9.5px;letter-spacing:0.4px;border-bottom:1px solid #cbd5e1}
-  .pay tbody td{padding:5px 6px;border-bottom:1px dotted #e2e8f0}
-  .pay tbody tr:last-child td{border-bottom:none}
-  .pay .num{text-align:right;font-variant-numeric:tabular-nums}
-  .pay .mono{font-family:'SFMono-Regular',Consolas,monospace;font-size:9.5px}
-  .pay tfoot td{padding:5px 6px;border-top:1px solid #cbd5e1}
-  .pay .ftr{background:#f8fafc;font-weight:600;color:#0f172a}
-  .toolbar{position:fixed;top:0;left:0;right:0;display:flex;gap:10px;justify-content:center;align-items:center;padding:10px;background:#0f172a;z-index:9999}
-  .toolbar button{font:600 13px/1 'Helvetica Neue',Arial,sans-serif;padding:9px 18px;border-radius:8px;border:0;cursor:pointer}
-  .toolbar .pr{background:#16a34a;color:#fff}
-  .toolbar .cl{background:#334155;color:#e2e8f0}
-  .toolbar span{color:#94a3b8;font:500 11px/1.3 'Helvetica Neue',Arial,sans-serif}
-  @media print{body{padding:0} .toolbar,.toolbar-spacer{display:none !important}}
-</style></head>
-<body>
-  <div class="toolbar">
-    <button class="pr" onclick="window.print()">🖨 Print form</button>
-    <button class="cl" onclick="window.close()">Close</button>
-    <span>Cancelled the dialog? Tap Print again.</span>
-  </div>
-  <div class="toolbar-spacer" style="height:48px"></div>
+  return `
   <div class="header">
     <div class="logo">FG</div>
     <div><div class="title">FANBE GROUP</div><div style="font-size:10px;color:#64748b">Success Starts Here</div></div>
@@ -347,8 +343,40 @@ export function printApplicationForm(b: any, ctx: { customer?: any; project?: an
   <p class="accept">मैंने <b>FANBE GROUP</b> के सभी नियम व शर्तें पढ़ व समझ ली है तथा ये मुझे स्वीकार है! मैं अपने पूर्ण विवेक से इस योजना का सदस्य बन रहा/रही हूँ!</p>
 
   <div class="sigrow"><div class="sigbox">हस्ताक्षर</div><div class="sigbox">हस्ताक्षर परिचयकर्ता</div><div class="sigbox">हस्ताक्षर मैनेजर<br/>${b.manager_signature_by || ''}</div></div>
+`
+}
+
+// Opens one window holding any number of forms, each starting on its own sheet.
+function openApplicationForms(items: { b: any; ctx?: any }[], title: string) {
+  if (items.length === 0) return
+  const bodies = items
+    .map(it => applicationFormBody(it.b, it.ctx || {}))
+    .join('<div style="break-after:page;page-break-after:always"></div>')
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"/><title>${title}</title>
+<style>
+${FORM_CSS}
+</style></head>
+<body>
+  <div class="toolbar">
+    <button class="pr" onclick="window.print()">\u{1F5A8} Print${items.length > 1 ? ` ${items.length} forms` : ' form'}</button>
+    <button class="cl" onclick="window.close()">Close</button>
+    <span>Cancelled the dialog? Tap Print again.</span>
+  </div>
+  <div class="toolbar-spacer" style="height:48px"></div>
+  ${bodies}
   <script>window.onload=()=>setTimeout(()=>window.print(),200)</script>
 </body></html>`
   const w = window.open('', '_blank', 'width=900,height=1100')
   if (w) { w.document.write(html); w.document.close() }
+}
+
+export function printApplicationForm(b: any, ctx: { customer?: any; project?: any; plot?: any; broker?: any; payments?: any[] } = {}) {
+  openApplicationForms([{ b, ctx }], `Application Form \u2014 ${b.booking_no || ''}`)
+}
+
+// Bulk: one window, one print dialog, one form per sheet.  Printing them one at a time
+// meant a popup and a dialog per booking, which the browser blocks after the first few.
+export function printApplicationForms(items: { b: any; ctx?: any }[]) {
+  openApplicationForms(items, `Application Forms \u2014 ${items.length}`)
 }
