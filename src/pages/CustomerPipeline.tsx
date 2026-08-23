@@ -9,17 +9,17 @@ import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import { distributePaymentCommission } from '@/lib/payoutEngine'
 import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
-import { printApplicationForm, printPaymentReceipt } from '@/lib/printTemplates'
+import { printApplicationForm, printApplicationForms, printPaymentReceipt } from '@/lib/printTemplates'
 import { getCurrentUserId } from '@/lib/closure'
 import EmiPanel from '@/components/EmiPanel'
 import {
   Users, Search, Filter, ChevronRight, Banknote, Calculator, ArrowUpRight,
   CheckCircle2, AlertTriangle, Coins, Phone, MessageCircle, IndianRupee, X, ExternalLink,
-  FileText, Printer, Pencil, Landmark, ScrollText,
+  FileText, Printer, Pencil, Landmark, ScrollText, CalendarClock,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
-type Tab = 'all' | 'unpaid_booking' | 'emi_active' | 'settled'
+type Tab = 'all' | 'today' | 'unpaid_booking' | 'emi_active' | 'settled'
 
 const STAGE_COLORS: Record<string, string> = {
   token_received: 'bg-orange-50 text-orange-700 border-orange-200',
@@ -59,6 +59,8 @@ export default function CustomerPipeline() {
   const [editCustomer, setEditCustomer] = useState<any>(null)
   const [chequeFor, setChequeFor] = useState<any>(null)
   const [registryFor, setRegistryFor] = useState<any>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [printing, setPrinting] = useState(false)
 
   // Fetch the focused customer's profile + aggregate stats across ALL their bookings.
   // This is the data that used to live on the deleted /customer-history page — it gives
@@ -115,6 +117,10 @@ export default function CustomerPipeline() {
   // Reset to page 0 whenever any filter changes — current page may not exist in the new result set.
   useEffect(() => { setPage(0) }, [tab, debouncedSearch, searchScope, filterBroker, filterProject])
 
+  // Drop the print selection when the list underneath it changes.  Keeping it would show
+  // "5 selected" while only the 2 still on screen could actually be printed.
+  useEffect(() => { setSelected(new Set()) }, [tab, debouncedSearch, searchScope, filterBroker, filterProject, page])
+
   // Server-side search: resolve customer/broker IDs that match the query, then constrain bookings
   // via OR across booking_no.ilike and the resolved IDs.  PostgREST can't filter on nested table
   // columns directly, so we do this two-step lookup ourselves.
@@ -145,11 +151,75 @@ export default function CustomerPipeline() {
     },
   })
 
+  // "Today's work" — everything that needs chasing today, in one queue: an EMI due, a
+  // cheque to bank, or a finished sale still waiting on its registry.  These live in three
+  // different tables, so the ids are resolved first and the bookings query is narrowed to
+  // them.  Filtering the visible page client-side would only ever find what happened to be
+  // on that page.
+  const { data: todayWork } = useQuery({
+    queryKey: ['cp_today_work'],
+    enabled: tab === 'today',
+    queryFn: async () => {
+      const t = today()
+      const [emiRes, chequeRes, bookingRes, paidRes] = await Promise.all([
+        supabase.from('emi_installments')
+          .select('due_date, status, emi_schedules!inner(booking_id)')
+          .neq('status', 'paid').lte('due_date', t),
+        supabase.from('bp_pdc_cheques')
+          .select('booking_id, cheque_date, status')
+          .in('status', ['pending', 'deposited']).lte('cheque_date', t),
+        supabase.from('bp_bookings')
+          .select('id, total_amount, plot_total_price')
+          .eq('stage', 'booking_done').is('registry_completed_at', null),
+        supabase.from('bp_payments')
+          .select('booking_id, amount').eq('verification_status', 'verified'),
+      ])
+
+      const emiIds = new Set<string>()
+      for (const r of (emiRes.data || []) as any[]) {
+        const bid = r.emi_schedules?.booking_id
+        if (bid) emiIds.add(bid)
+      }
+
+      const chequeIds = new Set<string>()
+      for (const c of (chequeRes.data || []) as any[]) {
+        if (c.booking_id) chequeIds.add(c.booking_id)
+      }
+
+      // Registry is only "due" once there is nothing left to collect — the same test the
+      // Registry page uses, so a booking can't be ready in one place and not the other.
+      const paid: Record<string, number> = {}
+      for (const p of (paidRes.data || []) as any[]) {
+        if (!p.booking_id) continue
+        paid[p.booking_id] = (paid[p.booking_id] || 0) + Number(p.amount || 0)
+      }
+      const registryIds = new Set<string>()
+      for (const b of (bookingRes.data || []) as any[]) {
+        const totalDue = Number(b.total_amount || b.plot_total_price || 0)
+        if (totalDue > 0 && (paid[b.id] || 0) >= totalDue) registryIds.add(b.id)
+      }
+
+      const all = Array.from(new Set([...emiIds, ...chequeIds, ...registryIds]))
+      return {
+        emi: emiIds.size, cheque: chequeIds.size, registry: registryIds.size,
+        emiIds, chequeIds, registryIds,
+        // Capped so one enormous backlog can't build a request URL the server rejects.
+        ids: all.slice(0, 500), truncated: all.length > 500, totalIds: all.length,
+      }
+    },
+  })
+
   // Build the bookings query: server-side filter + sort + range pagination + count.
-  const bookingsQueryKey = useMemo(() => ['cp_bookings_page', tab, debouncedSearch, searchScope, filterBroker, filterProject, page, searchTargets, customerFocusId], [tab, debouncedSearch, searchScope, filterBroker, filterProject, page, searchTargets, customerFocusId])
+  const bookingsQueryKey = useMemo(() => ['cp_bookings_page', tab, debouncedSearch, searchScope, filterBroker, filterProject, page, searchTargets, customerFocusId, todayWork?.ids], [tab, debouncedSearch, searchScope, filterBroker, filterProject, page, searchTargets, customerFocusId, todayWork?.ids])
   const { data: pageResult, isLoading } = useQuery({
+    // On the Today tab the id list has to be resolved first, otherwise the page would
+    // briefly show every booking before narrowing.
+    enabled: tab !== 'today' || !!todayWork,
     queryKey: bookingsQueryKey,
     queryFn: async () => {
+      if (tab === 'today') {
+        if (!todayWork || todayWork.ids.length === 0) return { rows: [] as any[], total: 0 }
+      }
       let q = supabase
         .from('bp_bookings')
         .select(`
@@ -171,6 +241,7 @@ export default function CustomerPipeline() {
       // Customer focus narrows the list to one customer's deals (replaces the deleted
       // /customer-history page).  Applied before any other filter.
       if (customerFocusId) q = q.eq('customer_id', customerFocusId)
+      if (tab === 'today' && todayWork) q = q.in('id', todayWork.ids)
       if (filterBroker)  q = q.eq('broker_id',  filterBroker)
       if (filterProject) q = q.eq('project_id', filterProject)
 
@@ -621,11 +692,79 @@ export default function CustomerPipeline() {
   // Tab filter is applied locally to the current page.  Search / broker / project are server-side
   // (handled in the bookings query above) so the user can navigate the full data set.
   const filtered = useMemo(() => {
-    if (tab === 'all') return rows
+    // 'today' is already narrowed server-side to the exact bookings that need chasing, so
+    // the category buckets must not be applied on top of it.
+    if (tab === 'all' || tab === 'today') return rows
     return rows.filter(r => r.category === tab)
   }, [rows, tab])
 
   const toggleExpand = (id: string) => setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+
+  const toggleSelect = (id: string) => setSelected(prev => {
+    const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n
+  })
+  // Covers the rows on screen, not every booking behind the filters.
+  const allShownSelected = filtered.length > 0 && filtered.every((r: any) => selected.has(r.id))
+  const toggleSelectAllShown = () => setSelected(prev => {
+    const n = new Set(prev)
+    if (allShownSelected) filtered.forEach((r: any) => n.delete(r.id))
+    else filtered.forEach((r: any) => n.add(r.id))
+    return n
+  })
+
+  // One window, one print dialog, one form per sheet.  Opening a window per booking gets
+  // blocked by the browser after the first couple, so the forms are batched.
+  const printSelectedForms = async () => {
+    const chosen = filtered.filter((r: any) => selected.has(r.id))
+    if (chosen.length === 0) return
+    setPrinting(true)
+    try {
+      const ids = chosen.map((r: any) => r.id)
+      const { data: pays, error } = await supabase
+        .from('bp_payments')
+        .select('id, booking_id, amount, payment_type, payment_mode, payment_date, receipt_no, utr_ref, instalment_no, created_at')
+        .in('booking_id', ids)
+        .eq('verification_status', 'verified')
+        .order('payment_date', { ascending: true })
+      if (error) throw error
+      const byBooking: Record<string, any[]> = {}
+      for (const p of (pays || [])) {
+        if (!p.booking_id) continue
+        ;(byBooking[p.booking_id] ||= []).push(p)
+      }
+      printApplicationForms(chosen.map((r: any) => ({
+        b: r,
+        ctx: {
+          customer: r.bp_customers, project: r.bp_projects, plot: r.bp_plots,
+          broker: r.brokers, payments: byBooking[r.id] || [],
+        },
+      })))
+    } catch (e: any) {
+      toast.error(e?.message || 'Could not build the forms.')
+    } finally {
+      setPrinting(false)
+    }
+  }
+
+  // Simple English reminder, prefilled so admin only has to press send.  Opened per
+  // customer because WhatsApp has no bulk link and browsers block a burst of popups.
+  const whatsappReminder = (r: any) => {
+    const phone = String(r.bp_customers?.phone || '').replace(/[^\d]/g, '')
+    if (!phone) { toast.error('This customer has no phone number saved.'); return }
+    const name = r.bp_customers?.name || 'Sir/Madam'
+    const lines = [
+      `Dear ${name},`,
+      '',
+      `This is a payment reminder from Fanbe Group for booking ${r.booking_no || ''}.`,
+    ]
+    if (r.emi?.overdue > 0) {
+      lines.push(`You have ${r.emi.overdue} EMI instalment${r.emi.overdue === 1 ? '' : 's'} pending.`)
+    }
+    if (r.balance > 0) lines.push(`Balance due: ${formatINR(r.balance)}.`)
+    if (r.emi?.next_due) lines.push(`Next due date: ${formatDate(r.emi.next_due)}.`)
+    lines.push('', 'Please pay at your earliest. Ignore this message if you have already paid.', '', 'Thank you.')
+    window.open(`https://wa.me/${phone.length === 10 ? '91' + phone : phone}?text=${encodeURIComponent(lines.join('\n'))}`, '_blank')
+  }
 
   return (
     <div className="p-4 md:p-8 space-y-6 max-w-6xl mx-auto">
@@ -695,7 +834,12 @@ export default function CustomerPipeline() {
       )}
 
       {/* KPI tiles + tabs combined */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <TabTile active={tab==='today'}          onClick={() => setTab('today')}
+          icon={<CalendarClock size={16}/>}      label="Today's work"
+          value={todayWork ? String(todayWork.totalIds) : '—'}
+          sub={todayWork ? `${todayWork.emi} EMI · ${todayWork.cheque} cheque · ${todayWork.registry} registry` : 'due today or overdue'}
+          tint="rose"/>
         <TabTile active={tab==='all'}            onClick={() => setTab('all')}
           icon={<Users size={16}/>}              label="All customers"     value={String(stats.all)}                                tint="indigo"/>
         <TabTile active={tab==='unpaid_booking'} onClick={() => setTab('unpaid_booking')}
@@ -741,12 +885,34 @@ export default function CustomerPipeline() {
         </span>
       </div>
 
+      {/* Select rows to print their forms together */}
+      {filtered.length > 0 && (
+        <div className="flex items-center gap-3 flex-wrap px-1">
+          <label className="inline-flex items-center gap-2 text-[12px] text-gray-600 cursor-pointer">
+            <input type="checkbox" checked={allShownSelected} onChange={toggleSelectAllShown}
+              className="w-4 h-4 accent-gray-900 cursor-pointer"/>
+            Select all shown
+          </label>
+          {selected.size > 0 && (
+            <>
+              <span className="text-[12px] font-semibold text-gray-900">{filtered.filter((r: any) => selected.has(r.id)).length} selected</span>
+              <button onClick={() => setSelected(new Set())}
+                className="text-[12px] text-gray-500 hover:text-gray-900 underline">Clear</button>
+              <Button size="sm" onClick={printSelectedForms} loading={printing}>
+                <Printer size={13}/>Print {filtered.filter((r: any) => selected.has(r.id)).length} form{filtered.filter((r: any) => selected.has(r.id)).length === 1 ? '' : 's'}
+              </Button>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Deals list */}
       <div className="bg-white rounded-2xl border border-gray-200 shadow-[0_1px_2px_rgba(0,0,0,0.02)] divide-y divide-gray-100 overflow-hidden">
         {isLoading && <div className="py-10 text-center text-sm text-gray-400">Loading…</div>}
         {!isLoading && filtered.length === 0 && (
           <div className="py-12 text-center">
             <div className="text-sm text-gray-400">
+              {tab === 'today' && '✓ Nothing due today. No EMI, no cheque to bank, no registry waiting.'}
               {tab === 'unpaid_booking' && '✓ No deals waiting on booking deposit — well done.'}
               {tab === 'emi_active' && 'No active EMI plans. Once a booking has an EMI schedule and balance, it appears here.'}
               {tab === 'settled' && 'No fully settled deals yet.'}
@@ -795,6 +961,9 @@ export default function CustomerPipeline() {
             <div key={r.id} className="px-4 md:px-6 py-5 hover:bg-gray-50/40 transition-colors">
               {/* Header: name + balance */}
               <div className="flex items-start justify-between gap-4">
+                <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggleSelect(r.id)}
+                  title="Select for printing"
+                  className="mt-1.5 w-4 h-4 accent-gray-900 cursor-pointer shrink-0"/>
                 <div className="min-w-0 flex-1">
                   {/* Explicit "Customer" pill so it can never be confused with the broker badge below. */}
                   <div className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-full px-2 py-0.5 mb-1">
@@ -954,6 +1123,17 @@ export default function CustomerPipeline() {
                 {/* The two operations admin was leaving the page for.  Kept next to the
                     primary action rather than inside Details, since both are counter work
                     done while the customer is standing there. */}
+                {/* Only where there is actually money to ask for. */}
+                {r.balance > 0 && r.bp_customers?.phone && (
+                  <button onClick={() => whatsappReminder(r)}
+                    title="Open WhatsApp with a payment reminder ready to send"
+                    className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border text-sm font-medium shadow-sm transition ${
+                      r.emi?.overdue > 0
+                        ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                        : 'border-gray-300 bg-white text-gray-800 hover:bg-gray-50 hover:border-gray-400'}`}>
+                    <MessageCircle size={14}/>Remind
+                  </button>
+                )}
                 <button onClick={() => setChequeFor(r)}
                   className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border border-gray-300 bg-white text-gray-800 text-sm font-medium hover:bg-gray-50 hover:border-gray-400 shadow-sm transition">
                   <Landmark size={14}/>PDC cheque
@@ -1413,6 +1593,7 @@ function TabTile({ active, onClick, label, value, sub, tint }: any) {
     amber:   'bg-amber-400',
     blue:    'bg-blue-500',
     emerald: 'bg-emerald-500',
+    rose:    'bg-rose-500',
   }
   return (
     <button onClick={onClick}
