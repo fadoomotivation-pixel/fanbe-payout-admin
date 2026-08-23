@@ -148,6 +148,71 @@ export default function Plots() {
     onError: (e: any) => toast.error(e.message),
   })
 
+  // Bulk status change.
+  //
+  // Plots that carry a booking are refused on purpose.  For those the booking is the source
+  // of truth: its stage drives the plot's status, and marking the plot straight from here
+  // would leave the two disagreeing — a plot reading "booked" that no booking accounts for,
+  // or "registry done" with no deed date, no document number and no sub-registrar office
+  // anywhere in the system.  Those go through the booking (Customer Pipeline → Mark
+  // registry), which records all of it.
+  //
+  // For a plot with NO booking this is exactly right: it is plain inventory bookkeeping —
+  // correcting a bad import, freeing a block, or marking old sales that were never entered.
+  const bulkSetStatus = useMutation({
+    mutationFn: async ({ ids, status }: { ids: string[]; status: string }) => {
+      const linked = ids.filter(id => inUseIds.has(id))
+      if (linked.length > 0) {
+        throw new Error(`${linked.length} of the selected plots have a booking. Their status follows the booking — change it there. Nothing was changed.`)
+      }
+      for (let i = 0; i < ids.length; i += 100) {
+        const { error } = await supabase.from('bp_plots')
+          .update({ status, updated_at: new Date().toISOString() })
+          .in('id', ids.slice(i, i + 100))
+        if (error) throw error
+      }
+      return ids.length
+    },
+    onSuccess: (n: number) => {
+      qc.invalidateQueries({ queryKey: ['plots'] })
+      qc.invalidateQueries({ queryKey: ['plots_avail'] })
+      qc.invalidateQueries({ queryKey: ['plots_in_use'] })
+      setSelected(new Set())
+      setBulkStatusOpen(false)
+      toast.success(`${n} plot${n === 1 ? '' : 's'} updated`)
+    },
+    onError: (e: any) => toast.error(e.message),
+  })
+
+  // Bulk price revision.  total_price is a generated column, so it is never written here —
+  // it recalculates itself from size and rate.  Blank fields are left untouched so admin can
+  // change only the rate, or only the PLC, without wiping the other.
+  const bulkSetPrice = useMutation({
+    mutationFn: async ({ ids, rate, plc }: { ids: string[]; rate: string; plc: string }) => {
+      const patch: any = { updated_at: new Date().toISOString() }
+      if (rate !== '') patch.price_per_sqyd = parseFloat(rate)
+      if (plc  !== '') patch.plc_charges    = parseFloat(plc)
+      if (patch.price_per_sqyd === undefined && patch.plc_charges === undefined) {
+        throw new Error('Enter a new rate, a new PLC, or both.')
+      }
+      if (patch.price_per_sqyd !== undefined && !(patch.price_per_sqyd >= 0)) throw new Error('Rate must be a number.')
+      if (patch.plc_charges    !== undefined && !(patch.plc_charges >= 0))    throw new Error('PLC must be a number.')
+      for (let i = 0; i < ids.length; i += 100) {
+        const { error } = await supabase.from('bp_plots').update(patch).in('id', ids.slice(i, i + 100))
+        if (error) throw error
+      }
+      return ids.length
+    },
+    onSuccess: (n: number) => {
+      qc.invalidateQueries({ queryKey: ['plots'] })
+      qc.invalidateQueries({ queryKey: ['plots_avail'] })
+      setSelected(new Set())
+      setBulkPriceOpen(false)
+      toast.success(`Price updated on ${n} plot${n === 1 ? '' : 's'}`)
+    },
+    onError: (e: any) => toast.error(e.message),
+  })
+
   // Deleting one plot at a time doesn't scale to a mis-pasted batch of a few hundred, which
   // is the case admin actually hits.  Plots attached to a booking are refused rather than
   // silently skipped — quietly dropping them would leave admin thinking they were removed.
@@ -341,6 +406,11 @@ export default function Plots() {
   const [deleteFor, setDeleteFor] = useState<any>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+  const [bulkStatusOpen, setBulkStatusOpen] = useState(false)
+  const [bulkStatusValue, setBulkStatusValue] = useState<string>('available')
+  const [bulkPriceOpen, setBulkPriceOpen] = useState(false)
+  const [bulkRate, setBulkRate] = useState('')
+  const [bulkPlc, setBulkPlc] = useState('')
 
   const allPlots = plots as any[]
   const filtered = useMemo(() => {
@@ -603,9 +673,17 @@ export default function Plots() {
                 {selectedInUse} linked to a booking — untick {selectedInUse === 1 ? 'it' : 'them'} to delete the rest
               </span>
             )}
-            <div className="ml-auto flex items-center gap-2">
+            <div className="ml-auto flex items-center gap-2 flex-wrap">
               <button onClick={() => setSelected(new Set())}
                 className="text-xs text-gray-600 hover:text-gray-900 underline">Clear selection</button>
+              <Button size="sm" variant="secondary" disabled={selectedInUse > 0 || selectedFree === 0}
+                onClick={() => { setBulkStatusValue('available'); setBulkStatusOpen(true) }}>
+                <Edit3 size={12}/>Change status
+              </Button>
+              <Button size="sm" variant="secondary" disabled={selectedIds.length === 0}
+                onClick={() => { setBulkRate(''); setBulkPlc(''); setBulkPriceOpen(true) }}>
+                <Layers size={12}/>Change rate
+              </Button>
               <Button size="sm" variant="danger" disabled={selectedInUse > 0 || selectedFree === 0}
                 onClick={() => setBulkDeleteOpen(true)}>
                 <Trash2 size={12}/>Delete {selectedFree} plot{selectedFree === 1 ? '' : 's'}
@@ -615,6 +693,74 @@ export default function Plots() {
         )}
         <Table columns={cols} data={filtered} loading={isLoading} />
       </div>
+
+      {/* ── Bulk status change ───────────────────────────────────── */}
+      <Modal open={bulkStatusOpen} onClose={() => setBulkStatusOpen(false)} title="Change status of selected plots" size="sm">
+        <div className="space-y-3">
+          <p className="text-sm text-gray-700">
+            Set <b>{selectedIds.length}</b> plot{selectedIds.length === 1 ? '' : 's'} to:
+          </p>
+          <Select value={bulkStatusValue} onChange={(e: any) => setBulkStatusValue(e.target.value)}>
+            {PLOT_STATUSES.map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}
+          </Select>
+
+          {(bulkStatusValue === 'booked' || bulkStatusValue === 'token' || bulkStatusValue === 'registry_done') && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
+              This only changes the plot's status in the inventory. It does <b>not</b> create a booking —
+              no customer, no payment, no commission
+              {bulkStatusValue === 'registry_done' && <> and no registry date or document number</>}
+              {' '}is recorded anywhere.
+              <div className="mt-1">
+                For a real sale, use <b>New booking</b>
+                {bulkStatusValue === 'registry_done' && <> — and mark the registry from the Customer Pipeline, which stores the deed details</>}.
+                Use this only to correct inventory, or for old sales that were never entered in the system.
+              </div>
+            </div>
+          )}
+
+          <p className="text-xs text-gray-500">
+            None of the selected plots have a booking, so nothing else in the system depends on their status.
+          </p>
+        </div>
+        <div className="flex justify-end gap-2 mt-5">
+          <Button variant="secondary" onClick={() => setBulkStatusOpen(false)}>Cancel</Button>
+          <Button loading={bulkSetStatus.isPending}
+            onClick={() => bulkSetStatus.mutate({ ids: selectedIds, status: bulkStatusValue })}>
+            Set to {statusLabel(bulkStatusValue)}
+          </Button>
+        </div>
+      </Modal>
+
+      {/* ── Bulk price change ────────────────────────────────────── */}
+      <Modal open={bulkPriceOpen} onClose={() => setBulkPriceOpen(false)} title="Change rate on selected plots" size="sm">
+        <div className="space-y-3">
+          <p className="text-sm text-gray-700">
+            Applies to <b>{selectedIds.length}</b> plot{selectedIds.length === 1 ? '' : 's'}. Leave a field blank to keep it as it is.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <Input label="New rate per sqyd (₹)" type="number" value={bulkRate} onChange={(e: any) => setBulkRate(e.target.value)} placeholder="unchanged"/>
+            <Input label="New PLC charges (₹)" type="number" value={bulkPlc} onChange={(e: any) => setBulkPlc(e.target.value)} placeholder="unchanged"/>
+          </div>
+          <p className="text-xs text-gray-500">
+            Total price is worked out by the system from size and rate, so it updates on its own.
+          </p>
+          {selectedInUse > 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
+              <b>{selectedInUse}</b> of these plots are already sold. Changing the rate here does <b>not</b> change
+              what those customers were billed — their booking keeps its own agreed amount. This only affects
+              new bookings made from now on.
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 mt-5">
+          <Button variant="secondary" onClick={() => setBulkPriceOpen(false)}>Cancel</Button>
+          <Button loading={bulkSetPrice.isPending}
+            disabled={bulkRate === '' && bulkPlc === ''}
+            onClick={() => bulkSetPrice.mutate({ ids: selectedIds, rate: bulkRate, plc: bulkPlc })}>
+            Update {selectedIds.length} plot{selectedIds.length === 1 ? '' : 's'}
+          </Button>
+        </div>
+      </Modal>
 
       {/* ── Bulk delete confirmation ─────────────────────────────── */}
       <Modal open={bulkDeleteOpen} onClose={() => setBulkDeleteOpen(false)} title="Delete selected plots" size="sm">
