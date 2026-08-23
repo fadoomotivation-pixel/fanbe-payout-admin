@@ -2,7 +2,13 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { formatINR, formatDate } from '@/lib/utils'
-import { Users, Briefcase, CalendarClock, ShieldAlert, ArrowRight, Building2, Map, FileText, TrendingUp, TrendingDown, Award, Plus, UserPlus, CreditCard, Banknote, Activity } from 'lucide-react'
+// `Map` is imported under a different name on purpose.  lucide-react exports an icon
+// called Map, and importing it plainly shadows the global Map constructor for this whole
+// file — so `new Map()` further down was calling an icon component with `new` and throwing
+// "Map is not a constructor".  That threw before any tile was set, which is why every
+// figure on this page read zero.  Any lucide icon whose name matches a JS global (Map,
+// Image, Text, Table, History, ...) must be aliased like this.
+import { Users, Briefcase, CalendarClock, ShieldAlert, ArrowRight, Building2, Map as MapIcon, FileText, TrendingUp, TrendingDown, Award, Plus, UserPlus, CreditCard, Banknote, Activity } from 'lucide-react'
 
 // One Dashboard.  The old Dashboard.jsx that lived alongside this file was being picked
 // up by Vite's resolver and rendered instead — every monetary tile read ₹0 because its
@@ -161,33 +167,37 @@ export default function Dashboard() {
       // figure used to abort load() before a single setState ran, which is how the whole
       // page — tiles, inventory, follow-ups, money, payables — went to zero at once.  Now
       // a bad figure falls back to its zero value and says so, and every tile still fills.
-      const calc = <T,>(label: string, fn: () => T, fallback: T): T => {
+      // The fallback is a function, not a value, on purpose.  Passed as a value it is
+      // evaluated as an argument -- BEFORE calc runs, outside its try -- so a fallback
+      // that throws still takes the page down.  `new Map()` as a fallback did exactly
+      // that here.  Lazy, it can only ever throw inside the guard.
+      const calc = <T,>(label: string, fn: () => T, fallback: () => T): T => {
         try { return fn() } catch (e: any) {
           sectionFailures.push(label)
           // eslint-disable-next-line no-console
           console.error(`Dashboard figure "${label}" failed:`, e?.message || e)
-          return fallback
+          try { return fallback() } catch { return undefined as unknown as T }
         }
       }
 
-      const totalRevenue     = calc('revenue total', () => (payments.data || []).reduce((s: number, p: any) => s + Number(p.amount || 0), 0), 0)
-      const revenueThisMonth = calc('revenue this month', () => (payments.data || []).filter((p: any) => (p.payment_date || '') >= monthStartDay).reduce((s: number, p: any) => s + Number(p.amount || 0), 0), 0)
+      const totalRevenue     = calc('revenue total', () => (payments.data || []).reduce((s: number, p: any) => s + Number(p.amount || 0), 0), () => 0)
+      const revenueThisMonth = calc('revenue this month', () => (payments.data || []).filter((p: any) => (p.payment_date || '') >= monthStartDay).reduce((s: number, p: any) => s + Number(p.amount || 0), 0), () => 0)
       const revenuePrevMonth = calc('revenue last month', () => (payments.data || [])
         .filter((p: any) => (p.payment_date || '') >= prevMonthStartDay && (p.payment_date || '') < monthStartDay)
-        .reduce((s: number, p: any) => s + Number(p.amount || 0), 0), 0)
+        .reduce((s: number, p: any) => s + Number(p.amount || 0), 0), () => 0)
       const revenueDelta = revenuePrevMonth === 0 ? (revenueThisMonth > 0 ? 100 : 0)
         : Math.round(((revenueThisMonth - revenuePrevMonth) / Math.abs(revenuePrevMonth)) * 100)
 
-      const earned = calc('commission earned', () => (distributions.data || []).reduce((s: number, d: any) => s + Number(d.net_payout || 0), 0), 0)
+      const earned = calc('commission earned', () => (distributions.data || []).reduce((s: number, d: any) => s + Number(d.net_payout || 0), 0), () => 0)
       const paidThisMonth = calc('payouts paid', () => (payoutTxns.data || [])
         .filter((t: any) => t.status === 'paid' && (t.paid_date || '') >= monthStartDay)
-        .reduce((s: number, t: any) => s + Number(t.net_amount || t.amount || 0), 0), 0)
+        .reduce((s: number, t: any) => s + Number(t.net_amount || t.amount || 0), 0), () => 0)
       const pending = Math.max(0, earned - paidThisMonth)
-      const brokerSet = calc('broker count', () => new Set((distributions.data || []).map((d: any) => d.beneficiary_broker_id).filter(Boolean)), new Set<string>())
+      const brokerSet = calc('broker count', () => new Set((distributions.data || []).map((d: any) => d.beneficiary_broker_id).filter(Boolean)), () => new Set<string>())
       const openWdCount = openWds?.count || 0
 
-      const emiOverdueCount = calc('emi overdue count',  () => (emiOverdueQ.data || []).length, 0)
-      const emiOverdueAmt   = calc('emi overdue amount', () => (emiOverdueQ.data || []).reduce((s: number, r: any) => s + Number(r.amount || 0), 0), 0)
+      const emiOverdueCount = calc('emi overdue count',  () => (emiOverdueQ.data || []).length, () => 0)
+      const emiOverdueAmt   = calc('emi overdue amount', () => (emiOverdueQ.data || []).reduce((s: number, r: any) => s + Number(r.amount || 0), 0), () => 0)
 
       // ── Top broker this month — quick "who's carrying the team" snapshot.  Sums
       // payout_distributions per broker.id within the current month, then resolves the
@@ -200,7 +210,7 @@ export default function Dashboard() {
           m.set(d.beneficiary_broker_id, (m.get(d.beneficiary_broker_id) || 0) + Number(d.net_payout || 0))
         }
         return m
-      }, new Map<string, number>())
+      }, () => new Map<string, number>())
       let topBrokerOut: { id: string; name: string; code: string; rank: string; earned: number } | null = null
       if (monthlyByBroker.size > 0) {
         // Its own try: this is the only await left in the middle of the page's own
@@ -223,14 +233,14 @@ export default function Dashboard() {
           out[k] = (out[k] || 0) + 1
         }
         return out
-      }, {})
+      }, () => ({}))
       const segColors: Record<string, string> = {
         available: '#14b8a6', token: '#f59e0b', booked: '#6366f1',
         // 'registry_done' is the terminal status in bp_plots_status_check; the old
         // 'sold' key never matched anything, so registered plots fell through to grey.
         registry_done: '#22c55e', cancelled: '#ef4444', unknown: '#94a3b8',
       }
-      const segments = calc('plot donut', () => Object.entries(statusCounts).map(([k, v]) => ({ label: k, value: v, color: segColors[k] || '#94a3b8' })), [] as { label: string; value: number; color: string }[])
+      const segments = calc('plot donut', () => Object.entries(statusCounts).map(([k, v]) => ({ label: k, value: v, color: segColors[k] || '#94a3b8' })), () => [] as { label: string; value: number; color: string }[])
 
       // Daily growth — last 7 days bookings volume
       const growthMap: Record<string, { date: string; label: string; amount: number }> = calc('growth chart', () => {
@@ -244,7 +254,7 @@ export default function Dashboard() {
           if (b.application_date && out[b.application_date]) out[b.application_date].amount += Number(b.total_amount || 0)
         }
         return out
-      }, {})
+      }, () => ({}))
 
       // Headline tiles
       section('headline tiles', () => setTiles([
@@ -508,7 +518,7 @@ export default function Dashboard() {
       {/* Inventory row — projects + plot status */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {(loading ? skeleton(4) : inventory).map((t, i) => {
-          const icon = i === 0 ? <Building2 size={16}/> : i === 1 ? <Map size={16}/> : i === 2 ? <Map size={16}/> : <FileText size={16}/>
+          const icon = i === 0 ? <Building2 size={16}/> : i === 1 ? <MapIcon size={16}/> : i === 2 ? <MapIcon size={16}/> : <FileText size={16}/>
           const inner = (
             <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm hover:border-gray-300 transition-colors flex items-start gap-3">
               <div className={`p-2 rounded-lg ${t.color?.replace('text-', 'bg-').replace('-700', '-50') || 'bg-gray-50'}`}>
