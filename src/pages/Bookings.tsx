@@ -13,6 +13,7 @@ import { logClosure, getCurrentUserId } from '@/lib/closure'
 import { ClosureDialog } from '@/components/ClosureDialog'
 import { distributePaymentCommission, reverseBookingCommission } from '@/lib/payoutEngine'
 import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
+import { bookingValue, balanceOf, isFullyPaid } from '@/lib/bookingMath'
 import EmiPanel from '@/components/EmiPanel'
 import BookingImportModal from '@/components/BookingImportModal'
 import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info, Banknote, IndianRupee, Lock, Unlock, Search, Download, X, Filter, ChevronDown, Users, ScrollText, ClipboardPaste } from 'lucide-react'
@@ -1174,7 +1175,7 @@ export default function Bookings() {
   }
 
   const all = bookings as any[]
-  const totalValue  = all.filter((b: any) => b.stage === 'booking_done').reduce((s: number, b: any) => s + Number(b.total_amount || b.plot_total_price || 0), 0)
+  const totalValue  = all.filter((b: any) => b.stage === 'booking_done').reduce((s: number, b: any) => s + bookingValue(b), 0)
 
   // Money this booking has already banked (edit mode only) — a payment added from the
   // Edit modal sits on top of it, so previews and the "full payment" default have to
@@ -1206,9 +1207,7 @@ export default function Bookings() {
   const categorize = (b: any): Category => {
     if (b.stage === 'cancelled') return 'cancelled'
     if (b.stage === 'token_received') return 'token'
-    const total = Number(b.total_amount || b.plot_total_price || 0)
-    const paid = paidMap[b.id] || 0
-    return total > 0 && paid >= total ? 'full' : 'advance'
+    return isFullyPaid(bookingValue(b), paidMap[b.id] || 0) ? 'full' : 'advance'
   }
 
   // For per-tab counts: operational tabs exclude closed; "closed" is its own bucket.
@@ -1250,10 +1249,7 @@ export default function Bookings() {
   const filtersActive = !!(search || filterProject || filterBroker || filterStage || dateFrom || dateTo)
   const clearFilters = () => { setSearch(''); setFilterProject(''); setFilterBroker(''); setFilterStage(''); setDateFrom(''); setDateTo('') }
 
-  const fullyPaid = (b: any) => {
-    const total = Number(b.total_amount || b.plot_total_price || 0)
-    return total > 0 && (paidMap[b.id] || 0) >= total
-  }
+  const fullyPaid = (b: any) => isFullyPaid(bookingValue(b), paidMap[b.id] || 0)
   const canClose = (b: any) => !isClosed(b) && (fullyPaid(b) || b.stage === 'cancelled')
 
   // ── Selection ─────────────────────────────────────────────────
@@ -1268,7 +1264,7 @@ export default function Bookings() {
     if (rows.length === 0) return toast.error('Nothing to export')
     const headers = ['Booking No','Old Register No','Date','Customer','Phone','Plot','Project','Broker','Broker Code','Stage','Total','Paid','Balance','Closed']
     const data = rows.map((b: any) => {
-      const total = Number(b.total_amount || b.plot_total_price || 0)
+      const total = bookingValue(b)
       const paid  = Number(paidMap[b.id] || 0)
       return [
         b.booking_no || '',
@@ -1404,7 +1400,7 @@ export default function Bookings() {
       header: 'Net / Base',
       render: (r: any) => (
         <div>
-          <div className="font-semibold text-green-700">{formatINR(r.total_amount || r.plot_total_price)}</div>
+          <div className="font-semibold text-green-700">{formatINR(bookingValue(r))}</div>
           <div className="text-[10px] text-gray-400">Base {formatINR(r.base_price || (r.size_sqyd && r.rate_per_sqyd ? r.size_sqyd * r.rate_per_sqyd : 0))}</div>
         </div>
       ),
@@ -1413,7 +1409,7 @@ export default function Bookings() {
       header: 'Paid / Balance',
       render: (r: any) => {
         const paid = paidMap[r.id] || 0
-        const total = Number(r.total_amount || r.plot_total_price || 0)
+        const total = bookingValue(r)
         const bal = Math.max(0, total - paid)
         return (
           <div>
@@ -1563,7 +1559,7 @@ export default function Bookings() {
                 </div>
               </div>
               <div className="text-right shrink-0">
-                <div className="text-sm font-semibold text-gray-900 tabular-nums">{formatINR(r.total_amount || r.plot_total_price || 0)}</div>
+                <div className="text-sm font-semibold text-gray-900 tabular-nums">{formatINR(bookingValue(r))}</div>
                 <div className="text-[11px] text-gray-400">{formatDate(r.application_date || r.created_at)}</div>
               </div>
               <Link to={`/customer-pipeline?booking=${r.id}`} className="text-[12px] text-blue-700 hover:underline whitespace-nowrap">Manage →</Link>

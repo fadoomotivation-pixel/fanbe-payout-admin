@@ -23,7 +23,9 @@ import { Input, Textarea } from '@/components/ui/Input.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import { getCurrentUserId } from '@/lib/closure'
-import { ScrollText, Search, Download, X, CheckCircle2, Clock, AlertTriangle } from 'lucide-react'
+import { bookingValue, balanceOf, isRegistryReady, isRegistryDone } from '@/lib/bookingMath'
+import { waLink } from '@/lib/whatsapp'
+import { ScrollText, Search, Download, X, CheckCircle2, Clock, AlertTriangle, MessageCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 type Tab = 'ready' | 'waiting' | 'done' | 'all'
@@ -101,14 +103,36 @@ export default function Registry() {
   }
 
   const rowsWithState = useMemo(() => (bookings as any[]).map(b => {
-    const total   = Number(b.total_amount || b.plot_total_price || 0)
+    // Value, collected, balance and "ready" all come from lib/bookingMath so this page,
+    // the Customer Pipeline and the Today's-work queue can never disagree about whether
+    // a booking is finished paying.
+    const total   = bookingValue(b)
     const paid    = Number(paidByBooking[b.id] || 0)
-    const balance = Math.max(0, total - paid)
-    const done    = !!b.registry_date
-    // Confirmed + nothing left to collect = the sale is finished, so the deed can go.
-    const ready   = !done && b.stage === 'booking_done' && total > 0 && balance <= 0
+    const balance = balanceOf(total, paid)
+    const done    = isRegistryDone(b)
+    const ready   = isRegistryReady(b, paid)
     return { ...b, total, paid, balance, done, ready }
   }), [bookings, paidByBooking])
+
+
+  // Reminder for the balance blocking a registry.  Uses the shared waLink so the number
+  // is normalised the same way as on every other page.
+  const remindBalance = (r: any) => {
+    const msg = [
+      `Dear ${r.bp_customers?.name || 'Sir/Madam'},`,
+      '',
+      `This is a reminder from Fanbe Group for booking ${r.booking_no || ''}.`,
+      `Balance due: ${formatINR(r.balance)}.`,
+      'Your registry can be done once the full payment is received.',
+      '',
+      'Please pay at your earliest. Ignore this message if you have already paid.',
+      '',
+      'Thank you.',
+    ].join('\n')
+    const url = waLink(r.bp_customers?.phone, msg)
+    if (!url) { toast.error('This customer has no usable phone number saved.'); return }
+    window.open(url, '_blank')
+  }
 
   const rows = rowsWithState.filter(r => {
     if (tab === 'done'    && !r.done) return false
@@ -331,6 +355,14 @@ export default function Registry() {
                     )}
                   </td>
                   <td className="px-4 py-3 text-right whitespace-nowrap">
+                    {/* On this page a pending registry is almost always a pending balance,
+                        and chasing it meant leaving for another screen. */}
+                    {!r.done && r.balance > 0 && r.bp_customers?.phone && (
+                      <Button size="sm" variant="ghost" onClick={() => remindBalance(r)}
+                        title="WhatsApp the customer about the outstanding balance">
+                        <MessageCircle size={12}/>Remind
+                      </Button>
+                    )}
                     <Button size="sm" variant={r.done ? 'ghost' : 'secondary'} onClick={() => openFor(r)}>
                       <ScrollText size={12}/>{r.done ? 'View / edit' : 'Mark registry'}
                     </Button>

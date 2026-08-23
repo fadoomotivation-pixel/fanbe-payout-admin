@@ -11,6 +11,8 @@ import { distributePaymentCommission } from '@/lib/payoutEngine'
 import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
 import { printApplicationForm, printApplicationForms, printPaymentReceipt } from '@/lib/printTemplates'
 import { getCurrentUserId } from '@/lib/closure'
+import { bookingValue, balanceOf, paidByBooking, isFullyPaid, isRegistryDone } from '@/lib/bookingMath'
+import { waLink } from '@/lib/whatsapp'
 import EmiPanel from '@/components/EmiPanel'
 import {
   Users, Search, Filter, ChevronRight, Banknote, Calculator, ArrowUpRight,
@@ -168,9 +170,14 @@ export default function CustomerPipeline() {
         supabase.from('bp_pdc_cheques')
           .select('booking_id, cheque_date, status')
           .in('status', ['pending', 'deposited']).lte('cheque_date', t),
+        // Both columns are checked: a registry saved before registry_completed_at existed
+        // carries only registry_date, and testing one alone would keep listing those as
+        // still pending long after the deed was done.
         supabase.from('bp_bookings')
           .select('id, total_amount, plot_total_price')
-          .eq('stage', 'booking_done').is('registry_completed_at', null),
+          .eq('stage', 'booking_done')
+          .is('registry_completed_at', null)
+          .is('registry_date', null),
         supabase.from('bp_payments')
           .select('booking_id, amount').eq('verification_status', 'verified'),
       ])
@@ -186,17 +193,13 @@ export default function CustomerPipeline() {
         if (c.booking_id) chequeIds.add(c.booking_id)
       }
 
-      // Registry is only "due" once there is nothing left to collect — the same test the
-      // Registry page uses, so a booking can't be ready in one place and not the other.
-      const paid: Record<string, number> = {}
-      for (const p of (paidRes.data || []) as any[]) {
-        if (!p.booking_id) continue
-        paid[p.booking_id] = (paid[p.booking_id] || 0) + Number(p.amount || 0)
-      }
+      // Registry is only "due" once there is nothing left to collect.  Both the test and
+      // the sum come from lib/bookingMath, which is what the Registry page uses too — so a
+      // booking cannot be "ready" on one page and not the other.
+      const paid = paidByBooking(paidRes.data as any[])
       const registryIds = new Set<string>()
       for (const b of (bookingRes.data || []) as any[]) {
-        const totalDue = Number(b.total_amount || b.plot_total_price || 0)
-        if (totalDue > 0 && (paid[b.id] || 0) >= totalDue) registryIds.add(b.id)
+        if (isFullyPaid(bookingValue(b), paid[b.id] || 0)) registryIds.add(b.id)
       }
 
       const all = Array.from(new Set([...emiIds, ...chequeIds, ...registryIds]))
@@ -643,13 +646,15 @@ export default function CustomerPipeline() {
   const rows = useMemo(() => {
     return (bookings as any[]).map((b: any) => {
       const pm = paymentsByBooking[b.id] || { token: 0, booking: 0, emi: 0, full: 0, total: 0, last_date: null, last_utr: null, last_receipt: null, last_mode: null, last_amount: 0, count: 0 }
-      const total = Number(b.total_amount || b.plot_total_price || 0)
+      const total = bookingValue(b)
       const paid  = pm.total
-      const balance = Math.max(0, total - paid)
+      const balance = balanceOf(total, paid)
       const emi = emiSummary[b.id]
       const mlm = mlmByBooking[b.id] || { rows: 0, net: 0 }
       const pdc = pdcByBooking[b.id] || { open: 0, next: null, overdue: 0, openAmount: 0 }
-      const registryDone = !!b.registry_completed_at
+      // Shared test: older rows carry registry_date without registry_completed_at, and
+      // checking only one of them made those look un-registered here but done on /registry.
+      const registryDone = isRegistryDone(b)
       const chain = brokerChains[b.broker_id] || []
       const expected = Number(b.expected_booking_amount || 0)
       const hasToken   = pm.token > 0
@@ -749,8 +754,6 @@ export default function CustomerPipeline() {
   // Simple English reminder, prefilled so admin only has to press send.  Opened per
   // customer because WhatsApp has no bulk link and browsers block a burst of popups.
   const whatsappReminder = (r: any) => {
-    const phone = String(r.bp_customers?.phone || '').replace(/[^\d]/g, '')
-    if (!phone) { toast.error('This customer has no phone number saved.'); return }
     const name = r.bp_customers?.name || 'Sir/Madam'
     const lines = [
       `Dear ${name},`,
@@ -763,7 +766,9 @@ export default function CustomerPipeline() {
     if (r.balance > 0) lines.push(`Balance due: ${formatINR(r.balance)}.`)
     if (r.emi?.next_due) lines.push(`Next due date: ${formatDate(r.emi.next_due)}.`)
     lines.push('', 'Please pay at your earliest. Ignore this message if you have already paid.', '', 'Thank you.')
-    window.open(`https://wa.me/${phone.length === 10 ? '91' + phone : phone}?text=${encodeURIComponent(lines.join('\n'))}`, '_blank')
+    const url = waLink(r.bp_customers?.phone, lines.join('\n'))
+    if (!url) { toast.error('This customer has no usable phone number saved.'); return }
+    window.open(url, '_blank')
   }
 
   return (

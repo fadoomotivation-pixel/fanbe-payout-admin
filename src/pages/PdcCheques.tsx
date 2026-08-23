@@ -20,7 +20,8 @@ import { Input, Select, Textarea } from '@/components/ui/Input.tsx'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
-import { Plus, Search, Download, X, AlertTriangle, CheckCircle2, Landmark } from 'lucide-react'
+import { Plus, Search, Download, X, AlertTriangle, CheckCircle2, Landmark, Phone, MessageCircle } from 'lucide-react'
+import { waLink } from '@/lib/whatsapp'
 import toast from 'react-hot-toast'
 
 type Status = 'pending' | 'deposited' | 'cleared' | 'bounced' | 'cancelled'
@@ -73,6 +74,7 @@ export default function PdcCheques() {
   const [form, setForm] = useState<any>({ ...EMPTY_FORM })
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
+  const [dueFilter, setDueFilter] = useState<'' | 'overdue' | 'soon' | 'open'>('')
   const [bounceFor, setBounceFor] = useState<any>(null)
   const [bounceReason, setBounceReason] = useState('')
   const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }))
@@ -204,8 +206,35 @@ export default function PdcCheques() {
     onError: (e: any) => toast.error(e.message || 'Could not bounce the cheque.'),
   })
 
+  // Reminder about a specific cheque, in plain English, ready to send.
+  const chequeReminder = (c: any) => {
+    const name = c.bp_bookings?.bp_customers?.name || 'Sir/Madam'
+    const msg = [
+      `Dear ${name},`,
+      '',
+      `This is a reminder from Fanbe Group about your cheque no ${c.cheque_no}`
+        + `${c.bank_name ? ` (${c.bank_name})` : ''} dated ${formatDate(c.cheque_date)}`
+        + ` for ${formatINR(Number(c.amount || 0))}.`,
+      'We will be depositing it shortly. Please make sure the funds are available.',
+      '',
+      'Thank you.',
+    ].join('\n')
+    const url = waLink(c.bp_bookings?.bp_customers?.phone, msg)
+    if (!url) { toast.error('This customer has no usable phone number saved.'); return }
+    window.open(url, '_blank')
+  }
+
   const rows = (cheques as any[]).filter((c: any) => {
     if (filterStatus && c.status !== filterStatus) return false
+    // The tiles double as filters: reading "6 overdue" and then hunting for those six in
+    // the table was the slow part.  Tapping the tile shows exactly those.
+    if (dueFilter) {
+      const isOpen = c.status === 'pending' || c.status === 'deposited'
+      if (!isOpen) return false
+      const td = today()
+      if (dueFilter === 'overdue' && !(c.cheque_date < td)) return false
+      if (dueFilter === 'soon' && !(c.cheque_date >= td && c.cheque_date <= addMonths(td, 1))) return false
+    }
     if (search.trim()) {
       const q = search.toLowerCase()
       const hay = [c.cheque_no, c.bank_name, c.branch, c.bp_bookings?.booking_no,
@@ -262,12 +291,32 @@ export default function PdcCheques() {
     },
     {
       header: 'Booking / Customer',
-      render: (r: any) => (
-        <div>
-          <div className="font-mono text-xs text-blue-700">{r.bp_bookings?.booking_no || '—'}</div>
-          <div className="text-xs text-gray-500">{r.bp_bookings?.bp_customers?.name || '—'}</div>
-        </div>
-      ),
+      render: (r: any) => {
+        const phone = r.bp_bookings?.bp_customers?.phone
+        const isOpen = r.status === 'pending' || r.status === 'deposited'
+        return (
+          <div>
+            <div className="font-mono text-xs text-blue-700">{r.bp_bookings?.booking_no || '—'}</div>
+            <div className="text-xs text-gray-500">{r.bp_bookings?.bp_customers?.name || '—'}</div>
+            {/* Before banking a cheque somebody rings the customer to check the funds are
+                there.  The number was already loaded but not reachable, so that meant
+                opening another page first. */}
+            {phone && isOpen && (
+              <div className="flex items-center gap-2 mt-1">
+                <a href={`tel:${phone}`} onClick={e => e.stopPropagation()}
+                  className="inline-flex items-center gap-1 text-[11px] text-gray-600 hover:text-blue-700">
+                  <Phone size={10}/>{phone}
+                </a>
+                <button onClick={e => { e.stopPropagation(); chequeReminder(r) }}
+                  title="Send a WhatsApp reminder about this cheque"
+                  className="inline-flex items-center gap-1 text-[11px] text-emerald-700 hover:text-emerald-900">
+                  <MessageCircle size={10}/>Remind
+                </button>
+              </div>
+            )}
+          </div>
+        )
+      },
     },
     { header: 'Amount', render: (r: any) => <span className="font-semibold text-gray-900 tabular-nums">{formatINR(r.amount)}</span> },
     { header: 'Towards', render: (r: any) => <span className="text-xs text-gray-600">{PAYMENT_TYPES.find(p => p.value === r.payment_type)?.label || r.payment_type}</span> },
@@ -346,17 +395,26 @@ export default function PdcCheques() {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
-          { label: 'Overdue — not yet banked', value: formatINR(sum(overdue)), sub: `${overdue.length} cheque${overdue.length === 1 ? '' : 's'}`, cls: 'text-red-700' },
-          { label: 'Due within a month',       value: formatINR(sum(dueSoon)), sub: `${dueSoon.length} cheque${dueSoon.length === 1 ? '' : 's'}`, cls: 'text-amber-700' },
-          { label: 'On file (uncleared)',      value: formatINR(sum(open)),    sub: `${open.length} cheque${open.length === 1 ? '' : 's'}`, cls: 'text-blue-700' },
-          { label: 'Cleared to date',          value: formatINR(clearedTotal), sub: `${bouncedList.length} bounced`, cls: 'text-emerald-700' },
-        ].map((k) => (
-          <div key={k.label} className="bg-white border border-gray-200 rounded-xl p-3">
-            <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">{k.label}</div>
-            <div className={`text-lg font-bold mt-1 ${k.cls}`}>{k.value}</div>
-            <div className="text-[11px] text-gray-400">{k.sub}</div>
-          </div>
-        ))}
+          { key: 'overdue' as const, label: 'Overdue — not yet banked', value: formatINR(sum(overdue)), sub: `${overdue.length} cheque${overdue.length === 1 ? '' : 's'}`, cls: 'text-red-700' },
+          { key: 'soon'    as const, label: 'Due within a month',       value: formatINR(sum(dueSoon)), sub: `${dueSoon.length} cheque${dueSoon.length === 1 ? '' : 's'}`, cls: 'text-amber-700' },
+          { key: 'open'    as const, label: 'On file (uncleared)',      value: formatINR(sum(open)),    sub: `${open.length} cheque${open.length === 1 ? '' : 's'}`, cls: 'text-blue-700' },
+          { key: ''        as const, label: 'Cleared to date',          value: formatINR(clearedTotal), sub: `${bouncedList.length} bounced`, cls: 'text-emerald-700' },
+        ].map((k) => {
+          const selectable = k.key !== ''
+          const active = selectable && dueFilter === k.key
+          return (
+            <button key={k.label} type="button"
+              onClick={() => { if (!selectable) return; setDueFilter(active ? '' : k.key); setFilterStatus('') }}
+              title={selectable ? (active ? 'Showing these — tap to clear' : 'Tap to show only these') : undefined}
+              className={`text-left bg-white border rounded-xl p-3 transition ${
+                active ? 'border-gray-900 ring-1 ring-gray-900/10' : 'border-gray-200'
+              } ${selectable ? 'hover:border-gray-400 cursor-pointer' : 'cursor-default'}`}>
+              <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">{k.label}</div>
+              <div className={`text-lg font-bold mt-1 ${k.cls}`}>{k.value}</div>
+              <div className="text-[11px] text-gray-400">{k.sub}{active ? ' · filtered' : ''}</div>
+            </button>
+          )
+        })}
       </div>
 
       <div className="bg-white border border-gray-200 rounded-xl">
