@@ -148,6 +148,33 @@ export default function Plots() {
     onError: (e: any) => toast.error(e.message),
   })
 
+  // Deleting one plot at a time doesn't scale to a mis-pasted batch of a few hundred, which
+  // is the case admin actually hits.  Plots attached to a booking are refused rather than
+  // silently skipped — quietly dropping them would leave admin thinking they were removed.
+  const deletePlotsBulk = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const blocked = ids.filter(id => inUseIds.has(id))
+      if (blocked.length > 0) {
+        throw new Error(`${blocked.length} of the selected plots are linked to a booking. Clear the selection of those first — nothing was deleted.`)
+      }
+      // Chunked so a large selection doesn't build a URL the server rejects.
+      for (let i = 0; i < ids.length; i += 100) {
+        const { error } = await supabase.from('bp_plots').delete().in('id', ids.slice(i, i + 100))
+        if (error) throw error
+      }
+      return ids.length
+    },
+    onSuccess: (n: number) => {
+      qc.invalidateQueries({ queryKey: ['plots'] })
+      qc.invalidateQueries({ queryKey: ['plots_avail'] })
+      qc.invalidateQueries({ queryKey: ['plots_in_use'] })
+      setSelected(new Set())
+      setBulkDeleteOpen(false)
+      toast.success(`${n} plot${n === 1 ? '' : 's'} deleted`)
+    },
+    onError: (e: any) => toast.error(e.message),
+  })
+
   const bulkGenerate = useMutation({
     mutationFn: async (bulk: typeof EMPTY_BULK) => {
       if (!bulk.project_id) throw new Error('Select a project')
@@ -312,6 +339,8 @@ export default function Plots() {
   const [pasteProjectId, setPasteProjectId] = useState('')
   const [pasteText, setPasteText] = useState('')
   const [deleteFor, setDeleteFor] = useState<any>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
 
   const allPlots = plots as any[]
   const filtered = useMemo(() => {
@@ -416,7 +445,35 @@ export default function Plots() {
   }
 
   // ── Columns ───────────────────────────────────────────────────────
+  const toggleOne = (id: string) => setSelected(prev => {
+    const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n
+  })
+  // "Select all" covers the rows currently on screen (what the filters left), not the whole
+  // table — selecting 4,600 unseen plots behind a filter is not what the tick means.
+  const allVisibleSelected = filtered.length > 0 && filtered.every((p: any) => selected.has(p.id))
+  const toggleAllVisible = () => setSelected(prev => {
+    const n = new Set(prev)
+    if (allVisibleSelected) filtered.forEach((p: any) => n.delete(p.id))
+    else filtered.forEach((p: any) => n.add(p.id))
+    return n
+  })
+  const selectedIds     = Array.from(selected)
+  const selectedInUse   = selectedIds.filter(id => inUseIds.has(id)).length
+  const selectedFree    = selectedIds.length - selectedInUse
+
   const cols = [
+    {
+      key: '_select',
+      header: (
+        <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible}
+          title="Select all rows shown" className="w-4 h-4 accent-red-600 cursor-pointer align-middle"/>
+      ),
+      render: (r: any) => (
+        <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggleOne(r.id)}
+          onClick={e => e.stopPropagation()}
+          className="w-4 h-4 accent-red-600 cursor-pointer align-middle"/>
+      ),
+    },
     { header: 'Plot No', render: (r: any) => (
       <div>
         <span className="font-bold text-gray-900">#{r.plot_no || '—'}</span>
@@ -533,8 +590,50 @@ export default function Plots() {
             <button onClick={() => { setSearch(''); setProjectFilter(''); setStatusFilter(''); setSaleModeFilter('') }} className="text-xs text-gray-500 hover:text-gray-800 underline">Clear filters</button>
           )}
         </div>
+        {/* Bulk action bar — only present when something is ticked, so it never competes
+            with the filters for attention. */}
+        {selectedIds.length > 0 && (
+          <div className="px-3 py-2 border-b border-red-100 bg-red-50/60 flex items-center gap-3 flex-wrap">
+            <span className="text-sm font-semibold text-red-900">
+              {selectedIds.length} selected
+            </span>
+            {selectedInUse > 0 && (
+              <span className="inline-flex items-center gap-1 text-xs text-amber-800 bg-amber-100 border border-amber-200 rounded-full px-2 py-0.5">
+                <AlertTriangle size={11}/>
+                {selectedInUse} linked to a booking — untick {selectedInUse === 1 ? 'it' : 'them'} to delete the rest
+              </span>
+            )}
+            <div className="ml-auto flex items-center gap-2">
+              <button onClick={() => setSelected(new Set())}
+                className="text-xs text-gray-600 hover:text-gray-900 underline">Clear selection</button>
+              <Button size="sm" variant="danger" disabled={selectedInUse > 0 || selectedFree === 0}
+                onClick={() => setBulkDeleteOpen(true)}>
+                <Trash2 size={12}/>Delete {selectedFree} plot{selectedFree === 1 ? '' : 's'}
+              </Button>
+            </div>
+          </div>
+        )}
         <Table columns={cols} data={filtered} loading={isLoading} />
       </div>
+
+      {/* ── Bulk delete confirmation ─────────────────────────────── */}
+      <Modal open={bulkDeleteOpen} onClose={() => setBulkDeleteOpen(false)} title="Delete selected plots" size="sm">
+        <div className="space-y-3">
+          <p className="text-sm text-gray-700">
+            This permanently deletes <b>{selectedIds.length}</b> plot{selectedIds.length === 1 ? '' : 's'}. It cannot be undone.
+          </p>
+          <p className="text-xs text-gray-500">
+            None of them are attached to a booking, so no customer record is affected.
+          </p>
+        </div>
+        <div className="flex justify-end gap-2 mt-5">
+          <Button variant="secondary" onClick={() => setBulkDeleteOpen(false)}>Cancel</Button>
+          <Button variant="danger" loading={deletePlotsBulk.isPending}
+            onClick={() => deletePlotsBulk.mutate(selectedIds)}>
+            <Trash2 size={14}/>Delete {selectedIds.length}
+          </Button>
+        </div>
+      </Modal>
 
       {/* ── Add Plot Modal ───────────────────────────────────────── */}
       <Modal open={addModal} onClose={() => setAddModal(false)} title="Add Plot">
