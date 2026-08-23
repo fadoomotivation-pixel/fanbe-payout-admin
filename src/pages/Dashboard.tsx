@@ -43,6 +43,11 @@ export default function Dashboard() {
   // renders a confident ₹0 everywhere and nothing looks wrong.  That is exactly the
   // "sab 0" admin reported while Analytics, opened later on a warm session, read fine.
   const [signedOut, setSignedOut] = useState(false)
+  // The actual error text when loading breaks, shown on the page.  Logging it to the
+  // console only meant the admin saw a wall of zeros with nothing explaining them, and
+  // the cause had to be guessed at from screenshots.
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
   // Bookings whose EMI has run past the 90-day lapsation window — the ones whose
   // receipts are now held back, so admin can see them without hunting.
   const [lapsed, setLapsed] = useState({ bookings: 0, amount: 0 })
@@ -54,10 +59,23 @@ export default function Dashboard() {
     // tiles DID succeed.
     async function load() {
       try {
+      setLoadError(null)
       // Read the session first.  Every figure below depends on being `authenticated`;
       // querying without one returns empty lists that are indistinguishable from a quiet
       // month, so say so instead of drawing zeros.
-      const { data: { session } } = await supabase.auth.getSession()
+      //
+      // Read defensively rather than destructuring `data.session` in one go: if this call
+      // ever hands back a null `data`, the nested destructure throws, and a throw this
+      // early takes the entire page down with it — which is exactly the failure being
+      // fixed here.  Never let the session check be the thing that blanks the dashboard.
+      let session: any = null
+      try {
+        const res = await supabase.auth.getSession()
+        session = res?.data?.session ?? null
+      } catch (e: any) {
+        // eslint-disable-next-line no-console
+        console.error('Dashboard session check failed:', e?.message || e)
+      }
       setSignedOut(!session)
 
       const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0,0,0,0)
@@ -139,35 +157,50 @@ export default function Dashboard() {
           console.error(`Dashboard section "${label}" failed:`, e?.message || e)
         }
       }
+      // Same idea for the sums feeding those sections.  A throw while working out one
+      // figure used to abort load() before a single setState ran, which is how the whole
+      // page — tiles, inventory, follow-ups, money, payables — went to zero at once.  Now
+      // a bad figure falls back to its zero value and says so, and every tile still fills.
+      const calc = <T,>(label: string, fn: () => T, fallback: T): T => {
+        try { return fn() } catch (e: any) {
+          sectionFailures.push(label)
+          // eslint-disable-next-line no-console
+          console.error(`Dashboard figure "${label}" failed:`, e?.message || e)
+          return fallback
+        }
+      }
 
-      const totalRevenue = (payments.data || []).reduce((s, p) => s + Number(p.amount || 0), 0)
-      const revenueThisMonth = (payments.data || []).filter(p => (p.payment_date || '') >= monthStartDay).reduce((s, p) => s + Number(p.amount || 0), 0)
-      const revenuePrevMonth = (payments.data || [])
-        .filter(p => (p.payment_date || '') >= prevMonthStartDay && (p.payment_date || '') < monthStartDay)
-        .reduce((s, p) => s + Number(p.amount || 0), 0)
+      const totalRevenue     = calc('revenue total', () => (payments.data || []).reduce((s: number, p: any) => s + Number(p.amount || 0), 0), 0)
+      const revenueThisMonth = calc('revenue this month', () => (payments.data || []).filter((p: any) => (p.payment_date || '') >= monthStartDay).reduce((s: number, p: any) => s + Number(p.amount || 0), 0), 0)
+      const revenuePrevMonth = calc('revenue last month', () => (payments.data || [])
+        .filter((p: any) => (p.payment_date || '') >= prevMonthStartDay && (p.payment_date || '') < monthStartDay)
+        .reduce((s: number, p: any) => s + Number(p.amount || 0), 0), 0)
       const revenueDelta = revenuePrevMonth === 0 ? (revenueThisMonth > 0 ? 100 : 0)
         : Math.round(((revenueThisMonth - revenuePrevMonth) / Math.abs(revenuePrevMonth)) * 100)
 
-      const earned = (distributions.data || []).reduce((s: number, d: any) => s + Number(d.net_payout || 0), 0)
-      const paidThisMonth = (payoutTxns.data || [])
+      const earned = calc('commission earned', () => (distributions.data || []).reduce((s: number, d: any) => s + Number(d.net_payout || 0), 0), 0)
+      const paidThisMonth = calc('payouts paid', () => (payoutTxns.data || [])
         .filter((t: any) => t.status === 'paid' && (t.paid_date || '') >= monthStartDay)
-        .reduce((s: number, t: any) => s + Number(t.net_amount || t.amount || 0), 0)
+        .reduce((s: number, t: any) => s + Number(t.net_amount || t.amount || 0), 0), 0)
       const pending = Math.max(0, earned - paidThisMonth)
-      const brokerSet = new Set((distributions.data || []).map((d: any) => d.beneficiary_broker_id).filter(Boolean))
-      const openWdCount = openWds.count || 0
+      const brokerSet = calc('broker count', () => new Set((distributions.data || []).map((d: any) => d.beneficiary_broker_id).filter(Boolean)), new Set<string>())
+      const openWdCount = openWds?.count || 0
 
-      const emiOverdueCount = (emiOverdueQ.data || []).length
-      const emiOverdueAmt   = (emiOverdueQ.data || []).reduce((s: number, r: any) => s + Number(r.amount || 0), 0)
+      const emiOverdueCount = calc('emi overdue count',  () => (emiOverdueQ.data || []).length, 0)
+      const emiOverdueAmt   = calc('emi overdue amount', () => (emiOverdueQ.data || []).reduce((s: number, r: any) => s + Number(r.amount || 0), 0), 0)
 
       // ── Top broker this month — quick "who's carrying the team" snapshot.  Sums
       // payout_distributions per broker.id within the current month, then resolves the
       // winner against the newBrokers fetch first, falling back to a quick lookup so we
       // can show their name + code + rank even if they aren't in the new-this-month list.
-      const monthlyByBroker = new Map<string, number>()
-      for (const d of (distributions.data || []) as any[]) {
-        if (!d.beneficiary_broker_id || !d.created_at || d.created_at < monthStartISO) continue
-        monthlyByBroker.set(d.beneficiary_broker_id, (monthlyByBroker.get(d.beneficiary_broker_id) || 0) + Number(d.net_payout || 0))
-      }
+      const monthlyByBroker = calc('top broker totals', () => {
+        const m = new Map<string, number>()
+        for (const d of (distributions.data || []) as any[]) {
+          if (!d.beneficiary_broker_id || !d.created_at || d.created_at < monthStartISO) continue
+          m.set(d.beneficiary_broker_id, (m.get(d.beneficiary_broker_id) || 0) + Number(d.net_payout || 0))
+        }
+        return m
+      }, new Map<string, number>())
       let topBrokerOut: { id: string; name: string; code: string; rank: string; earned: number } | null = null
       if (monthlyByBroker.size > 0) {
         // Its own try: this is the only await left in the middle of the page's own
@@ -183,29 +216,35 @@ export default function Dashboard() {
       }
 
       // Plot status breakdown — for the donut.  Categorise by status with friendly colours.
-      const statusCounts: Record<string, number> = {}
-      for (const p of (plotsBreakdown.data || []) as any[]) {
-        const k = p.status || 'unknown'
-        statusCounts[k] = (statusCounts[k] || 0) + 1
-      }
+      const statusCounts: Record<string, number> = calc('plot status counts', () => {
+        const out: Record<string, number> = {}
+        for (const p of (plotsBreakdown.data || []) as any[]) {
+          const k = p.status || 'unknown'
+          out[k] = (out[k] || 0) + 1
+        }
+        return out
+      }, {})
       const segColors: Record<string, string> = {
         available: '#14b8a6', token: '#f59e0b', booked: '#6366f1',
         // 'registry_done' is the terminal status in bp_plots_status_check; the old
         // 'sold' key never matched anything, so registered plots fell through to grey.
         registry_done: '#22c55e', cancelled: '#ef4444', unknown: '#94a3b8',
       }
-      const segments = Object.entries(statusCounts).map(([k, v]) => ({ label: k, value: v, color: segColors[k] || '#94a3b8' }))
+      const segments = calc('plot donut', () => Object.entries(statusCounts).map(([k, v]) => ({ label: k, value: v, color: segColors[k] || '#94a3b8' })), [] as { label: string; value: number; color: string }[])
 
       // Daily growth — last 7 days bookings volume
-      const growthMap: Record<string, { date: string; label: string; amount: number }> = {}
-      for (let i = 6; i >= 0; i--) {
-        const d = new Date(); d.setDate(d.getDate() - i)
-        const key = d.toISOString().slice(0, 10)
-        growthMap[key] = { date: key, label: d.toLocaleDateString('en-IN', { weekday: 'short' }), amount: 0 }
-      }
-      for (const b of (weekBookings.data || []) as any[]) {
-        if (b.application_date && growthMap[b.application_date]) growthMap[b.application_date].amount += Number(b.total_amount || 0)
-      }
+      const growthMap: Record<string, { date: string; label: string; amount: number }> = calc('growth chart', () => {
+        const out: Record<string, { date: string; label: string; amount: number }> = {}
+        for (let i = 6; i >= 0; i--) {
+          const d = new Date(); d.setDate(d.getDate() - i)
+          const key = d.toISOString().slice(0, 10)
+          out[key] = { date: key, label: d.toLocaleDateString('en-IN', { weekday: 'short' }), amount: 0 }
+        }
+        for (const b of (weekBookings.data || []) as any[]) {
+          if (b.application_date && out[b.application_date]) out[b.application_date].amount += Number(b.total_amount || 0)
+        }
+        return out
+      }, {})
 
       // Headline tiles
       section('headline tiles', () => setTiles([
@@ -268,11 +307,11 @@ export default function Dashboard() {
       // banner covers "a figure could not be worked out" as well as "a query did not come back".
       if (sectionFailures.length > 0) setDataIssues(n => n + sectionFailures.length)
       } catch (e: any) {
-        // Don't surface to the user — the empty/zero tiles speak for themselves and the
-        // skeleton is the real bug we're protecting against.  Logged so we can debug if
-        // anything stops resolving.
+        // Surfaced on the page, not just the console.  Zeros with no explanation are
+        // indistinguishable from a quiet month, which is what made this hard to pin down.
         // eslint-disable-next-line no-console
         console.error('Dashboard load failed:', e?.message || e)
+        setLoadError(e?.message ? String(e.message) : String(e))
       } finally {
         setLoading(false)
       }
@@ -288,7 +327,7 @@ export default function Dashboard() {
       if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') load()
     })
     return () => subscription.unsubscribe()
-  }, [])
+  }, [reloadKey])
 
   const maxGrowth = Math.max(...dailyGrowth.map(d => d.amount), 1)
   const skeleton = (n: number) => Array.from({ length: n }, () => ({ label: '…', value: '—' } as Tile))
@@ -298,7 +337,13 @@ export default function Dashboard() {
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Dashboard</h1>
-          <p className="text-sm text-gray-500">Operational health at a glance · {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' })}</p>
+          <p className="text-sm text-gray-500">
+            Operational health at a glance · {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' })}
+            {/* Which build this browser is actually running.  If this stamp is older than
+                the last deploy, the page is a cached copy and a hard reload is the fix —
+                that ambiguity cost a full round of debugging. */}
+            <span className="text-[10px] text-gray-400 ml-2 font-mono" title="Build loaded in this browser">build {typeof __BUILD_STAMP__ === 'string' ? __BUILD_STAMP__ : '—'}</span>
+          </p>
         </div>
         {/* Quick actions row — the things admin reaches for most often, one tap each. */}
         <div className="flex flex-wrap gap-2">
@@ -308,6 +353,20 @@ export default function Dashboard() {
           <Link to="/payouts"     className="text-xs font-medium px-3 py-1.5 rounded-lg bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 inline-flex items-center gap-1"><Banknote size={12}/>Pay brokers</Link>
         </div>
       </div>
+
+      {loadError && (
+        <div className="flex items-start gap-2.5 rounded-xl border border-rose-300 bg-rose-50 px-4 py-3 text-sm">
+          <ShieldAlert size={16} className="text-rose-600 mt-0.5 shrink-0"/>
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold text-rose-900">The dashboard couldn't finish loading, so the figures below are not real.</div>
+            <div className="text-rose-800 text-[12px] mt-0.5 break-words">{loadError}</div>
+          </div>
+          <button onClick={() => setReloadKey(k => k + 1)}
+            className="shrink-0 text-xs font-medium px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white">
+            Try again
+          </button>
+        </div>
+      )}
 
       {signedOut && (
         <div className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm">
