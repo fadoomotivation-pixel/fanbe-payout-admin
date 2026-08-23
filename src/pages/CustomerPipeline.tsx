@@ -13,12 +13,10 @@ import { printApplicationForm, printApplicationForms, printPaymentReceipt } from
 import { getCurrentUserId } from '@/lib/closure'
 import { bookingValue, balanceOf, paidByBooking, isFullyPaid, isRegistryDone } from '@/lib/bookingMath'
 import { waLink } from '@/lib/whatsapp'
+import { deleteBookingSafely } from '@/lib/deleteBooking'
+import DeleteBookingModal from '@/components/DeleteBookingModal'
 import EmiPanel from '@/components/EmiPanel'
-import {
-  Users, Search, Filter, ChevronRight, Banknote, Calculator, ArrowUpRight,
-  CheckCircle2, AlertTriangle, Coins, Phone, MessageCircle, IndianRupee, X, ExternalLink,
-  FileText, Printer, Pencil, Landmark, ScrollText, CalendarClock,
-} from 'lucide-react'
+import { Users, Search, Filter, ChevronRight, Banknote, Calculator, ArrowUpRight, CheckCircle2, AlertTriangle, Coins, Phone, MessageCircle, IndianRupee, X, ExternalLink, FileText, Printer, Pencil, Landmark, ScrollText, CalendarClock, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 type Tab = 'all' | 'today' | 'unpaid_booking' | 'emi_active' | 'settled'
@@ -63,6 +61,7 @@ export default function CustomerPipeline() {
   const [registryFor, setRegistryFor] = useState<any>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [printing, setPrinting] = useState(false)
+  const [deleteFor, setDeleteFor] = useState<any>(null)
 
   // Fetch the focused customer's profile + aggregate stats across ALL their bookings.
   // This is the data that used to live on the deleted /customer-history page — it gives
@@ -619,6 +618,23 @@ export default function CustomerPipeline() {
       setRegistryFor(null)
     },
     onError: (e: any) => toast.error(e?.message || 'Could not save the registry details.'),
+  })
+
+  // Guards live in lib/deleteBooking and run again inside it, so the pipeline and the
+  // Bookings page cannot end up allowing different things.
+  const removeBooking = useMutation({
+    mutationFn: async (booking: any) => { await deleteBookingSafely(booking) },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['cp_bookings_page'] })
+      qc.invalidateQueries({ queryKey: ['cp_global_stats'] })
+      qc.invalidateQueries({ queryKey: ['cp_today_work'] })
+      qc.invalidateQueries({ queryKey: ['bookings'] })
+      qc.invalidateQueries({ queryKey: ['plots'] })
+      qc.invalidateQueries({ queryKey: ['plots_avail'] })
+      toast.success('Booking deleted')
+      setDeleteFor(null)
+    },
+    onError: (e: any) => toast.error(e.message || 'Could not delete the booking.'),
   })
 
   const updateCustomer = useMutation({
@@ -1233,6 +1249,13 @@ export default function CustomerPipeline() {
                         className="inline-flex items-center gap-1 text-[12px] px-3 py-1.5 rounded-full border border-gray-200 text-gray-700 hover:bg-gray-50">
                         <FileText size={12}/>Edit
                       </button>
+                      {/* Kept inside Details rather than on the row: deleting a booking is
+                          not a one-tap action, and the modal refuses outright once any
+                          money is attached. */}
+                      <button onClick={() => setDeleteFor(r)}
+                        className="inline-flex items-center gap-1 text-[12px] px-3 py-1.5 rounded-full border border-rose-200 text-rose-700 hover:bg-rose-50">
+                        <Trash2 size={12}/>Delete
+                      </button>
                       <button onClick={async () => {
                           // Fetch every verified payment for this booking, oldest first, then print the form with full history
                           const { data: pays } = await supabase
@@ -1309,6 +1332,14 @@ export default function CustomerPipeline() {
         onClose={() => setRegistryFor(null)}
         onSubmit={(f: any) => markRegistry.mutate({ booking: registryFor, ...f })}
         submitting={markRegistry.isPending}
+      />
+
+      <DeleteBookingModal
+        booking={deleteFor}
+        open={!!deleteFor}
+        onClose={() => setDeleteFor(null)}
+        onConfirm={() => removeBooking.mutate(deleteFor)}
+        deleting={removeBooking.isPending}
       />
 
       {/* Edit customer modal */}

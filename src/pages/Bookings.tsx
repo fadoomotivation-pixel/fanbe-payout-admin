@@ -14,9 +14,11 @@ import { ClosureDialog } from '@/components/ClosureDialog'
 import { distributePaymentCommission, reverseBookingCommission } from '@/lib/payoutEngine'
 import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
 import { bookingValue, balanceOf, isFullyPaid } from '@/lib/bookingMath'
+import { deleteBookingSafely } from '@/lib/deleteBooking'
+import DeleteBookingModal from '@/components/DeleteBookingModal'
 import EmiPanel from '@/components/EmiPanel'
 import BookingImportModal from '@/components/BookingImportModal'
-import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info, Banknote, IndianRupee, Lock, Unlock, Search, Download, X, Filter, ChevronDown, Users, ScrollText, ClipboardPaste } from 'lucide-react'
+import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info, Banknote, IndianRupee, Lock, Unlock, Search, Download, X, Filter, ChevronDown, Users, ScrollText, ClipboardPaste, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const STAGES = ['token_received','booking_done','cancelled'] as const
@@ -154,6 +156,8 @@ export default function Bookings() {
   const [splitBrokers, setSplitBrokers] = useState<{ broker_id: string; commission_pct: string; position: number }[]>([])
   const [category, setCategory] = useState<Category>('all')
   const [emiBooking, setEmiBooking] = useState<any>(null)
+  const [deleteFor, setDeleteFor] = useState<any>(null)
+  const [deleting, setDeleting] = useState(false)
   const [recordBookingFor, setRecordBookingFor] = useState<any>(null)
   const [closureFor, setClosureFor] = useState<{ booking: any; action: 'close' | 'reopen' } | null>(null)
   // Registry completion — the sale's final step: the plot is transferred into the
@@ -1483,6 +1487,12 @@ export default function Bookings() {
                 <ScrollText size={12}/>{r.registry_date ? 'Registry ✓' : 'Registry'}
               </Button>
             )}
+            {/* Same shared modal as the Customer Pipeline: it refuses outright once any
+                money, commission or registry is attached, and points at Cancel instead. */}
+            <Button size="sm" variant="ghost" className="text-rose-600 hover:bg-rose-50"
+              onClick={() => setDeleteFor(r)}>
+              <Trash2 size={12}/>Delete
+            </Button>
           </div>
         )
       },
@@ -2229,6 +2239,29 @@ export default function Bookings() {
       />
 
       <EmiPanel booking={emiBooking} open={!!emiBooking} onClose={() => setEmiBooking(null)} />
+
+      <DeleteBookingModal
+        booking={deleteFor}
+        open={!!deleteFor}
+        onClose={() => setDeleteFor(null)}
+        deleting={deleting}
+        onConfirm={async () => {
+          setDeleting(true)
+          try {
+            await deleteBookingSafely(deleteFor)
+            qc.invalidateQueries({ queryKey: ['bookings'] })
+            qc.invalidateQueries({ queryKey: ['plots'] })
+            qc.invalidateQueries({ queryKey: ['plots_avail'] })
+            qc.invalidateQueries({ queryKey: ['payments_by_booking'] })
+            toast.success('Booking deleted')
+            setDeleteFor(null)
+          } catch (e: any) {
+            toast.error(e?.message || 'Could not delete the booking.')
+          } finally {
+            setDeleting(false)
+          }
+        }}
+      />
 
       <ClosureDialog
         open={!!closureFor}
