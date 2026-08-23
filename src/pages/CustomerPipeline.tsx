@@ -10,11 +10,12 @@ import { formatINR, formatDate } from '@/lib/utils'
 import { distributePaymentCommission } from '@/lib/payoutEngine'
 import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
 import { printApplicationForm, printPaymentReceipt } from '@/lib/printTemplates'
+import { getCurrentUserId } from '@/lib/closure'
 import EmiPanel from '@/components/EmiPanel'
 import {
   Users, Search, Filter, ChevronRight, Banknote, Calculator, ArrowUpRight,
   CheckCircle2, AlertTriangle, Coins, Phone, MessageCircle, IndianRupee, X, ExternalLink,
-  FileText, Printer, Pencil,
+  FileText, Printer, Pencil, Landmark, ScrollText,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -56,6 +57,8 @@ export default function CustomerPipeline() {
   const [emiBooking, setEmiBooking] = useState<any>(null)
   const [payFor, setPayFor] = useState<{ booking: any; type: 'token' | 'booking' } | null>(null)
   const [editCustomer, setEditCustomer] = useState<any>(null)
+  const [chequeFor, setChequeFor] = useState<any>(null)
+  const [registryFor, setRegistryFor] = useState<any>(null)
 
   // Fetch the focused customer's profile + aggregate stats across ALL their bookings.
   // This is the data that used to live on the deleted /customer-history page — it gives
@@ -155,10 +158,12 @@ export default function CustomerPipeline() {
           expected_booking_amount, commission_amount, commission_rate,
           commission_mode, traditional_commission_pct, traditional_commission_per_sqyd, traditional_pay_upline,
           broker_id, customer_id, plot_id, project_id, closed_at,
+          registry_date, registry_doc_no, registry_office, registry_completed_at,
           bp_customers(id, customer_code, name, phone),
           bp_plots(plot_no, size_sqyd, sector, block),
           bp_projects(name, location),
-          brokers(name, broker_id, rank)
+          brokers(name, broker_id, rank),
+          bp_booking_plots(plot_id)
         `, { count: 'exact' })
         .not('stage', 'eq', 'cancelled')
         .order('created_at', { ascending: false })
@@ -282,6 +287,36 @@ export default function CustomerPipeline() {
         if (i.status !== 'paid' && (!row.next_due || i.due_date < row.next_due)) row.next_due = i.due_date
       }
       return out
+    },
+  })
+
+  // Post-dated cheques held against each booking.  Shown on the row because "kitne cheque
+  // pade hain aur agla kab hai" is a question admin was answering by opening another page.
+  const { data: pdcByBooking = {} } = useQuery<Record<string, { open: number; next: string | null; overdue: number; openAmount: number }>>({
+    queryKey: ['cp_pdc', bookingIds],
+    enabled: bookingIds.length > 0,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('bp_pdc_cheques')
+        .select('booking_id, cheque_date, amount, status')
+        .in('booking_id', bookingIds)
+      if (error) throw error
+      const todayStr = today()
+      const m: Record<string, any> = {}
+      for (const c of (data || [])) {
+        if (!c.booking_id) continue
+        if (!m[c.booking_id]) m[c.booking_id] = { open: 0, next: null, overdue: 0, openAmount: 0 }
+        // Only cheques still on file are actionable.  bp_pdc_cheques_status_check allows
+        // pending / deposited / cleared / bounced / cancelled; the last three are history
+        // and must not be counted as money still sitting in the drawer.
+        if (c.status !== 'pending' && c.status !== 'deposited') continue
+        const row = m[c.booking_id]
+        row.open += 1
+        row.openAmount += Number(c.amount || 0)
+        if (c.cheque_date && c.cheque_date < todayStr) row.overdue += 1
+        if (c.cheque_date && (!row.next || c.cheque_date < row.next)) row.next = c.cheque_date
+      }
+      return m
     },
   })
 
@@ -440,6 +475,78 @@ export default function CustomerPipeline() {
     onError: (e: any) => toast.error(e.message),
   })
 
+  // Add a post-dated cheque without leaving the row.  Deliberately the same insert shape as
+  // /pdc-cheques — including the duplicate-identity message — so a cheque entered here is
+  // indistinguishable from one entered there.
+  const addCheque = useMutation({
+    mutationFn: async (p: { booking: any; cheque_no: string; bank_name: string; branch: string; cheque_date: string; amount: number; payment_type: string; notes: string }) => {
+      if (!p.cheque_no.trim())      throw new Error('Enter the cheque number.')
+      if (!(Number(p.amount) > 0))  throw new Error('Enter an amount greater than zero.')
+      if (!p.cheque_date)           throw new Error('Enter the date written on the cheque.')
+      const { error } = await supabase.from('bp_pdc_cheques').insert({
+        booking_id:   p.booking.id,
+        customer_id:  p.booking.customer_id || null,
+        cheque_no:    p.cheque_no.trim(),
+        bank_name:    p.bank_name.trim() || null,
+        branch:       p.branch.trim() || null,
+        cheque_date:  p.cheque_date,
+        amount:       Number(p.amount),
+        payment_type: p.payment_type,
+        notes:        p.notes.trim() || null,
+      })
+      if (error) {
+        if ((error.message || '').toLowerCase().includes('uq_bp_pdc_cheque_identity')) {
+          throw new Error('This cheque number is already entered for this bank. Check the PDC register before re-entering.')
+        }
+        throw error
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['cp_pdc'] })
+      qc.invalidateQueries({ queryKey: ['pdc_cheques'] })
+      toast.success('Cheque added to the register')
+      setChequeFor(null)
+    },
+    onError: (e: any) => toast.error(e.message),
+  })
+
+  // Mark the registry done.  Same writes as /registry: the booking carries the deed details
+  // and the plots move to 'registry_done', which is the only terminal value
+  // bp_plots_status_check accepts.
+  const markRegistry = useMutation({
+    mutationFn: async (p: { booking: any; registry_date: string; registry_doc_no: string; registry_office: string; registry_notes: string }) => {
+      if (!p.registry_date) throw new Error('Enter the registry date.')
+      const userId = await getCurrentUserId()
+      const { error } = await supabase.from('bp_bookings').update({
+        registry_date:         p.registry_date || null,
+        registry_doc_no:       p.registry_doc_no?.trim() || null,
+        registry_office:       p.registry_office?.trim() || null,
+        registry_notes:        p.registry_notes?.trim() || null,
+        registry_completed_at: new Date().toISOString(),
+        registry_completed_by: userId,
+        updated_at: new Date().toISOString(),
+      }).eq('id', p.booking.id)
+      if (error) throw error
+
+      // Errors here are surfaced, not swallowed: a registry recorded against a plot that is
+      // still shown as merely 'booked' is how a plot ends up sold twice.
+      const ids = ((p.booking.bp_booking_plots || []) as any[]).map(r => r.plot_id).filter(Boolean)
+      if (ids.length > 0) {
+        const { error: plotErr } = await supabase.from('bp_plots').update({ status: 'registry_done' }).in('id', ids)
+        if (plotErr) throw plotErr
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['cp_bookings_page'] })
+      qc.invalidateQueries({ queryKey: ['bookings'] })
+      qc.invalidateQueries({ queryKey: ['plots'] })
+      qc.invalidateQueries({ queryKey: ['plots_avail'] })
+      toast.success('Registry recorded')
+      setRegistryFor(null)
+    },
+    onError: (e: any) => toast.error(e?.message || 'Could not save the registry details.'),
+  })
+
   const updateCustomer = useMutation({
     mutationFn: async (p: { id: string; name: string; phone: string; father_or_husband_name?: string; email?: string; pan?: string; address?: string; dob?: string; aadhaar?: string; nominee_name?: string; nominee_relation?: string }) => {
       const { id, ...fields } = p
@@ -470,6 +577,8 @@ export default function CustomerPipeline() {
       const balance = Math.max(0, total - paid)
       const emi = emiSummary[b.id]
       const mlm = mlmByBooking[b.id] || { rows: 0, net: 0 }
+      const pdc = pdcByBooking[b.id] || { open: 0, next: null, overdue: 0, openAmount: 0 }
+      const registryDone = !!b.registry_completed_at
       const chain = brokerChains[b.broker_id] || []
       const expected = Number(b.expected_booking_amount || 0)
       const hasToken   = pm.token > 0
@@ -481,11 +590,11 @@ export default function CustomerPipeline() {
       : (!!emi && balance > 0)      ? 'emi_active'
                                     : 'all'
       return {
-        ...b, pm, total, paid, balance, emi, mlm, chain, expected,
+        ...b, pm, total, paid, balance, emi, mlm, pdc, registryDone, chain, expected,
         hasToken, hasBooking, bookingShortfall, category,
       }
     })
-  }, [bookings, paymentsByBooking, emiSummary, mlmByBooking, brokerChains])
+  }, [bookings, paymentsByBooking, emiSummary, mlmByBooking, pdcByBooking, brokerChains])
 
   // Global counts (independent of the visible page) so the four KPI tiles still show the truth.
   // Run as a single round-trip with head:true counts; cheap even at 10k+ bookings.
@@ -798,6 +907,36 @@ export default function CustomerPipeline() {
                     <AlertTriangle size={10}/>{r.emi.overdue} EMI overdue
                   </span>
                 )}
+
+                {/* Cheques still in the drawer, and whether the registry is done — both were
+                    a trip to another page to answer. */}
+                {r.pdc.open > 0 && (
+                  <span className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 font-medium border ${
+                    r.pdc.overdue > 0
+                      ? 'text-rose-700 bg-rose-50 border-rose-200'
+                      : 'text-purple-700 bg-purple-50 border-purple-200'}`}
+                    title={`${formatINR(r.pdc.openAmount)} still on file`}>
+                    <Landmark size={10}/>
+                    {r.pdc.open} cheque{r.pdc.open === 1 ? '' : 's'}
+                    {r.pdc.overdue > 0
+                      ? ` · ${r.pdc.overdue} overdue`
+                      : r.pdc.next ? ` · next ${formatDate(r.pdc.next)}` : ''}
+                  </span>
+                )}
+                {r.registryDone && (
+                  <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-1.5 py-0.5 font-semibold"
+                    title={r.registry_office || 'Registry completed'}>
+                    <ScrollText size={10}/>Registry {r.registry_date ? formatDate(r.registry_date) : 'done'}
+                    {r.registry_doc_no ? ` · ${r.registry_doc_no}` : ''}
+                  </span>
+                )}
+                {/* Only nudged once the money is actually in — chasing a registry on an
+                    unpaid deal is not the next step. */}
+                {!r.registryDone && r.balance <= 0 && r.total > 0 && (
+                  <span className="inline-flex items-center gap-1 text-amber-800 bg-amber-50 border border-amber-200 rounded-full px-1.5 py-0.5 font-semibold">
+                    <ScrollText size={10}/>Registry pending
+                  </span>
+                )}
               </div>
 
               {/* Single primary CTA + minimal secondary affordances */}
@@ -811,6 +950,22 @@ export default function CustomerPipeline() {
                   <span className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-emerald-50 text-emerald-700 text-sm font-semibold">
                     <CheckCircle2 size={14}/>Settled
                   </span>
+                )}
+                {/* The two operations admin was leaving the page for.  Kept next to the
+                    primary action rather than inside Details, since both are counter work
+                    done while the customer is standing there. */}
+                <button onClick={() => setChequeFor(r)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border border-gray-300 bg-white text-gray-800 text-sm font-medium hover:bg-gray-50 hover:border-gray-400 shadow-sm transition">
+                  <Landmark size={14}/>PDC cheque
+                </button>
+                {!r.registryDone && (
+                  <button onClick={() => setRegistryFor(r)}
+                    className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border text-sm font-medium shadow-sm transition ${
+                      r.balance <= 0 && r.total > 0
+                        ? 'border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100'
+                        : 'border-gray-300 bg-white text-gray-800 hover:bg-gray-50 hover:border-gray-400'}`}>
+                    <ScrollText size={14}/>Mark registry
+                  </button>
                 )}
                 <button onClick={() => toggleExpand(r.id)}
                   className="ml-auto inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border border-gray-300 bg-white text-gray-800 text-sm font-medium hover:bg-gray-50 hover:border-gray-400 shadow-sm transition">
@@ -953,6 +1108,24 @@ export default function CustomerPipeline() {
         submitting={recordPay.isPending}
       />
 
+      {/* Post-dated cheque */}
+      <AddChequeModal
+        booking={chequeFor}
+        open={!!chequeFor}
+        onClose={() => setChequeFor(null)}
+        onSubmit={(f: any) => addCheque.mutate({ booking: chequeFor, ...f })}
+        submitting={addCheque.isPending}
+      />
+
+      {/* Registry */}
+      <MarkRegistryModal
+        booking={registryFor}
+        open={!!registryFor}
+        onClose={() => setRegistryFor(null)}
+        onSubmit={(f: any) => markRegistry.mutate({ booking: registryFor, ...f })}
+        submitting={markRegistry.isPending}
+      />
+
       {/* Edit customer modal */}
       <EditCustomerModal
         customer={editCustomer}
@@ -962,6 +1135,124 @@ export default function CustomerPipeline() {
         submitting={updateCustomer.isPending}
       />
     </div>
+  )
+}
+
+// Mirrors bp_pdc_cheques' payment_type check constraint, so a cheque entered here can
+// always create its payment when it clears.
+const CHEQUE_TOWARDS = [
+  { value: 'emi',          label: 'EMI instalment' },
+  { value: 'booking',      label: 'Booking amount' },
+  { value: 'token',        label: 'Token' },
+  { value: 'full_payment', label: 'Full payment' },
+]
+
+function AddChequeModal({ booking, open, onClose, onSubmit, submitting }: any) {
+  const [f, setF] = useState<any>({})
+  useEffect(() => {
+    if (!open || !booking) return
+    setF({
+      cheque_no: '', bank_name: '', branch: '',
+      cheque_date: today(), amount: '',
+      payment_type: booking.emi ? 'emi' : 'booking',
+      notes: '',
+    })
+  }, [open, booking?.id])
+  const set = (k: string, v: string) => setF((p: any) => ({ ...p, [k]: v }))
+  if (!booking) return null
+  const amt = Number(f.amount) || 0
+  return (
+    <Modal open={open} onClose={onClose} title={`Add PDC cheque · ${booking.bp_customers?.name || ''}`} size="sm">
+      <div className="space-y-4">
+        <div className="text-[13px] space-y-1.5">
+          <Leader label="Booking" value={booking.booking_no || '—'}/>
+          <Leader label="Balance remaining" value={formatINR(booking.balance)} accent={booking.balance > 0 ? 'text-orange-700' : 'text-emerald-700'}/>
+          {booking.pdc?.open > 0 && (
+            <Leader label="Cheques already on file" value={`${booking.pdc.open} · ${formatINR(booking.pdc.openAmount)}`} accent="text-purple-700"/>
+          )}
+        </div>
+        <div className="grid grid-cols-2 gap-3 pt-2 border-t border-gray-100">
+          <Input label="Cheque number" value={f.cheque_no} onChange={(e: any) => set('cheque_no', e.target.value)} autoFocus/>
+          <Input label="Amount (₹)" type="number" value={f.amount} onChange={(e: any) => set('amount', e.target.value)}/>
+          <Input label="Date on the cheque" type="date" value={f.cheque_date} onChange={(e: any) => set('cheque_date', e.target.value)}/>
+          <Select label="Money goes towards" value={f.payment_type} onChange={(e: any) => set('payment_type', e.target.value)}>
+            {CHEQUE_TOWARDS.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+          </Select>
+          <Input label="Bank" value={f.bank_name} onChange={(e: any) => set('bank_name', e.target.value)}/>
+          <Input label="Branch" value={f.branch} onChange={(e: any) => set('branch', e.target.value)}/>
+          <div className="col-span-2"><Input label="Notes" value={f.notes} onChange={(e: any) => set('notes', e.target.value)}/></div>
+        </div>
+        <p className="text-[11px] text-gray-500">
+          A cheque on file is not a payment. Nothing is added to the customer's paid amount and no
+          commission moves until it is marked cleared on the PDC register.
+        </p>
+      </div>
+      <div className="flex justify-end gap-2 mt-5">
+        <Button variant="secondary" onClick={onClose}>Cancel</Button>
+        <Button onClick={() => onSubmit(f)} loading={submitting} disabled={!f.cheque_no?.trim() || !(amt > 0) || !f.cheque_date}>
+          <Landmark size={14}/>Add cheque
+        </Button>
+      </div>
+    </Modal>
+  )
+}
+
+function MarkRegistryModal({ booking, open, onClose, onSubmit, submitting }: any) {
+  const [f, setF] = useState<any>({})
+  useEffect(() => {
+    if (!open || !booking) return
+    setF({
+      registry_date: booking.registry_date || today(),
+      registry_doc_no: booking.registry_doc_no || '',
+      registry_office: booking.registry_office || '',
+      registry_notes: '',
+      ack_balance: false,
+    })
+  }, [open, booking?.id])
+  const set = (k: string, v: any) => setF((p: any) => ({ ...p, [k]: v }))
+  if (!booking) return null
+  const plotCount = (booking.bp_booking_plots || []).length
+  const owes = booking.balance > 0
+  return (
+    <Modal open={open} onClose={onClose} title={`Mark registry done · ${booking.bp_customers?.name || ''}`} size="sm">
+      <div className="space-y-4">
+        <div className="text-[13px] space-y-1.5">
+          <Leader label="Booking" value={booking.booking_no || '—'}/>
+          <Leader label="Paid" value={formatINR(booking.paid)} accent="text-emerald-700"/>
+          <Leader label="Balance remaining" value={formatINR(booking.balance)} accent={owes ? 'text-orange-700' : 'text-emerald-700'}/>
+        </div>
+
+        {owes && (
+          <label className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 cursor-pointer">
+            <input type="checkbox" className="mt-0.5 rounded" checked={!!f.ack_balance}
+              onChange={e => set('ack_balance', e.target.checked)}/>
+            <span className="text-[12px] text-amber-900">
+              This customer still owes <b>{formatINR(booking.balance)}</b>. Register anyway — I have confirmed
+              the balance is settled outside the system.
+            </span>
+          </label>
+        )}
+
+        <div className="grid grid-cols-2 gap-3 pt-2 border-t border-gray-100">
+          <Input label="Registry date" type="date" value={f.registry_date} onChange={(e: any) => set('registry_date', e.target.value)}/>
+          <Input label="Registered document no." value={f.registry_doc_no} onChange={(e: any) => set('registry_doc_no', e.target.value)} placeholder="as on the deed"/>
+          <div className="col-span-2"><Input label="Sub-registrar office" value={f.registry_office} onChange={(e: any) => set('registry_office', e.target.value)}/></div>
+          <div className="col-span-2"><Input label="Notes" value={f.registry_notes} onChange={(e: any) => set('registry_notes', e.target.value)}/></div>
+        </div>
+
+        <p className="text-[11px] text-gray-500">
+          {plotCount > 0
+            ? `${plotCount} plot${plotCount === 1 ? '' : 's'} on this booking will move to Registry done and leave the available pool.`
+            : 'No plot is linked to this booking, so only the deed details are recorded.'}
+        </p>
+      </div>
+      <div className="flex justify-end gap-2 mt-5">
+        <Button variant="secondary" onClick={onClose}>Cancel</Button>
+        <Button onClick={() => onSubmit(f)} loading={submitting} disabled={!f.registry_date || (owes && !f.ack_balance)}>
+          <ScrollText size={14}/>Record registry
+        </Button>
+      </div>
+    </Modal>
   )
 }
 
