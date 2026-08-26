@@ -5,7 +5,7 @@ import {
   UserCheck, Layers, MessageSquare, Megaphone, ShieldCheck, Receipt,
   Wallet, Calculator, TrendingUp, Landmark, Trophy, Star, Gift,
   ScrollText, CalendarRange, Inbox, UserPlus, History, Network,
-  Bell, Menu, X, ChevronRight as Chevron
+  Bell, Menu, X, Phone, ChevronRight as Chevron
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
@@ -19,6 +19,7 @@ const NAV = [
     { to: '/analytics',      icon: BarChart2,        label: 'Analytics' },
     { to: '/reports',        icon: FileText,         label: 'Reports' },
     { to: '/activity',       icon: History,          label: 'Activity Log' },
+    { to: '/collect',        icon: Phone,            label: 'Collection App' },
   ]},
   { group: 'Sales Pipeline', items: [
     { to: '/inquiries',       icon: Inbox,    label: 'Inquiries' },

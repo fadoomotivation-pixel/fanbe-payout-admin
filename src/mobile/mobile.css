@@ -1,0 +1,127 @@
+/* Collection app — its own surface, not the admin panel squeezed onto a phone.
+   Designed for one hand, in a noisy office, on a cheap Android screen in daylight:
+   large touch targets, high contrast, one obvious action per card. */
+
+.m-app {
+  --m-bg:        #F5F5F7;
+  --m-surface:   #FFFFFF;
+  --m-ink:       #1D1D1F;
+  --m-ink-2:     #6E6E73;
+  --m-ink-3:     #A1A1A6;
+  --m-line:      rgba(0, 0, 0, 0.08);
+  --m-blue:      #0071E3;
+  --m-red:       #FF3B30;
+  --m-amber:     #FF9500;
+  --m-green:     #34C759;
+  --m-radius:    18px;
+
+  background: var(--m-bg);
+  color: var(--m-ink);
+  min-height: 100dvh;
+  /* Safe areas so the bottom bar clears the Android gesture pill. */
+  padding-bottom: calc(64px + env(safe-area-inset-bottom));
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  /* Stops the double-tap zoom that makes fast tapping through a call list feel broken. */
+  touch-action: manipulation;
+}
+
+.m-app * { -webkit-tap-highlight-color: transparent; }
+
+/* Large, quiet headline — the page says what it is, then gets out of the way. */
+.m-title { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; }
+.m-sub   { font-size: 14px; color: var(--m-ink-2); margin-top: 4px; }
+
+.m-card {
+  background: var(--m-surface);
+  border-radius: var(--m-radius);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.04);
+}
+
+/* Pressed state does the work an animation would: instant, physical, no delay. */
+.m-press { transition: transform .12s ease, opacity .12s ease; }
+.m-press:active { transform: scale(0.975); opacity: 0.9; }
+
+.m-tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+  background: rgba(255,255,255,0.82);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-top: 1px solid var(--m-line);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.m-tab {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; padding: 9px 0 7px; font-size: 10.5px; font-weight: 600;
+  color: var(--m-ink-3); background: none; border: 0;
+}
+.m-tab[data-active="true"] { color: var(--m-blue); }
+
+/* The primary action on a call card. Big enough to hit while walking. */
+.m-cta {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  height: 46px; border-radius: 14px; font-size: 15px; font-weight: 650;
+  border: 0; width: 100%;
+}
+.m-cta-call  { background: var(--m-green); color: #fff; }
+.m-cta-wa    { background: #E8F7EC; color: #157A34; }
+.m-cta-log   { background: #F0F0F3; color: var(--m-ink); }
+
+.m-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 9px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 600; line-height: 1.5;
+}
+.m-chip-red   { background: #FFECEB; color: #C6221A; }
+.m-chip-amber { background: #FFF3E0; color: #9A5A00; }
+.m-chip-green { background: #E8F7EC; color: #157A34; }
+.m-chip-grey  { background: #F0F0F3; color: var(--m-ink-2); }
+
+/* Bottom sheet — where the caller writes down what was said. */
+.m-sheet-backdrop {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(0,0,0,0.4);
+  animation: m-fade .18s ease;
+}
+.m-sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 61;
+  background: var(--m-surface);
+  border-radius: 22px 22px 0 0;
+  padding: 10px 18px calc(18px + env(safe-area-inset-bottom));
+  max-height: 92dvh; overflow-y: auto;
+  animation: m-rise .26s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.m-grabber {
+  width: 36px; height: 5px; border-radius: 999px;
+  background: #D5D5DA; margin: 0 auto 12px;
+}
+@keyframes m-fade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes m-rise { from { transform: translateY(100%) } to { transform: translateY(0) } }
+
+.m-field {
+  width: 100%; border: 1px solid var(--m-line); background: #FAFAFC;
+  border-radius: 13px; padding: 13px 14px;
+  /* 16px keeps Android/iOS from zooming the viewport when the keyboard opens. */
+  font-size: 16px; color: var(--m-ink);
+}
+.m-field:focus { outline: none; border-color: var(--m-blue); background: #fff; }
+
+.m-seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; }
+.m-seg button {
+  padding: 11px 6px; border-radius: 12px; font-size: 13px; font-weight: 600;
+  border: 1px solid var(--m-line); background: #FAFAFC; color: var(--m-ink-2);
+}
+.m-seg button[data-on="true"] { background: var(--m-ink); color: #fff; border-color: var(--m-ink); }
+
+@media (prefers-color-scheme: dark) {
+  .m-app {
+    --m-bg: #000000; --m-surface: #1C1C1E; --m-ink: #F5F5F7;
+    --m-ink-2: #98989D; --m-ink-3: #6E6E73; --m-line: rgba(255,255,255,0.12);
+  }
+  .m-tabbar { background: rgba(28,28,30,0.82); }
+  .m-field  { background: #2C2C2E; }
+  .m-seg button { background: #2C2C2E; }
+  .m-seg button[data-on="true"] { background: #F5F5F7; color: #000; }
+  .m-cta-log { background: #2C2C2E; color: var(--m-ink); }
+}
