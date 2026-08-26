@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The window background shown between the launcher tap and the webview's first
+         paint. Left white it reads as a browser loading a page, which is the first
+         impression the app gets to make. -->
+    <color name="splash_background">#0071E3</color>
+</resources>

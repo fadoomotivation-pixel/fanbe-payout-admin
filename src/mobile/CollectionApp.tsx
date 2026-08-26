@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { formatINR, formatDate } from '@/lib/utils'
@@ -6,6 +6,7 @@ import { bookingValue, balanceOf, paidByBooking } from '@/lib/bookingMath'
 import { waLink } from '@/lib/whatsapp'
 import { useCallQueue, useCallHistory, todayISO, type CallTarget } from './useCollection'
 import LogCallSheet from './LogCallSheet'
+import { initNativeShell, setBackHandler, tap } from './native'
 import {
   Phone, MessageCircle, NotebookPen, ChevronLeft, Search as SearchIcon,
   ListChecks, User, History as HistoryIcon, TrendingUp,
@@ -25,16 +26,32 @@ export default function CollectionApp() {
   const [logFor, setLogFor] = useState<CallTarget | null>(null)
   const [openCustomer, setOpenCustomer] = useState<CallTarget | null>(null)
 
+  useEffect(() => { initNativeShell() }, [])
+
+  // Android's back button is the loudest tell of a wrapped web app. Here it closes the
+  // sheet, then the customer screen, then returns to Today — and only exits from Today,
+  // which is what a native app does.
+  useEffect(() => {
+    setBackHandler(() => {
+      if (logFor)        { setLogFor(null);       return true }
+      if (openCustomer)  { setOpenCustomer(null); return true }
+      if (tab !== 'today') { setTab('today');     return true }
+      return false
+    })
+    return () => setBackHandler(null)
+  }, [logFor, openCustomer, tab])
+
   return (
     <div className="m-app">
       {openCustomer
-        ? <CustomerScreen target={openCustomer} onBack={() => setOpenCustomer(null)} onLog={setLogFor}/>
+        ? <CustomerScreen key={openCustomer.bookingId} target={openCustomer}
+            onBack={() => { tap(); setOpenCustomer(null) }} onLog={setLogFor}/>
         : (
-          <>
+          <div key={tab} className="m-screen-back">
             {tab === 'today'  && <TodayScreen  onLog={setLogFor} onOpen={setOpenCustomer}/>}
             {tab === 'search' && <SearchScreen onOpen={setOpenCustomer}/>}
             {tab === 'me'     && <MeScreen/>}
-          </>
+          </div>
         )}
 
       {!openCustomer && (
@@ -44,7 +61,8 @@ export default function CollectionApp() {
             ['search', 'Search', SearchIcon],
             ['me',     'My work', TrendingUp],
           ] as const).map(([key, label, Icon]) => (
-            <button key={key} className="m-tab" data-active={tab === key} onClick={() => setTab(key as Tab)}>
+            <button key={key} className="m-tab" data-active={tab === key}
+              onClick={() => { tap(); setTab(key as Tab) }}>
               <Icon size={21} strokeWidth={tab === key ? 2.4 : 1.9}/>
               {label}
             </button>
@@ -57,10 +75,52 @@ export default function CollectionApp() {
   )
 }
 
+/**
+ * Pull down to refresh, replacing the browser gesture that was switched off.
+ * Only engages at the very top of the list, so it never fights a normal scroll.
+ */
+function usePullToRefresh(onRefresh: () => Promise<any>) {
+  const [pull, setPull] = useState(0)
+  const [busy, setBusy] = useState(false)
+  const startY = useRef<number | null>(null)
+  const THRESHOLD = 70
+
+  useEffect(() => {
+    const onStart = (e: TouchEvent) => {
+      startY.current = window.scrollY <= 0 ? e.touches[0].clientY : null
+    }
+    const onMove = (e: TouchEvent) => {
+      if (startY.current === null || busy) return
+      const d = e.touches[0].clientY - startY.current
+      // Resistance, so it feels pulled rather than dragged.
+      if (d > 0) setPull(Math.min(90, d * 0.5))
+    }
+    const onEnd = async () => {
+      if (startY.current === null) { setPull(0); return }
+      startY.current = null
+      if (pull >= THRESHOLD * 0.5 && !busy) {
+        setBusy(true); tap('medium')
+        try { await onRefresh() } finally { setBusy(false); setPull(0) }
+      } else setPull(0)
+    }
+    window.addEventListener('touchstart', onStart, { passive: true })
+    window.addEventListener('touchmove', onMove, { passive: true })
+    window.addEventListener('touchend', onEnd)
+    return () => {
+      window.removeEventListener('touchstart', onStart)
+      window.removeEventListener('touchmove', onMove)
+      window.removeEventListener('touchend', onEnd)
+    }
+  }, [pull, busy, onRefresh])
+
+  return { pull, busy }
+}
+
 /* ── Today: the call queue ─────────────────────────────────────── */
 function TodayScreen({ onLog, onOpen }: { onLog: (t: CallTarget) => void; onOpen: (t: CallTarget) => void }) {
-  const { data: queue = [], isLoading } = useCallQueue()
+  const { data: queue = [], isLoading, refetch } = useCallQueue()
   const [done, setDone] = useState<Set<string>>(new Set())
+  const { pull, busy } = usePullToRefresh(refetch)
 
   const totals = useMemo(() => ({
     people: queue.length,
@@ -70,7 +130,10 @@ function TodayScreen({ onLog, onOpen }: { onLog: (t: CallTarget) => void; onOpen
   const remaining = queue.filter(q => !done.has(q.bookingId))
 
   return (
-    <div style={{ padding: '22px 16px 8px' }}>
+    <div className="m-screen" style={{ padding: '22px 16px 8px' }}>
+      <div className="m-ptr" style={{ height: busy ? 34 : pull }}>
+        {busy ? 'Refreshing…' : pull > 35 ? 'Release to refresh' : pull > 0 ? 'Pull to refresh' : ''}
+      </div>
       <div className="m-title">Today</div>
       <div className="m-sub">
         {isLoading ? 'Loading your list…'
@@ -124,7 +187,7 @@ function CallCard({ t, onLog, onOpen, onDone }: { t: CallTarget; onLog: () => vo
 
   return (
     <div className="m-card" style={{ padding: 16 }}>
-      <button onClick={onOpen} style={{ background: 'none', border: 0, padding: 0, textAlign: 'left', width: '100%' }}>
+      <button onClick={() => { tap(); onOpen() }} style={{ background: 'none', border: 0, padding: 0, textAlign: 'left', width: '100%' }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', justifyContent: 'space-between' }}>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontSize: 17, fontWeight: 680, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -174,16 +237,16 @@ function CallCard({ t, onLog, onOpen, onDone }: { t: CallTarget; onLog: () => vo
 
       <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
         {t.phone && (
-          <a href={`tel:${t.phone}`} onClick={onDone} className="m-cta m-cta-call m-press" style={{ flex: 2, textDecoration: 'none' }}>
+          <a href={`tel:${t.phone}`} onClick={() => { tap('medium'); onDone() }} className="m-cta m-cta-call m-press" style={{ flex: 2, textDecoration: 'none' }}>
             <Phone size={17}/> Call
           </a>
         )}
         {wa && (
-          <a href={wa} target="_blank" rel="noreferrer" className="m-cta m-cta-wa m-press" style={{ flex: 1, textDecoration: 'none' }}>
+          <a href={wa} target="_blank" rel="noreferrer" onClick={() => tap()} className="m-cta m-cta-wa m-press" style={{ flex: 1, textDecoration: 'none' }}>
             <MessageCircle size={17}/>
           </a>
         )}
-        <button onClick={onLog} className="m-cta m-cta-log m-press" style={{ flex: 1 }}>
+        <button onClick={() => { tap(); onLog() }} className="m-cta m-cta-log m-press" style={{ flex: 1 }}>
           <NotebookPen size={17}/>
         </button>
       </div>
@@ -208,7 +271,7 @@ function CustomerScreen({ target, onBack, onLog }: { target: CallTarget; onBack:
 
   const t = todayISO()
   return (
-    <div style={{ padding: '14px 16px 30px' }}>
+    <div className="m-screen" style={{ padding: '14px 16px 30px' }}>
       <button onClick={onBack} className="m-press"
         style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: 'none', border: 0, color: 'var(--m-blue)', fontSize: 16, padding: '4px 0 12px', fontWeight: 600 }}>
         <ChevronLeft size={20}/> Back
@@ -325,7 +388,7 @@ function SearchScreen({ onOpen }: { onOpen: (t: CallTarget) => void }) {
   })
 
   return (
-    <div style={{ padding: '22px 16px 8px' }}>
+    <div className="m-screen" style={{ padding: '22px 16px 8px' }}>
       <div className="m-title">Search</div>
       <div className="m-sub">Any customer, by name, phone or booking number.</div>
       <input value={q} onChange={e => setQ(e.target.value)} className="m-field"
@@ -338,7 +401,7 @@ function SearchScreen({ onOpen }: { onOpen: (t: CallTarget) => void }) {
 
       <div style={{ display: 'grid', gap: 10 }}>
         {results.map(r => (
-          <button key={r.bookingId} onClick={() => onOpen(r)} className="m-card m-press"
+          <button key={r.bookingId} onClick={() => { tap(); onOpen(r) }} className="m-card m-press"
             style={{ padding: 15, textAlign: 'left', border: 0, width: '100%' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
               <div style={{ minWidth: 0 }}>
@@ -382,7 +445,7 @@ function MeScreen() {
   })
 
   return (
-    <div style={{ padding: '22px 16px 8px' }}>
+    <div className="m-screen" style={{ padding: '22px 16px 8px' }}>
       <div className="m-title">My work</div>
       <div className="m-sub">Your calls this month.</div>
 

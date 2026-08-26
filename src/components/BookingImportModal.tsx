@@ -151,8 +151,12 @@ export default function BookingImportModal({ open, onClose, onImported }: {
       ? lines.slice(1) : lines
 
     const projectByName = new Map(ref.projects.map((p: any) => [norm(p.name), p]))
-    const custByPhone   = new Map(
-      ref.customers.map((c: any) => [digitsOnly(c.phone || ''), c]).filter(([k]: any) => isRealPhone(k)),
+    // Typed as tuples rather than any[]: after .filter() TypeScript widens the pairs to
+    // arrays and no longer accepts them as Map entries.
+    const custByPhone   = new Map<string, any>(
+      ref.customers
+        .map((c: any) => [digitsOnly(c.phone || ''), c] as [string, any])
+        .filter(([k]: [string, any]) => isRealPhone(k)),
     )
     const brokerByCode  = new Map(ref.brokers.map((b: any) => [norm(b.broker_id), b]))
     const plotsByKey    = new Map<string, any>()
