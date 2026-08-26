@@ -17,6 +17,7 @@ import PdcCheques from '@/pages/PdcCheques'
 import Registry from '@/pages/Registry'
 import ActivityLog from '@/pages/ActivityLog'
 import CollectionApp from '@/mobile/CollectionApp'
+import { isNativeApp } from '@/lib/platform'
 import KYC from '@/pages/KYC'
 import Analytics from '@/pages/Analytics'
 import Reports from '@/pages/Reports'
@@ -90,7 +91,10 @@ export default function App(){
           chrome and is used on a phone, not inside the admin sidebar. Same login. */}
       <Route path="/collect" element={<Guard><CollectionApp/></Guard>}/>
       <Route element={<Guard><MaintenanceGate><AppLayout/></MaintenanceGate></Guard>}>
-        <Route path="/" element={<Dashboard/>}/>
+        {/* The packaged Android build opens on the collection app, not the admin
+            dashboard. The APK is for the callers; the sidebar panel is for the office.
+            In a browser this is untouched and "/" is still the Dashboard. */}
+        <Route path="/" element={isNativeApp() ? <Navigate to="/collect" replace/> : <Dashboard/>}/>
         <Route path="/analytics" element={<Analytics/>}/>
         <Route path="/inquiries" element={<Inquiries/>}/>
         <Route path="/projects" element={<Projects/>}/>
