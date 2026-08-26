@@ -125,3 +125,59 @@
   .m-seg button[data-on="true"] { background: #F5F5F7; color: #000; }
   .m-cta-log { background: #2C2C2E; color: var(--m-ink); }
 }
+
+/* ── The remaining "this is a website" tells ──────────────────────
+   Each of these is something a native Android app simply does not do. */
+
+.m-app {
+  /* No caret in a read-only list, no blue text selection from a long press, no
+     magnifier, no "Copy / Web search" menu on a customer's name. */
+  -webkit-user-select: none;
+  user-select: none;
+  /* Kills the blue rubber-band glow at the end of a list and the browser's
+     pull-to-refresh, which is the giveaway when a caller flicks the queue. */
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+}
+/* Text the caller genuinely needs to select or type into stays selectable. */
+.m-app input, .m-app textarea, .m-app [data-selectable] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Native apps do not show a scrollbar track over content. */
+.m-app ::-webkit-scrollbar { width: 0; height: 0; }
+
+/* Screens slide in from the right and back out, the way a pushed Android view does,
+   instead of being swapped instantly like a page load. */
+@keyframes m-push-in {
+  from { transform: translateX(14px); opacity: 0 }
+  to   { transform: translateX(0);    opacity: 1 }
+}
+@keyframes m-pop-in {
+  from { transform: translateX(-10px); opacity: 0 }
+  to   { transform: translateX(0);     opacity: 1 }
+}
+.m-screen      { animation: m-push-in .24s cubic-bezier(0.32, 0.72, 0, 1); }
+.m-screen-back { animation: m-pop-in  .24s cubic-bezier(0.32, 0.72, 0, 1); }
+
+/* Respect the system setting — Android's "remove animations" must actually remove them. */
+@media (prefers-reduced-motion: reduce) {
+  .m-screen, .m-screen-back, .m-sheet, .m-sheet-backdrop { animation: none !important; }
+  .m-press { transition: none; }
+}
+
+/* A real ripple-ish press: scale plus a brief tint, driven by :active so it starts on
+   touchdown rather than after the browser decides it was a click. */
+.m-press:active { transform: scale(0.972); }
+.m-card.m-press:active { background: rgba(0,0,0,0.02); }
+@media (prefers-color-scheme: dark) {
+  .m-card.m-press:active { background: rgba(255,255,255,0.04); }
+}
+
+/* Pull-to-refresh the caller controls, replacing the browser one that was turned off. */
+.m-ptr {
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; transition: height .18s ease;
+  color: var(--m-ink-3); font-size: 12px; font-weight: 600;
+}
