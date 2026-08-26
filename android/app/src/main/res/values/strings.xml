@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Fanbe Collections</string>
+    <string name="title_activity_main">Fanbe Collections</string>
+    <string name="package_name">com.fanbegroup.collections</string>
+    <string name="custom_url_scheme">com.fanbegroup.collections</string>
+</resources>
