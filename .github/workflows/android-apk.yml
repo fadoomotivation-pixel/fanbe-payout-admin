@@ -52,11 +52,27 @@ jobs:
       # The APK ships the built web assets, so Supabase must be baked in at build time.
       # Falls back to the values compiled into src/lib/supabase.ts when the secrets are
       # not set, which is what keeps this workflow green on a fresh fork.
+      # Catches the two traps that have each shipped a broken build: a lucide icon
+      # shadowing a global constructor, and two files sharing a name so an extensionless
+      # import silently picks the wrong one. The second white-screened the first APK.
+      - name: Check for module and global traps
+        run: npm run check:globals
+
       - name: Build web assets
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: npm run build
+
+      # A bundle without Supabase config installs fine and then shows nothing but a white
+      # screen, which is exactly how the first APK failed. Catch it here, not on a phone.
+      - name: Verify the bundle carries Supabase config
+        run: |
+          if ! grep -rqE 'https://[a-z0-9]+\.supabase\.co' dist/assets/*.js; then
+            echo "::error::The built bundle has no Supabase URL. The app would install and show a white screen."
+            exit 1
+          fi
+          echo "Supabase config is present in the bundle."
 
       - uses: actions/setup-java@v4
         with:

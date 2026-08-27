@@ -63,4 +63,43 @@ if (problems.length > 0) {
   process.exit(1)
 }
 
-console.log('No lucide icon is shadowing a global constructor.')
+
+// ── Ambiguous duplicate modules ────────────────────────────────────
+// Two files with the same name and different extensions (foo.js and foo.ts) are a trap:
+// an import written without an extension silently picks whichever Vite resolves first
+// (.js beats .ts), and the other file becomes dead code that still looks live.
+//
+// This white-screened the Android build: supabase.js had no fallback config and won,
+// while supabase.ts holding the fallbacks was never executed.
+const byBase = new Map()
+for (const file of files) {
+  const m = file.match(/^(.*)\.(m?[jt]s|[jt]sx)$/)
+  if (!m) continue
+  const [, base, ext] = m
+  if (!byBase.has(base)) byBase.set(base, [])
+  byBase.get(base).push(ext)
+}
+
+const dupes = []
+for (const [base, exts] of byBase) {
+  if (exts.length < 2) continue
+  const name = base.replace(/^src\//, '@/')
+  // Only a problem when something imports it WITHOUT an extension.
+  const bare = files.filter(f => {
+    try { return readFileSync(f, 'utf8').includes(`'${name}'`) } catch { return false }
+  })
+  if (bare.length > 0) dupes.push({ base, exts, importers: bare.length })
+}
+
+if (dupes.length > 0) {
+  console.error('\nTwo files share a name, and imports without an extension pick only one:\n')
+  for (const d of dupes) {
+    console.error(`  ${d.base}.{${d.exts.join(',')}}`)
+    console.error(`    imported without an extension in ${d.importers} file(s) — "${d.exts[0]}" wins,`)
+    console.error(`    the rest is dead code that still looks live.`)
+    console.error(`    Fix: delete the duplicate, or import it with its extension.\n`)
+  }
+  process.exit(1)
+}
+
+console.log('No lucide icon shadows a global, and no module name is ambiguous.')
