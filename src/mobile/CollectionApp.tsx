@@ -2,14 +2,19 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { formatINR, formatDate } from '@/lib/utils'
-import { bookingValue, balanceOf, paidByBooking } from '@/lib/bookingMath'
+import { bookingValue, balanceOf, paidByBooking, sumVerified } from '@/lib/bookingMath'
 import { waLink } from '@/lib/whatsapp'
 import { useCallQueue, useCallHistory, todayISO, type CallTarget } from './useCollection'
 import LogCallSheet from './LogCallSheet'
 import { initNativeShell, setBackHandler, tap } from './native'
 import {
+  BookingsScreen, CustomersScreen, CustomerDetailScreen,
+  ProjectsScreen, PlotsScreen,
+} from './BusinessScreens'
+import type { BookingRow } from './useBusiness'
+import {
   Phone, MessageCircle, NotebookPen, ChevronLeft, Search as SearchIcon,
-  ListChecks, User, History as HistoryIcon, TrendingUp,
+  ListChecks, User, History as HistoryIcon, TrendingUp, BookOpen, Building2, Users,
 } from 'lucide-react'
 import './mobile.css'
 
@@ -17,53 +22,94 @@ import './mobile.css'
 // they said.  Everything on screen serves that loop — anything that does not is left in
 // the admin panel where there is room for it.
 
-type Tab = 'today' | 'search' | 'me'
+type Tab = 'today' | 'bookings' | 'customers' | 'plots' | 'me'
+
+// A drill-down opened on top of a tab.  Kept as a stack so Inventory -> plots -> booking
+// and Customers -> customer -> booking both unwind one step at a time under the back
+// button, the way a native app does.
+type Screen =
+  | { s: 'booking';  target: CallTarget }
+  | { s: 'customer'; customer: any }
+  | { s: 'plots';    project: any }
+
+/** A booking row from any list, shaped for the one detail screen they all open. */
+function rowToTarget(b: BookingRow): CallTarget {
+  return {
+    bookingId: b.id, customerId: b.customerId, name: b.name, phone: b.phone,
+    bookingNo: b.bookingNo, projectName: b.projectName, plotNo: b.plotNo,
+    totalValue: b.value, paid: b.paid, balance: b.balance,
+    // The detail screen works these out from the instalments it loads itself, so a
+    // booking opened from Bookings shows the same overdue figure as one opened from Today.
+    overdueAmount: 0, overdueCount: 0, oldestDueDate: null, daysLate: 0,
+    lastCall: null, followUpDate: null, promisedAmount: null, reason: 'followup',
+  }
+}
 
 const daysWord = (n: number) => n === 0 ? 'due today' : n === 1 ? '1 day late' : `${n} days late`
 
 export default function CollectionApp() {
   const [tab, setTab] = useState<Tab>('today')
   const [logFor, setLogFor] = useState<CallTarget | null>(null)
-  const [openCustomer, setOpenCustomer] = useState<CallTarget | null>(null)
+  const [stack, setStack] = useState<Screen[]>([])
+
+  const push = (sc: Screen) => { tap(); setStack(p => [...p, sc]) }
+  const pop  = () => { tap(); setStack(p => p.slice(0, -1)) }
+  const top  = stack[stack.length - 1]
 
   useEffect(() => { initNativeShell() }, [])
 
-  // Android's back button is the loudest tell of a wrapped web app. Here it closes the
-  // sheet, then the customer screen, then returns to Today — and only exits from Today,
-  // which is what a native app does.
+  // Back closes the sheet, then unwinds the drill-down one screen at a time, then returns
+  // to Today, and only exits from Today. Anything less and it reads as a browser.
   useEffect(() => {
     setBackHandler(() => {
-      if (logFor)        { setLogFor(null);       return true }
-      if (openCustomer)  { setOpenCustomer(null); return true }
-      if (tab !== 'today') { setTab('today');     return true }
+      if (logFor)          { setLogFor(null);            return true }
+      if (stack.length)    { setStack(p => p.slice(0, -1)); return true }
+      if (tab !== 'today') { setTab('today');            return true }
       return false
     })
     return () => setBackHandler(null)
-  }, [logFor, openCustomer, tab])
+  }, [logFor, stack.length, tab])
+
+  // Switching tab drops whatever was open on top of the old one.
+  const goTab = (t: Tab) => { tap(); setStack([]); setTab(t) }
 
   return (
     <div className="m-app">
-      {openCustomer
-        ? <CustomerScreen key={openCustomer.bookingId} target={openCustomer}
-            onBack={() => { tap(); setOpenCustomer(null) }} onLog={setLogFor}/>
-        : (
-          <div key={tab} className="m-screen-back">
-            {tab === 'today'  && <TodayScreen  onLog={setLogFor} onOpen={setOpenCustomer}/>}
-            {tab === 'search' && <SearchScreen onOpen={setOpenCustomer}/>}
-            {tab === 'me'     && <MeScreen/>}
-          </div>
-        )}
+      {top ? (
+        <div key={stack.length}>
+          {top.s === 'booking' && (
+            <CustomerScreen key={top.target.bookingId} target={top.target} onBack={pop} onLog={setLogFor}/>
+          )}
+          {top.s === 'customer' && (
+            <CustomerDetailScreen customer={top.customer} onBack={pop}
+              onOpenBooking={b => push({ s: 'booking', target: rowToTarget(b) })}/>
+          )}
+          {top.s === 'plots' && (
+            <PlotsScreen project={top.project} onBack={pop}
+              onOpenBooking={id => push({ s: 'booking', target: rowToTarget({ id } as BookingRow) })}/>
+          )}
+        </div>
+      ) : (
+        <div key={tab} className="m-screen-back">
+          {tab === 'today'     && <TodayScreen onLog={setLogFor} onOpen={t => push({ s: 'booking', target: t })}/>}
+          {tab === 'bookings'  && <BookingsScreen  onOpen={b => push({ s: 'booking',  target: rowToTarget(b) })}/>}
+          {tab === 'customers' && <CustomersScreen onOpen={c => push({ s: 'customer', customer: c })}/>}
+          {tab === 'plots'     && <ProjectsScreen  onOpen={p => push({ s: 'plots',    project: p })}/>}
+          {tab === 'me'        && <MeScreen/>}
+        </div>
+      )}
 
-      {!openCustomer && (
+      {!top && (
         <nav className="m-tabbar">
           {([
-            ['today',  'Today',  ListChecks],
-            ['search', 'Search', SearchIcon],
-            ['me',     'My work', TrendingUp],
+            ['today',     'Today',     ListChecks],
+            ['bookings',  'Bookings',  BookOpen],
+            ['customers', 'Customers', Users],
+            ['plots',     'Plots',     Building2],
+            ['me',        'Me',        TrendingUp],
           ] as const).map(([key, label, Icon]) => (
-            <button key={key} className="m-tab" data-active={tab === key}
-              onClick={() => { tap(); setTab(key as Tab) }}>
-              <Icon size={21} strokeWidth={tab === key ? 2.4 : 1.9}/>
+            <button key={key} className="m-tab" data-active={tab === key} onClick={() => goTab(key as Tab)}>
+              <Icon size={20} strokeWidth={tab === key ? 2.4 : 1.9}/>
               {label}
             </button>
           ))}
@@ -257,6 +303,38 @@ function CallCard({ t, onLog, onOpen, onDone }: { t: CallTarget; onLog: () => vo
 /* ── Customer detail ───────────────────────────────────────────── */
 function CustomerScreen({ target, onBack, onLog }: { target: CallTarget; onBack: () => void; onLog: (t: CallTarget) => void }) {
   const { data: history = [] } = useCallHistory(target.bookingId)
+
+  // The screen loads the booking itself rather than trusting what the list handed over.
+  // It is opened from four places — Today, Bookings, a customer, a plot — and a plot only
+  // knows the booking id. Fetching here means one screen that is correct from all of them,
+  // instead of each caller having to assemble a complete object first.
+  const { data: detail } = useQuery({
+    queryKey: ['m_booking_detail', target.bookingId],
+    enabled: !!target.bookingId,
+    queryFn: async () => {
+      const [{ data: b }, { data: pays }] = await Promise.all([
+        supabase.from('bp_bookings')
+          .select('id, booking_no, total_amount, plot_total_price, stage, customer_id, bp_customers(id, name, phone), bp_projects(name), bp_plots(plot_no)')
+          .eq('id', target.bookingId).maybeSingle(),
+        supabase.from('bp_payments')
+          .select('amount, verification_status, payment_date, payment_type, receipt_no')
+          .eq('booking_id', target.bookingId).order('payment_date', { ascending: false }),
+      ])
+      if (!b) return null
+      const value = bookingValue(b)
+      const paid = sumVerified(pays as any[])
+      return {
+        name: (b as any).bp_customers?.name || target.name,
+        phone: (b as any).bp_customers?.phone || target.phone,
+        bookingNo: (b as any).booking_no || target.bookingNo,
+        projectName: (b as any).bp_projects?.name || target.projectName,
+        plotNo: (b as any).bp_plots?.plot_no || target.plotNo,
+        value, paid, balance: balanceOf(value, paid),
+        payments: (pays || []).filter((p: any) => p.verification_status === 'verified'),
+      }
+    },
+  })
+
   const { data: emis = [] } = useQuery({
     queryKey: ['m_emis', target.bookingId],
     queryFn: async () => {
@@ -270,6 +348,24 @@ function CustomerScreen({ target, onBack, onLog }: { target: CallTarget; onBack:
   })
 
   const t = todayISO()
+
+  // Overdue is worked out from the instalments on screen, not carried in from the queue,
+  // so the figure is the same whichever list this was opened from.
+  const overdue = (emis as any[])
+    .filter(e => e.status !== 'paid' && e.due_date <= t)
+    .reduce((s, e) => s + Math.max(0, Number(e.amount || 0) - Number(e.paid_amount || 0)), 0)
+
+  const view = {
+    name: detail?.name ?? target.name,
+    phone: detail?.phone ?? target.phone,
+    bookingNo: detail?.bookingNo ?? target.bookingNo,
+    projectName: detail?.projectName ?? target.projectName,
+    plotNo: detail?.plotNo ?? target.plotNo,
+    value: detail?.value ?? target.totalValue,
+    paid: detail?.paid ?? target.paid,
+    balance: detail?.balance ?? target.balance,
+  }
+
   return (
     <div className="m-screen" style={{ padding: '14px 16px 30px' }}>
       <button onClick={onBack} className="m-press"
@@ -277,23 +373,24 @@ function CustomerScreen({ target, onBack, onLog }: { target: CallTarget; onBack:
         <ChevronLeft size={20}/> Back
       </button>
 
-      <div className="m-title" style={{ fontSize: 26 }}>{target.name}</div>
-      <div className="m-sub">{target.bookingNo}{target.projectName ? ` · ${target.projectName}` : ''}{target.plotNo ? ` · Plot ${target.plotNo}` : ''}</div>
+      <div className="m-title" style={{ fontSize: 26 }}>{view.name}</div>
+      <div className="m-sub">{view.bookingNo}{view.projectName ? ` · ${view.projectName}` : ''}{view.plotNo ? ` · Plot ${view.plotNo}` : ''}</div>
 
       <div className="m-card" style={{ padding: 16, marginTop: 18, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-        <Money label="Overdue"  value={target.overdueAmount} tone="var(--m-red)"/>
-        <Money label="Balance"  value={target.balance}/>
-        <Money label="Paid"     value={target.paid} tone="var(--m-green)"/>
-        <Money label="Total"    value={target.totalValue}/>
+        <Money label="Overdue"  value={overdue} tone={overdue > 0 ? 'var(--m-red)' : undefined}/>
+        <Money label="Balance"  value={view.balance}/>
+        <Money label="Paid"     value={view.paid} tone="var(--m-green)"/>
+        <Money label="Total"    value={view.value}/>
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-        {target.phone && (
-          <a href={`tel:${target.phone}`} className="m-cta m-cta-call m-press" style={{ flex: 2, textDecoration: 'none' }}>
-            <Phone size={17}/> Call {target.phone}
+        {view.phone && (
+          <a href={`tel:${view.phone}`} onClick={() => tap('medium')} className="m-cta m-cta-call m-press" style={{ flex: 2, textDecoration: 'none' }}>
+            <Phone size={17}/> Call {view.phone}
           </a>
         )}
-        <button onClick={() => onLog(target)} className="m-cta m-cta-log m-press" style={{ flex: 1 }}>
+        <button onClick={() => { tap(); onLog({ ...target, ...view, totalValue: view.value, overdueAmount: overdue }) }}
+          className="m-cta m-cta-log m-press" style={{ flex: 1 }}>
           <NotebookPen size={17}/> Log
         </button>
       </div>
@@ -322,6 +419,29 @@ function CustomerScreen({ target, onBack, onLog }: { target: CallTarget; onBack:
           )
         })}
       </div>
+
+      {/* Receipts: the question "did that payment reach you" comes up on nearly every call. */}
+      {detail?.payments && detail.payments.length > 0 && (
+        <>
+          <SectionTitle icon={<HistoryIcon size={14}/>}>Payments received</SectionTitle>
+          <div className="m-card" style={{ overflow: 'hidden' }}>
+            {detail.payments.map((p: any, i: number) => (
+              <div key={i} style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                padding: '12px 15px', borderTop: i === 0 ? 'none' : '1px solid var(--m-line)',
+              }}>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>{formatDate(p.payment_date)}</div>
+                  <div style={{ fontSize: 11.5, color: 'var(--m-ink-3)' }}>
+                    {(p.payment_type || 'payment').toUpperCase()}{p.receipt_no ? ` · ${p.receipt_no}` : ''}
+                  </div>
+                </div>
+                <div style={{ fontWeight: 650, color: 'var(--m-green)' }}>{formatINR(Number(p.amount || 0))}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
       <SectionTitle icon={<NotebookPen size={14}/>}>Call history</SectionTitle>
       <div style={{ display: 'grid', gap: 10 }}>
