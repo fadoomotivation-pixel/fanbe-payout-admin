@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { supabase } from '@/lib/supabase'
 import { useNavigate, Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
+import { signInWithIdOrEmail } from '@/lib/brokerAuth'
 
 // Broker login screen.
 //
@@ -22,36 +22,25 @@ export default function BrokerLogin() {
   const [showPassword, setShowPassword] = useState(false)
   const navigate = useNavigate()
 
-  async function handleLogin(e: React.FormEvent) {
+  async function handleLogin(e: any) {
     e.preventDefault()
-    const id = identifier.trim()
-    if (!id) { toast.error('Please enter your broker ID or mobile number.'); return }
+    if (!identifier.trim()) { toast.error('Please enter your broker ID or mobile number.'); return }
     if (!password) { toast.error('Please enter your password.'); return }
     setLoading(true)
     try {
-      // One SECURITY DEFINER RPC handles every form of the ID.  It bypasses RLS to read
-      // brokers.email, and answers only when exactly one active broker matches, so it
-      // cannot be used to walk the directory.
-      const { data: resolved } = await supabase.rpc('broker_email_for_login', { p_login: id })
-      const email = (resolved as string | null) || null
-      if (!email) {
-        toast.error("We couldn't find that broker ID or mobile number. Please check it, or ask admin.")
-        setLoading(false); return
-      }
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-      if (error) {
-        // Generic copy -- the raw Supabase error gives away whether the email exists.
-        toast.error('Broker ID or password is wrong.  Please try again.')
-        setLoading(false); return
-      }
-      const { data: broker } = await supabase.from('brokers').select('id').eq('auth_user_id', data.user?.id).maybeSingle()
-      if (!broker) {
-        await supabase.auth.signOut()
-        toast.error('No broker linked to this login.  Please contact admin.')
-        setLoading(false); return
+      const r = await signInWithIdOrEmail(identifier, password)
+      if (!r.ok) {
+        // Deliberately vague on a wrong password: a precise message would confirm which
+        // IDs exist on the system.
+        toast.error(r.reason === 'unknown-id'
+          ? "We couldn't find that broker ID or mobile number. Please check it, or ask admin."
+          : 'Broker ID or password is wrong. Please try again.')
+        return
       }
       toast.success('Welcome!')
-      navigate('/broker/dashboard')
+      // Staff who sign in here are sent to their own side rather than a broker dashboard
+      // that would have nothing on it.
+      navigate(r.isBroker ? '/broker/dashboard' : '/')
     } finally {
       setLoading(false)
     }
