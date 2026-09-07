@@ -497,7 +497,47 @@ export default function Expenses() {
             </div>
           )}
 
-          <Input label="Responsible person (who is accountable)" value={form.responsible_person} onChange={(e: any) => set('responsible_person', e.target.value)} placeholder="e.g. Office manager's name" />
+          {/* Money leaving the business needs two names on it, not one.  "Responsible" only
+              says who approved the spend; if a payment is ever questioned, the question is
+              who actually took the cash — and that had nowhere to be written down. */}
+          <div className="rounded-lg border border-gray-200 bg-gray-50/60 p-3 space-y-3">
+            <div className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Who got the money</div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                label="Paid to (who received it)"
+                value={form.paid_to}
+                onChange={(e: any) => set('paid_to', e.target.value)}
+                placeholder="Vendor, staff or broker name"
+              />
+              <Input
+                label="Paid by (who handed it over)"
+                value={form.paid_by}
+                onChange={(e: any) => set('paid_by', e.target.value)}
+                placeholder="e.g. Cashier's name"
+              />
+              <Select label="Payment mode" value={form.payment_mode} onChange={(e: any) => set('payment_mode', e.target.value)}>
+                <option value="cash">Cash</option>
+                <option value="upi">UPI</option>
+                <option value="bank">Bank transfer</option>
+                <option value="cheque">Cheque</option>
+              </Select>
+              <Input
+                label="Reference no. (optional)"
+                value={form.reference_no}
+                onChange={(e: any) => set('reference_no', e.target.value)}
+                placeholder="UTR, cheque or bill number"
+              />
+            </div>
+            {!form.paid_to.trim() && (
+              <p className="text-[11px] text-amber-800 flex items-start gap-1.5">
+                <AlertTriangle size={12} className="mt-0.5 shrink-0"/>
+                Leave this blank and the expense saves, but the row will be marked
+                “payee not recorded” until someone fills it in.
+              </p>
+            )}
+          </div>
+
+          <Input label="Responsible person (who approved the spend)" value={form.responsible_person} onChange={(e: any) => set('responsible_person', e.target.value)} placeholder="e.g. Office manager's name" />
           <Textarea label="Notes" rows={2} value={form.description} onChange={(e: any) => set('description', e.target.value)} placeholder="Anything worth recording about this spend" />
 
           <div className="flex justify-end gap-2 pt-1">
