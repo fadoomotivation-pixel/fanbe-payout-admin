@@ -479,7 +479,7 @@ function SearchScreen({ onOpen }: { onOpen: (t: CallTarget) => void }) {
     queryFn: async () => {
       const term = q.trim()
       const { data: custs } = await supabase.from('bp_customers')
-        .select('id').or(`name.ilike.%${term}%,phone.ilike.%${term}%,customer_code.ilike.%${term}%`).limit(40)
+        .select('id').or(`name.ilike.%${term}%,phone.ilike.%${term}%,customer_code.ilike.%${term}%,previous_customer_code.ilike.%${term}%`).limit(40)
       const custIds = (custs || []).map((c: any) => c.id)
       const parts = [`booking_no.ilike.%${term}%`]
       if (custIds.length) parts.push(`customer_id.in.(${custIds.join(',')})`)

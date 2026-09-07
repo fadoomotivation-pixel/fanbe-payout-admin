@@ -77,7 +77,7 @@ export function useBookings(opts: { search: string; stage: string; page: number 
         // Customer names live on another table, so matching ids are resolved first —
         // PostgREST cannot filter a booking by a column of its embedded customer.
         const { data: cust } = await supabase.from('bp_customers')
-          .select('id').or(`name.ilike.%${term}%,phone.ilike.%${term}%,customer_code.ilike.%${term}%`).limit(200)
+          .select('id').or(`name.ilike.%${term}%,phone.ilike.%${term}%,customer_code.ilike.%${term}%,previous_customer_code.ilike.%${term}%`).limit(200)
         const ids = (cust || []).map((c: any) => c.id)
         const parts = [`booking_no.ilike.%${term}%`, `legacy_booking_no.ilike.%${term}%`]
         if (ids.length) parts.push(`customer_id.in.(${ids.join(',')})`)
@@ -109,7 +109,7 @@ export function useCustomers(opts: { search: string; page: number }) {
         .order('created_at', { ascending: false })
       if (search.trim()) {
         const term = search.trim()
-        q = q.or(`name.ilike.%${term}%,phone.ilike.%${term}%,customer_code.ilike.%${term}%`)
+        q = q.or(`name.ilike.%${term}%,phone.ilike.%${term}%,customer_code.ilike.%${term}%,previous_customer_code.ilike.%${term}%`)
       }
       const { data, error, count } = await q.range(page * PAGE, page * PAGE + PAGE - 1)
       if (error) throw error

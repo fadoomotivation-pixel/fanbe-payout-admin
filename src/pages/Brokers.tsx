@@ -34,6 +34,28 @@ function nullifyBlanks(obj: any) {
 
 function digitsOnly(s: string) { return (s || '').replace(/\D/g, '') }
 
+// What the broker types into the portal: FNB05120 -> 5120.  Mirrors broker_email_for_login
+// in the database, which compares digits only and drops leading zeros from both sides —
+// so "5120", "05120" and "FNB05120" all reach the same broker.
+function loginIdOf(brokerCode: string) { return digitsOnly(brokerCode).replace(/^0+/, '') }
+
+// Calls an admin edge function and surfaces the REAL reason when it refuses.
+//
+// supabase.functions.invoke reports every non-2xx as the same sentence — "Edge Function
+// returned a non-2xx status code" — and leaves `data` null, so the actual message the
+// function wrote ("this broker already has a login", "that email is a staff login") never
+// reached the admin.  The body is on error.context, which is the raw Response.
+async function invokeAdminFn(name: string, body: Record<string, unknown>) {
+  const { data, error } = await supabase.functions.invoke(name, { body })
+  if (error) {
+    let detail = ''
+    try { detail = (await (error as any)?.context?.json?.())?.error || '' } catch { /* not JSON */ }
+    throw new Error(detail || error.message || 'Request failed')
+  }
+  if (data?.error) throw new Error(data.error)
+  return data
+}
+
 function syntheticEmailFromPhone(phone: string) {
   const digits = digitsOnly(phone)
   if (!digits) return ''
@@ -99,12 +121,7 @@ export default function Brokers() {
   const update = useMutation({ mutationFn: async ({ id, data }: { id: string; data: any }) => { const { data: d, error } = await supabase.from('brokers').update({ ...data, updated_at: new Date().toISOString() }).eq('id', id).select().single(); if (error) throw error; return d }, onSuccess: () => { qc.invalidateQueries({ queryKey: ['brokers'] }); toast.success('Broker updated') }, onError: (e: any) => toast.error(e.message) })
 
   const createLogin = useMutation({
-    mutationFn: async (params: { broker_id: string; password: string }) => {
-      const { data, error } = await supabase.functions.invoke('create-broker-login', { body: params })
-      if (error) throw error
-      if (data?.error) throw new Error(data.error)
-      return data
-    },
+    mutationFn: (params: { broker_id: string; password?: string }) => invokeAdminFn('create-broker-login', params),
     onError: (e: any) => toast.error(e.message || 'Failed to create login'),
   })
 
@@ -114,12 +131,7 @@ export default function Brokers() {
   // the only way for admin to give a broker who lost their password a way back in —
   // there is no path to "see" the existing password.
   const resetPassword = useMutation({
-    mutationFn: async (params: { broker_id: string; password?: string }) => {
-      const { data, error } = await supabase.functions.invoke('reset-broker-password', { body: params })
-      if (error) throw error
-      if (data?.error) throw new Error(data.error)
-      return data
-    },
+    mutationFn: (params: { broker_id: string; password?: string }) => invokeAdminFn('reset-broker-password', params),
     onError: (e: any) => toast.error(e.message || 'Failed to reset password'),
   })
 
@@ -135,6 +147,11 @@ export default function Brokers() {
   const [loginResult, setLoginResult] = useState<any>(null)
   const [editPassword, setEditPassword] = useState('')
   const [showEditPassword, setShowEditPassword] = useState(false)
+  // Bulk login provisioning for brokers added before the portal existed — see runBulkLogins.
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const [bulkRunning, setBulkRunning] = useState(false)
+  const [bulkRows, setBulkRows] = useState<any[]>([])
+  const [bulkTotal, setBulkTotal] = useState(0)
 
   const open = (b?: any) => {
     setEditing(b || null)
@@ -175,10 +192,11 @@ export default function Brokers() {
       const created = await create.mutateAsync(payload)
       qc.invalidateQueries({ queryKey: ['brokers'] })
 
-      const pwd = digitsOnly(form.phone)
-      if (pwd.length >= 6 && payload.email) {
+      // No password is sent: the edge function owns the rule (default = phone digits).
+      // Computing it here as well used to mean two places to change if it ever moved.
+      if (digitsOnly(form.phone).length >= 6 && payload.email) {
         try {
-          const lr = await createLogin.mutateAsync({ broker_id: created.id, password: pwd })
+          const lr = await createLogin.mutateAsync({ broker_id: created.id })
           setLoginResult(lr)
           toast.success('Broker added · login created')
         } catch (e: any) {
@@ -219,6 +237,47 @@ export default function Brokers() {
       setEditPassword('')
     } catch {}
   }
+
+  // Brokers who still cannot sign in.  Every broker on the system was created before the
+  // portal existed, so none of them had an auth account — the login page was there but
+  // nobody had a key to it.
+  const pendingLogins = allBrokers.filter((b: any) => !b.auth_user_id && b.email)
+
+  // Creates the missing logins one by one, through the same edge function the single
+  // "create login" button uses.  Deliberately not a second server-side bulk endpoint: one
+  // code path means the password rule, the staff-email guard and the auth_user_id link can
+  // never behave differently in bulk than they do for one broker.
+  //
+  // Sequential rather than parallel — 58 simultaneous admin.createUser calls is how you
+  // get rate-limited half way through and end up not knowing which half succeeded.
+  const runBulkLogins = async () => {
+    // Snapshot the targets first: the list is refreshed at the end, and iterating a list
+    // that changes underneath would skip brokers.
+    const targets = pendingLogins
+    setBulkRunning(true)
+    setBulkTotal(targets.length)
+    const rows: any[] = []
+    for (const b of targets) {
+      try {
+        const r = await invokeAdminFn('create-broker-login', { broker_id: b.id })
+        rows.push({ id: b.id, code: b.broker_id, name: b.name, password: r?.password || null, reused: !!r?.reused })
+      } catch (e: any) {
+        rows.push({ id: b.id, code: b.broker_id, name: b.name, error: e?.message || 'Failed' })
+      }
+      setBulkRows([...rows])
+    }
+    setBulkRunning(false)
+    qc.invalidateQueries({ queryKey: ['brokers'] })
+    const ok = rows.filter(r => !r.error).length
+    toast.success(`${ok} of ${targets.length} logins ready`)
+  }
+
+  // One block admin can paste straight into WhatsApp or Excel.  Failures are left out —
+  // there is nothing to send for a broker whose login was not created.
+  const bulkCredentialsText = () => bulkRows
+    .filter(r => !r.error && r.password)
+    .map(r => `${r.name} (${r.code}) — Login ID: ${loginIdOf(r.code) || r.code} · Password: ${r.password}`)
+    .join('\n')
 
   // Reset password for an existing broker.  Uses editPassword if admin typed one (>= 6
   // chars), otherwise lets the edge function generate a random one and returns it.
@@ -270,14 +329,16 @@ export default function Brokers() {
     }},
     { header: 'Sponsor', render: (r: any) => r.sponsor?.name ? <span className="text-xs text-gray-600">{r.sponsor.name} <span className="text-gray-400">[{r.sponsor.broker_id}]</span></span> : <span className="text-xs text-gray-400">—</span> },
     { header: 'KYC', render: (r: any) => <Badge label={r.kyc_status || 'pending'} className={KYC_COLORS[r.kyc_status] || 'bg-gray-100 text-gray-600'} /> },
+    // The broker signs in with the ID number, so that — not the synthetic email — is what
+    // admin needs to read out over the phone.
     { header: 'Login', render: (r: any) => r.auth_user_id
         ? (
           <div className="leading-tight">
-            <div className="text-xs text-green-700 inline-flex items-center gap-1"><KeyRound size={11}/>linked</div>
+            <div className="text-xs text-green-700 inline-flex items-center gap-1"><KeyRound size={11}/>ID {loginIdOf(r.broker_id) || r.broker_id}</div>
             <div className="text-[10px] text-gray-500 font-mono truncate max-w-[160px]" title={r.email || ''}>{r.email || '—'}</div>
           </div>
         )
-        : <span className="text-xs text-gray-400">not linked</span> },
+        : <span className="text-xs text-gray-400">no login</span> },
     { header: 'Status', render: (r: any) => <Badge label={r.status} className={r.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'} /> },
     {
       header: '',
@@ -400,7 +461,12 @@ export default function Brokers() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <div><h1 className="text-xl font-bold text-gray-900">Brokers</h1><p className="text-sm text-gray-500">{allBrokers.length} brokers · click a name for the full earnings profile</p></div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          {pendingLogins.length > 0 && (
+            <Button variant="secondary" onClick={() => { setBulkRows([]); setBulkTotal(0); setBulkOpen(true) }} title="Create portal logins for brokers who don't have one yet">
+              <KeyRound size={14} />Create logins ({pendingLogins.length})
+            </Button>
+          )}
           <Button variant="secondary" onClick={() => setImportOpen(true)}><ClipboardPaste size={14} />Import from Excel</Button>
           <Button onClick={() => open()}><Plus size={14} />Add Broker</Button>
         </div>
@@ -613,14 +679,18 @@ export default function Brokers() {
         {loginResult && (
           <div className="space-y-3">
             <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-900">
-              Share these with the broker.  They sign in at <b>/broker/login</b> with their phone number + password.
+              Share these with the broker.  They sign in at <b>/broker/login</b> with their broker ID + password.
               {loginResult.message?.toLowerCase().includes('reset') && ' This password is shown once — copy it now.'}
             </div>
             <div className="space-y-2">
-              {/* Phone is the broker-facing primary credential now.  Read it off the row
-                  being edited; the create-login response doesn't carry it explicitly. */}
-              {editing?.phone && (
-                <Field label="Phone"      value={editing.phone}        copyKey="phone"    copiedKey={copiedKey} onCopy={copy}/>
+              {/* The broker ID is what the broker types.  create-broker-login returns it;
+                  the password-reset response doesn't, so fall back to the row being edited. */}
+              {(loginResult.login_id || editing?.broker_id) && (
+                <Field
+                  label="Login ID"
+                  value={loginIdOf(loginResult.login_id || editing.broker_id) || (loginResult.login_id || editing.broker_id)}
+                  copyKey="login-id" copiedKey={copiedKey} onCopy={copy}
+                />
               )}
               {loginResult.password ? (
                 <Field label="Password"   value={loginResult.password} copyKey="password" copiedKey={copiedKey} onCopy={copy}/>
@@ -641,6 +711,80 @@ export default function Brokers() {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Bulk login provisioning.  Every broker on the system predates the portal, so this
+          is the one-time run that gives them all a way in. */}
+      <Modal
+        open={bulkOpen}
+        onClose={() => { if (!bulkRunning) { setBulkOpen(false); setBulkRows([]) } }}
+        title="Create broker portal logins"
+      >
+        <div className="space-y-3">
+          {bulkRows.length === 0 ? (
+            <>
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-900">
+                <b>{pendingLogins.length} brokers</b> do not have a portal login yet. This creates one for each:
+                <ul className="list-disc ml-5 mt-2 space-y-0.5 text-xs">
+                  <li>Login ID = their broker number (FNB05120 signs in as <b>5120</b>)</li>
+                  <li>Password = their own mobile number</li>
+                  <li>Brokers who already have a login are not touched</li>
+                </ul>
+              </div>
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900">
+                <b>Please note:</b> a mobile number is easy for someone else to guess, and broker
+                IDs run in order. Treat this as a starting password — use <b>Reset password</b> on
+                the broker to set a real one once they have signed in.
+              </div>
+              <div className="flex justify-end gap-2 pt-1">
+                <Button variant="secondary" onClick={() => setBulkOpen(false)}>Cancel</Button>
+                <Button onClick={runBulkLogins} disabled={pendingLogins.length === 0}>
+                  Create {pendingLogins.length} logins
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-sm text-gray-700">
+                {bulkRunning
+                  ? <>Creating logins… <b>{bulkRows.length} of {bulkTotal}</b> done. Please keep this window open.</>
+                  : <>Finished. <b>{bulkRows.filter(r => !r.error).length}</b> ready, <b>{bulkRows.filter(r => r.error).length}</b> failed.</>}
+              </div>
+              <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-emerald-500 transition-all"
+                  style={{ width: `${bulkTotal ? Math.round((bulkRows.length / bulkTotal) * 100) : 0}%` }}
+                />
+              </div>
+              <div className="max-h-72 overflow-y-auto border border-gray-100 rounded-lg divide-y divide-gray-50">
+                {bulkRows.map((r: any) => (
+                  <div key={r.id} className="flex items-center gap-2 px-3 py-2 text-xs">
+                    <span className="font-mono text-gray-500 w-24 shrink-0">{r.code || '—'}</span>
+                    <span className="flex-1 truncate text-gray-800">{r.name || '—'}</span>
+                    {r.error
+                      ? <span className="text-red-600 truncate max-w-[45%]" title={r.error}>{r.error}</span>
+                      : r.password
+                        ? <span className="font-mono text-emerald-700">ID {loginIdOf(r.code) || r.code} · {r.password}</span>
+                        : <span className="text-gray-500">{r.reused ? 'already had an account — linked' : 'created'}</span>}
+                  </div>
+                ))}
+              </div>
+              {!bulkRunning && (
+                <div className="flex justify-between items-center gap-2 pt-1">
+                  <Button
+                    variant="secondary"
+                    onClick={() => copy(bulkCredentialsText(), 'bulk-creds')}
+                    disabled={!bulkCredentialsText()}
+                  >
+                    {copiedKey === 'bulk-creds' ? <Check size={14}/> : <Copy size={14}/>}
+                    Copy all logins
+                  </Button>
+                  <Button onClick={() => { setBulkOpen(false); setBulkRows([]) }}>Done</Button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </Modal>
     </div>
   )
