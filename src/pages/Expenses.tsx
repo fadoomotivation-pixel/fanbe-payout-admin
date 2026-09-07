@@ -24,6 +24,8 @@ type Row = {
   id: string; item_name: string; amount: number; head_id: string | null
   expense_date: string; description: string | null
   responsible_person: string | null; broker_id: string | null
+  paid_to: string | null; paid_by: string | null
+  payment_mode: string | null; reference_no: string | null
 }
 
 // Heads that are about money owed to / taken by a specific broker.  Picking one makes
@@ -64,6 +66,7 @@ function rangeFor(p: Period, from: string, to: string): { from: string; to: stri
 const EMPTY_FORM = {
   id: '', item_name: '', amount: '', head_id: '', description: '',
   responsible_person: '', broker_id: '', expense_date: today(),
+  paid_to: '', paid_by: '', payment_mode: 'cash', reference_no: '',
 }
 
 export default function Expenses() {
@@ -106,7 +109,7 @@ export default function Expenses() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('expenses')
-        .select('id,item_name,amount,head_id,expense_date,description,responsible_person,broker_id')
+        .select('id,item_name,amount,head_id,expense_date,description,responsible_person,broker_id,paid_to,paid_by,payment_mode,reference_no')
         .order('expense_date', { ascending: false })
         .limit(2000)
       if (error) throw error
@@ -135,7 +138,7 @@ export default function Expenses() {
     if (filterBroker && r.broker_id !== filterBroker) return false
     if (search.trim()) {
       const q = search.toLowerCase()
-      const hay = [r.item_name, r.description, r.responsible_person, headNameOf(r.head_id), brokerLabel(r.broker_id)]
+      const hay = [r.item_name, r.description, r.responsible_person, r.paid_to, r.paid_by, r.reference_no, headNameOf(r.head_id), brokerLabel(r.broker_id)]
       if (!hay.some(v => (v || '').toString().toLowerCase().includes(q))) return false
     }
     return true
@@ -194,6 +197,8 @@ export default function Expenses() {
     setForm({
       id: r.id, item_name: r.item_name, amount: String(r.amount ?? ''), head_id: r.head_id || '',
       description: r.description || '', responsible_person: r.responsible_person || '',
+      paid_to: r.paid_to || '', paid_by: r.paid_by || '',
+      payment_mode: r.payment_mode || 'cash', reference_no: r.reference_no || '',
       broker_id: r.broker_id || '', expense_date: r.expense_date || today(),
     })
     setModal(true)
@@ -212,6 +217,10 @@ export default function Expenses() {
       head_id: form.head_id || null,
       description: form.description.trim() || null,
       responsible_person: form.responsible_person.trim() || null,
+      paid_to:      form.paid_to.trim() || null,
+      paid_by:      form.paid_by.trim() || null,
+      payment_mode: form.payment_mode || null,
+      reference_no: form.reference_no.trim() || null,
       // A broker is only attached on the heads that are about a broker; switching the
       // head away from those clears it so a stale link can't linger on the row.
       broker_id: headWantsBroker ? form.broker_id : null,
@@ -244,10 +253,10 @@ export default function Expenses() {
   }
 
   const exportCsv = () => {
-    const headers = ['Date', 'Head', 'Item', 'Amount', 'Broker', 'Responsible', 'Description']
+    const headers = ['Date', 'Head', 'Item', 'Amount', 'Broker', 'Responsible', 'Paid to', 'Paid by', 'Mode', 'Reference', 'Description']
     const body = rows.map(r => [
       r.expense_date, headNameOf(r.head_id), r.item_name, r.amount,
-      brokerLabel(r.broker_id) || '', r.responsible_person || '', r.description || '',
+      brokerLabel(r.broker_id) || '', r.responsible_person || '', r.paid_to || '', r.paid_by || '', r.payment_mode || '', r.reference_no || '', r.description || '',
     ])
     const csv = [headers, ...body].map(l => l.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
@@ -407,7 +416,7 @@ export default function Expenses() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-y border-gray-100">
               <tr>
-                {['Date', 'Head', 'Item', 'Amount', 'Broker', 'Responsible', ''].map(h => (
+                {['Date', 'Head', 'Item', 'Amount', 'Broker', 'Responsible', 'Paid to', ''].map(h => (
                   <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -434,6 +443,18 @@ export default function Expenses() {
                     <td className="px-4 py-3 font-semibold text-gray-900 tabular-nums whitespace-nowrap">{formatINR(r.amount)}</td>
                     <td className="px-4 py-3 text-gray-600 text-xs">{brokerLabel(r.broker_id) || '—'}</td>
                     <td className="px-4 py-3 text-gray-600 text-xs">{r.responsible_person || <span className="text-gray-300">—</span>}</td>
+                    <td className="px-4 py-3 text-xs">
+                      {r.paid_to
+                        ? <div>
+                            <div className="text-gray-800 font-medium">{r.paid_to}</div>
+                            {(r.payment_mode || r.reference_no) && (
+                              <div className="text-[10px] text-gray-400">
+                                {(r.payment_mode || '').toUpperCase()}{r.reference_no ? ` · ${r.reference_no}` : ''}
+                              </div>
+                            )}
+                          </div>
+                        : <span className="text-amber-500" title="Nobody is recorded as having received this money">not recorded</span>}
+                    </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
                       <button onClick={() => openEdit(r)} className="p-1.5 rounded-md text-gray-400 hover:text-blue-700 hover:bg-blue-50" title="Edit"><Pencil size={13}/></button>
                       <button onClick={() => setDeleteFor(r)} className="p-1.5 rounded-md text-gray-400 hover:text-red-700 hover:bg-red-50" title="Delete"><Trash2 size={13}/></button>

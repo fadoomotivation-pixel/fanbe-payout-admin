@@ -3,11 +3,18 @@ import { supabase } from '@/lib/supabase'
 import { useNavigate, Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 
-// Broker login screen.  Brokers know their phone number; nobody remembers a synthetic
-// email like auto-5c943240@example.com.  The form accepts EITHER a phone number or an
-// email -- if the input has an @ we treat it as an email, otherwise we call the
-// broker_email_for_phone RPC to resolve the phone to the underlying auth email, then
-// sign in via Supabase Auth with that email + the password the broker typed.
+// Broker login screen.
+//
+// Brokers are known by their broker ID -- FNB05120 -- on every paper in the office, and
+// nobody remembers a synthetic email like auto-5c943240@example.com.  So the one box
+// accepts whatever the broker has to hand: the ID number (5120), the full ID (FNB05120),
+// their mobile number, or an email.  broker_email_for_login resolves all four to the
+// single email Supabase Auth signs in with.
+//
+// That resolution deliberately lives in the database, not here: it answers only on an
+// exact, unique match, so a wrong guess reveals nothing about who else is on the system.
+// A duplicate mobile number (a few brokers share an office landline) resolves to nothing
+// on purpose -- those brokers sign in with their ID instead.
 export default function BrokerLogin() {
   const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
@@ -18,28 +25,23 @@ export default function BrokerLogin() {
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
     const id = identifier.trim()
-    if (!id) { toast.error('Please enter your phone number or email.'); return }
+    if (!id) { toast.error('Please enter your broker ID or mobile number.'); return }
     if (!password) { toast.error('Please enter your password.'); return }
     setLoading(true)
     try {
-      let email: string | null = null
-      if (id.includes('@')) {
-        email = id.toLowerCase()
-      } else {
-        // Phone-based login: resolve via the SECURITY DEFINER RPC.  This bypasses RLS to
-        // read brokers.email by phone -- the function only returns a result when exactly
-        // one active broker matches, so it can't be used to enumerate the directory.
-        const { data: resolved } = await supabase.rpc('broker_email_for_phone', { p_phone: id })
-        email = (resolved as string | null) || null
-      }
+      // One SECURITY DEFINER RPC handles every form of the ID.  It bypasses RLS to read
+      // brokers.email, and answers only when exactly one active broker matches, so it
+      // cannot be used to walk the directory.
+      const { data: resolved } = await supabase.rpc('broker_email_for_login', { p_login: id })
+      const email = (resolved as string | null) || null
       if (!email) {
-        toast.error("We couldn't find a broker with that phone number.  Try your full email or ask admin to check your phone is correct.")
+        toast.error("We couldn't find that broker ID or mobile number. Please check it, or ask admin.")
         setLoading(false); return
       }
       const { data, error } = await supabase.auth.signInWithPassword({ email, password })
       if (error) {
         // Generic copy -- the raw Supabase error gives away whether the email exists.
-        toast.error('Phone number or password is wrong.  Please try again.')
+        toast.error('Broker ID or password is wrong.  Please try again.')
         setLoading(false); return
       }
       const { data: broker } = await supabase.from('brokers').select('id').eq('auth_user_id', data.user?.id).maybeSingle()
@@ -55,7 +57,9 @@ export default function BrokerLogin() {
     }
   }
 
-  const looksLikePhone = identifier.length > 0 && !identifier.includes('@')
+  const hint = identifier.includes('@')
+    ? 'Signing in with your email address.'
+    : 'Your broker ID (for example 5120 or FNB05120) or your 10-digit mobile number.'
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-900 to-teal-800 flex items-center justify-center p-4">
@@ -63,26 +67,22 @@ export default function BrokerLogin() {
         <div className="text-center mb-8">
           <div className="w-14 h-14 rounded-2xl bg-emerald-600 flex items-center justify-center text-white font-bold text-2xl mx-auto mb-4">B</div>
           <h1 className="text-2xl font-bold text-gray-900">Broker Portal</h1>
-          <p className="text-gray-500 text-sm mt-1">Sign in with your phone number</p>
+          <p className="text-gray-500 text-sm mt-1">Sign in with your broker ID</p>
         </div>
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Phone number</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Broker ID or mobile number</label>
             <input
-              type="tel"
-              inputMode="tel"
+              type="text"
+              inputMode="text"
               autoComplete="username"
               value={identifier}
               onChange={e => setIdentifier(e.target.value)}
               required
-              placeholder="e.g. 9876543210"
+              placeholder="e.g. 5120 or FNB05120"
               className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
-            <p className="text-[11px] text-gray-400 mt-1">
-              {looksLikePhone
-                ? 'Just type your 10-digit phone number — country code optional.'
-                : 'You can also sign in with your full email if you prefer.'}
-            </p>
+            <p className="text-[11px] text-gray-400 mt-1">{hint}</p>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
@@ -104,6 +104,9 @@ export default function BrokerLogin() {
                 {showPassword ? 'Hide' : 'Show'}
               </button>
             </div>
+            <p className="text-[11px] text-gray-400 mt-1">
+              First time? Your password is your own mobile number. Ask admin to change it after you sign in.
+            </p>
           </div>
           <button
             type="submit"

@@ -73,7 +73,7 @@ export default function CustomerPipeline() {
     queryFn: async () => {
       const today = new Date().toISOString().slice(0, 10)
       const [{ data: c }, { data: bks }] = await Promise.all([
-        supabase.from('bp_customers').select('id, customer_code, name, phone, email, address, father_or_husband_name, pan, dob, nominee_name, nominee_relation').eq('id', customerFocusId!).maybeSingle(),
+        supabase.from('bp_customers').select('id, customer_code, previous_customer_code, name, phone, email, address, father_or_husband_name, pan, dob, nominee_name, nominee_relation').eq('id', customerFocusId!).maybeSingle(),
         supabase.from('bp_bookings').select('id, booking_no, total_amount, plot_total_price, total_collected, stage').eq('customer_id', customerFocusId!),
       ])
       const bookingIds = (bks || []).map((b: any) => b.id)
@@ -135,7 +135,7 @@ export default function CustomerPipeline() {
       const wantsPlot     = searchScope === 'all' || searchScope === 'plot'
       const [cust, brk, plots] = await Promise.all([
         wantsCustomer
-          ? supabase.from('bp_customers').select('id').or(`name.ilike.%${q}%,phone.ilike.%${q}%,customer_code.ilike.%${q}%`).limit(500)
+          ? supabase.from('bp_customers').select('id').or(`name.ilike.%${q}%,phone.ilike.%${q}%,customer_code.ilike.%${q}%,previous_customer_code.ilike.%${q}%`).limit(500)
           : Promise.resolve({ data: [] as any[] }),
         wantsBroker
           ? supabase.from('brokers').select('id').or(`name.ilike.%${q}%,broker_id.ilike.%${q}%`).limit(500)
@@ -824,6 +824,13 @@ export default function CustomerPipeline() {
               <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-lg font-bold text-gray-900">{customerFocus.customer.name || '—'}</h2>
                 <span className="font-mono text-[11px] text-gray-500">[{customerFocus.customer.customer_code || '—'}]</span>
+                {/* The code this person was first issued. It disappears when they are made
+                    a broker, but it is what is written on their older paperwork. */}
+                {customerFocus.customer.previous_customer_code && (
+                  <span className="font-mono text-[11px] text-gray-400" title="Code before this customer became a broker">
+                    (पुराना {customerFocus.customer.previous_customer_code})
+                  </span>
+                )}
                 <span className="text-[10px] uppercase tracking-wide font-semibold bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">Customer view</span>
               </div>
               <div className="text-xs text-gray-600 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
