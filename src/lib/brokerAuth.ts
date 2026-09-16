@@ -36,13 +36,32 @@ export async function signInWithIdOrEmail(identifier: string, password: string):
   const { data, error } = await supabase.auth.signInWithPassword({ email, password })
   if (error || !data?.user) return { ok: false, reason: 'wrong-password' }
 
-  // Which portal does this account belong to?  A broker row linked to the signed-in auth
-  // user means the broker portal; anything else is staff.
-  const { data: broker } = await supabase
-    .from('brokers')
-    .select('id')
-    .eq('auth_user_id', data.user.id)
-    .maybeSingle()
+  const kind = await accountKind()
+  return { ok: true, isBroker: kind === 'broker' }
+}
 
-  return { ok: true, isBroker: !!broker }
+// Which side of the business is the signed-in account on?
+//
+// 'staff'   — an active app_users row: the office.  The admin panel is theirs.
+// 'broker'  — a brokers row linked to this auth user: the broker portal, nothing else.
+// 'neither' — signed in, but belongs to no one.  Treated as a broker would be: kept out.
+//
+// This exists because "is there a session?" was the only question the admin routes asked,
+// and every broker now has a login.  A session proves who you are, not what you may open.
+export type AccountKind = 'staff' | 'broker' | 'neither' | 'signed-out'
+
+export async function accountKind(): Promise<AccountKind> {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return 'signed-out'
+
+  // Staff is checked first and wins: if the same person somehow holds both rows, the
+  // office side is the one they were given deliberately.
+  const [{ data: staff }, { data: broker }] = await Promise.all([
+    supabase.from('app_users').select('id, active').eq('auth_user_id', user.id).maybeSingle(),
+    supabase.from('brokers').select('id').eq('auth_user_id', user.id).maybeSingle(),
+  ])
+
+  if (staff?.active) return 'staff'
+  if (broker) return 'broker'
+  return 'neither'
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
+import { accountKind, type AccountKind } from '@/lib/brokerAuth'
 import { AppLayout } from '@/components/layout/AppLayout.tsx'
 import Login from '@/pages/Login'
 import BrokerLogin from '@/pages/BrokerLogin'
@@ -46,11 +47,37 @@ function HistoryRedirect(){
   return <Navigate to={{ pathname: '/customer-pipeline', search: loc.search }} replace/>
 }
 
+// Gate for the office routes.
+//
+// This used to ask one question — "is there a session?" — and let anyone through who had
+// one.  That was fine while only staff had logins.  Every broker has had one since the
+// portal went live, so a session no longer says anything about which side of the business
+// you are on: a broker could sign in and then simply type /payouts or /expenses in the
+// address bar.  The gate now asks who the account belongs to, and sends a broker to their
+// own dashboard instead of the admin panel.
+//
+// Worth being clear about what this is and is not.  This runs in the browser, so it decides
+// what is SHOWN, not what may be READ — the database decides that, through row-level
+// security.  It is a signpost, not a lock.
 function Guard({children}:{children:any}){
-  const[session,setSession]=useState<any>(undefined)
-  useEffect(()=>{supabase.auth.getSession().then(({data})=>setSession(data.session));const{data:{subscription}}=supabase.auth.onAuthStateChange((_,s)=>setSession(s));return()=>subscription.unsubscribe()},[])
-  if(session===undefined)return<div className="min-h-screen flex items-center justify-center"><div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"/></div>
-  if(!session)return<Navigate to="/login" replace/>
+  const [kind, setKind] = useState<AccountKind | undefined>(undefined)
+
+  useEffect(() => {
+    let active = true
+    const check = () => { accountKind().then(k => { if (active) setKind(k) }) }
+    check()
+    // Re-check on sign-in/sign-out so switching accounts in one tab lands on the right side.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(() => check())
+    return () => { active = false; subscription.unsubscribe() }
+  }, [])
+
+  if (kind === undefined) {
+    return <div className="min-h-screen flex items-center justify-center"><div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"/></div>
+  }
+  if (kind === 'signed-out') return <Navigate to="/login" replace/>
+  if (kind === 'broker')     return <Navigate to="/broker/dashboard" replace/>
+  // Signed in but linked to neither staff nor a broker — nothing here belongs to them.
+  if (kind === 'neither')    return <Navigate to="/login" replace/>
   return children
 }
 
