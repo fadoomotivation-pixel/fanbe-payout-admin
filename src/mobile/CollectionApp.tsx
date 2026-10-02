@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { formatINR, formatDate } from '@/lib/utils'
 import { bookingValue, balanceOf, paidByBooking, sumVerified } from '@/lib/bookingMath'
+import { instalmentDue } from '@/lib/emiStatus'
 import { waLink } from '@/lib/whatsapp'
 import { useCallQueue, useCallHistory, todayISO, type CallTarget } from './useCollection'
 import LogCallSheet from './LogCallSheet'
@@ -351,9 +352,10 @@ function CustomerScreen({ target, onBack, onLog }: { target: CallTarget; onBack:
 
   // Overdue is worked out from the instalments on screen, not carried in from the queue,
   // so the figure is the same whichever list this was opened from.
+  // Shared money rule; "due today or earlier" (<= t) because this is the collector's view.
   const overdue = (emis as any[])
     .filter(e => e.status !== 'paid' && e.due_date <= t)
-    .reduce((s, e) => s + Math.max(0, Number(e.amount || 0) - Number(e.paid_amount || 0)), 0)
+    .reduce((s, e) => s + instalmentDue(e), 0)
 
   const view = {
     name: detail?.name ?? target.name,

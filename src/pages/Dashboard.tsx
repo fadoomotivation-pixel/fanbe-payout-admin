@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { formatINR, formatDate } from '@/lib/utils'
+import { fetchEmiStatusAll } from '@/lib/emiStatus'
 // `Map` is imported under a different name on purpose.  lucide-react exports an icon
 // called Map, and importing it plainly shadows the global Map constructor for this whole
 // file — so `new Map()` further down was calling an icon component with `new` and throwing
@@ -87,7 +88,6 @@ export default function Dashboard() {
       const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0,0,0,0)
       const monthStartISO = monthStart.toISOString()
       const monthStartDay = monthStartISO.slice(0, 10)
-      const today = new Date().toISOString().slice(0, 10)
       const prevMonthStart = new Date(monthStart); prevMonthStart.setMonth(prevMonthStart.getMonth() - 1)
       const prevMonthStartDay = prevMonthStart.toISOString().slice(0, 10)
 
@@ -120,11 +120,16 @@ export default function Dashboard() {
         supabase.from('bp_bookings').select('application_date, total_amount').gte('application_date', sevenDayStart),
         supabase.from('brokers').select('id', { count: 'exact', head: true }).eq('kyc_status', 'pending'),
         supabase.from('bp_bookings').select('id', { count: 'exact', head: true }).not('stage', 'in', '(booking_done,cancelled)'),
-        supabase.from('emi_installments').select('amount, status, due_date').neq('status', 'paid').lt('due_date', today),
         supabase.from('expenses').select('amount, expense_date, broker_id, expense_heads(name)'),
-        // Past the 90-day grace window -> receipts are held back on these bookings.
-        supabase.from('emi_installments').select('amount, due_date, emi_schedules!inner(booking_id)').neq('status', 'paid').lt('due_date', ninetyDaysAgo),
       ])
+
+      // EMI comes from the shared rule (lib/emiStatus), the same one the Customer Pipeline,
+      // the EMI Overdue list and Analytics now read — so the Dashboard's overdue figure is
+      // the figure those pages show.  It used to count instalments due TODAY as overdue and
+      // add the full amount even when part had been paid; it also lived in the batch above,
+      // which is why these two were the only EMI reads left on the old logic.
+      const emiAll = await fetchEmiStatusAll().catch(() => ({} as Record<string, any>))
+      const emiPositions = Object.values(emiAll) as any[]
 
       // Named in the same order as the queries above, so a failure says WHICH one rather
       // than leaving a silent zero to be reverse-engineered from the UI.
@@ -133,7 +138,7 @@ export default function Dashboard() {
         'payments', 'payout distributions', 'payout transactions', 'open withdrawals',
         'recent bookings', 'recent payments', 'new brokers', 'new customers',
         'plot status breakdown', 'week bookings',
-        'kyc pending', 'pipeline active', 'emi overdue', 'expenses', 'lapsed emi',
+        'kyc pending', 'pipeline active', 'expenses',
       ]
       const broken = settled
         .map((r: any, i: number) => (r.status === 'rejected' || r.value?.error
@@ -147,7 +152,7 @@ export default function Dashboard() {
         payments, distributions, payoutTxns, openWds,
         recentBk, recentPm, newBrokersRes, newCustomersRes,
         plotsBreakdown, weekBookings,
-        kycPendingQ, pipelineActiveQ, emiOverdueQ, expensesQ, lapsedQ,
+        kycPendingQ, pipelineActiveQ, expensesQ,
       ] = settled.map((r: any) => (r.status === 'fulfilled' ? r.value : { data: null, count: 0 })) as any[]
 
       // Each block below owns one part of the page and carries its own try.  They used to
@@ -196,8 +201,8 @@ export default function Dashboard() {
       const brokerSet = calc('broker count', () => new Set((distributions.data || []).map((d: any) => d.beneficiary_broker_id).filter(Boolean)), () => new Set<string>())
       const openWdCount = openWds?.count || 0
 
-      const emiOverdueCount = calc('emi overdue count',  () => (emiOverdueQ.data || []).length, () => 0)
-      const emiOverdueAmt   = calc('emi overdue amount', () => (emiOverdueQ.data || []).reduce((s: number, r: any) => s + Number(r.amount || 0), 0), () => 0)
+      const emiOverdueCount = calc('emi overdue count',  () => emiPositions.reduce((s: number, e: any) => s + (e.overdue || 0), 0), () => 0)
+      const emiOverdueAmt   = calc('emi overdue amount', () => emiPositions.reduce((s: number, e: any) => s + (e.amount_overdue || 0), 0), () => 0)
 
       // ── Top broker this month — quick "who's carrying the team" snapshot.  Sums
       // payout_distributions per broker.id within the current month, then resolves the
@@ -297,10 +302,12 @@ export default function Dashboard() {
       })
 
       section('lapsed emi', () => {
-        const lapsedRows = (lapsedQ.data || []) as any[]
+        // A booking has "lapsed" once its oldest unpaid instalment is past the 90-day grace
+        // window — that is the whole booking's arrears held back, not one instalment's.
+        const lapsedList = emiPositions.filter((e: any) => e.oldest_overdue && e.oldest_overdue < ninetyDaysAgo)
         setLapsed({
-          bookings: new Set(lapsedRows.map(r => r.emi_schedules?.booking_id).filter(Boolean)).size,
-          amount: lapsedRows.reduce((acc, r) => acc + Number(r.amount || 0), 0),
+          bookings: lapsedList.length,
+          amount: lapsedList.reduce((acc: number, e: any) => acc + Number(e.amount_overdue || 0), 0),
         })
       })
 

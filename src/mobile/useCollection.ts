@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { bookingValue, balanceOf, paidByBooking } from '@/lib/bookingMath'
+import { instalmentDue } from '@/lib/emiStatus'
 
 // The caller's queue, built once and shared by every screen in the app.
 //
@@ -63,7 +64,10 @@ export function useCallQueue() {
       for (const i of (instRes.data || []) as any[]) {
         const bid = schedToBooking[i.schedule_id]
         if (!bid) continue
-        const due = Math.max(0, Number(i.amount || 0) - Number(i.paid_amount || 0))
+        // Same money rule as every report (lib/emiStatus): what is still owed on the row.
+        // The queue deliberately includes instalments due TODAY (lte above) because a
+        // collector rings on the due date; the reports count only strictly past-due.
+        const due = instalmentDue(i)
         if (due <= 0) continue
         const row = (overdue[bid] ||= { amount: 0, count: 0, oldest: null })
         row.amount += due
