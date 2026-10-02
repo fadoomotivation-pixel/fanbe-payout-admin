@@ -71,7 +71,28 @@ function paymentTypeLabel(t: string | undefined): string {
  *   Bottom half → keep in office binder (company copy)
  * A dashed cut-line and "✂ Cut here" hint sit between the halves.
  */
-export async function printPaymentReceipt(p: any, ctx: { customer?: any; booking?: any; project?: any; plot?: any } = {}) {
+// Who sold this booking.  Admin asked for the broker's name and code to be on the EMI
+// receipt, and the receipt is printed from six different places — the payments page, the
+// EMI panel, the pipeline, the broker portal.  Rather than make all six fetch and pass a
+// broker (six chances to pass the wrong one, or forget), the single receipt function looks
+// it up itself when the caller has not already supplied one.
+async function findBookingBroker(bookingId: string | undefined | null, supplied?: any) {
+  if (supplied?.name || supplied?.broker_id) return supplied
+  if (!bookingId) return null
+  try {
+    const { data: bk } = await supabase
+      .from('bp_bookings').select('broker_id').eq('id', bookingId).maybeSingle()
+    if (!bk?.broker_id) return null
+    const { data: brk } = await supabase
+      .from('brokers').select('name, broker_id, phone').eq('id', bk.broker_id).maybeSingle()
+    return brk || null
+  } catch {
+    // A receipt the customer is waiting for must print even if this lookup fails.
+    return null
+  }
+}
+
+export async function printPaymentReceipt(p: any, ctx: { customer?: any; booking?: any; project?: any; plot?: any; broker?: any } = {}) {
   // Receipts are held back on a booking whose EMI has gone unpaid past the 90-day
   // lapsation window (the same grace period payoutEngine uses).  Admin asked for the
   // block here rather than at each button because this function is the single
@@ -99,6 +120,10 @@ export async function printPaymentReceipt(p: any, ctx: { customer?: any; booking
   const bk   = booking || p.bp_bookings || {}
   const pj   = project || bk.bp_projects || {}
   const pl   = plot || bk.bp_plots || {}
+  const brk  = await findBookingBroker(p.booking_id || bk.id, ctx.broker || bk.brokers)
+  const brokerLine = brk
+    ? `${brk.name || '—'}${brk.broker_id ? ` [${brk.broker_id}]` : ''}`
+    : '—'
   const date = p.payment_date ? new Date(p.payment_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
   const amount = Number(p.amount || 0)
   const inWords = p.rupees_in_words || toWordsINR(amount)
@@ -144,6 +169,7 @@ export async function printPaymentReceipt(p: any, ctx: { customer?: any; booking
         <div class="row"><div class="lbl">Plot &amp; Size</div><div class="val">${pl.plot_no || pl.plot_number || '—'}${pl.size_sqyd ? ' / ' + pl.size_sqyd + ' sq.yd' : ''}</div></div>
         <div class="row"><div class="lbl">Project</div><div class="val">${pj.name || pj.project_name || '—'}</div></div>
         <div class="row"><div class="lbl">Booking No</div><div class="val">${bk.booking_no || '—'}</div></div>
+        <div class="row"><div class="lbl">Broker / Agent</div><div class="val">${brokerLine}</div></div>
         <div class="row"><div class="lbl">Mode</div><div class="val">${(p.payment_mode || '—').toUpperCase()}${p.instalment_no ? ' · Instalment ' + p.instalment_no : ''}</div></div>
         <div class="row"><div class="lbl">${p.payment_mode === 'cheque' ? 'Cheque No' : p.payment_mode === 'dd' ? 'Draft No' : 'UTR / Ref'}</div><div class="val">${p.utr_ref || p.reference_no || (p.payment_mode === 'cash' ? 'Cash' : '—')}</div></div>
         <div class="row"><div class="lbl">Drawn On / Branch</div><div class="val">${(p.drawn_on_bank || (p.payment_mode === 'cash' ? 'Cash' : '—'))}${p.branch ? ' · ' + p.branch : ''}</div></div>
@@ -379,4 +405,148 @@ export function printApplicationForm(b: any, ctx: { customer?: any; project?: an
 // meant a popup and a dialog per booking, which the browser blocks after the first few.
 export function printApplicationForms(items: { b: any; ctx?: any }[]) {
   openApplicationForms(items, `Application Forms \u2014 ${items.length}`)
+}
+
+// ── Expense payment voucher ─────────────────────────────────────────
+//
+// Admin: "expense ka print out kr sake" / "expenses voucher reciept printing option".
+//
+// A payment voucher is not a receipt.  A receipt says money came IN and is given to the
+// customer; a voucher says money went OUT and is the office's own record — it carries who
+// authorised it, who handed the cash over, who took it, and a signature from the person
+// who received it.  That last signature is the whole point: without it there is nothing on
+// paper tying a name to the cash, which is exactly the gap the "paid to" field was added
+// for.  So this prints two halves on one A4: the office keeps one, the payee signs and
+// returns the other.
+
+type VoucherCtx = { head?: string; broker?: any }
+
+function voucherBody(e: any, ctx: VoucherCtx = {}, copyLabel: string) {
+  const amount = Number(e.amount || 0)
+  const date = e.expense_date
+    ? new Date(e.expense_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+    : '—'
+  const brk = ctx.broker
+  const brokerLine = brk ? `${brk.name || '—'}${brk.broker_id ? ` [${brk.broker_id}]` : ''}` : ''
+  const mode = (e.payment_mode || '—').toUpperCase()
+  // A cash payment has no reference to quote, so say "Cash" rather than leave a blank that
+  // looks like a missing field.
+  const refLabel = e.payment_mode === 'cheque' ? 'Cheque No' : e.payment_mode === 'cash' ? 'Reference' : 'UTR / Ref'
+  const refValue = e.reference_no || (e.payment_mode === 'cash' ? 'Cash payment' : '—')
+
+  return `
+    <section class="half">
+      <div class="copy-tag">${copyLabel}</div>
+      <div class="head">
+        <div class="brand">
+          FANBE DEVELOPERS
+          <small>2nd Floor, Balaji Tower, Plot No.35, Nathu Colony, Opp. Agarwal Dharamshala, Ballabgarh, Faridabad</small>
+          <small>www.fanbeindia.com &middot; fanbeindia@gmail.com</small>
+        </div>
+        <div class="meta">
+          <div>Voucher No</div>
+          <div class="vno">${e.voucher_no || '—'}</div>
+          <div>Date: <b>${date}</b></div>
+        </div>
+      </div>
+
+      <h2>PAYMENT VOUCHER</h2>
+
+      <div class="grid">
+        <div class="row"><div class="lbl">Paid to</div><div class="val strong">${e.paid_to || '<span class="miss">not recorded</span>'}</div></div>
+        <div class="row"><div class="lbl">Expense head</div><div class="val">${ctx.head || '—'}</div></div>
+        <div class="row"><div class="lbl">Particulars</div><div class="val">${e.item_name || '—'}</div></div>
+        ${brokerLine ? `<div class="row"><div class="lbl">Broker / Agent</div><div class="val">${brokerLine}</div></div>` : ''}
+        <div class="row"><div class="lbl">Mode</div><div class="val">${mode}</div></div>
+        <div class="row"><div class="lbl">${refLabel}</div><div class="val">${refValue}</div></div>
+        <div class="row"><div class="lbl">Paid by</div><div class="val">${e.paid_by || '—'}</div></div>
+        <div class="row"><div class="lbl">Approved by</div><div class="val">${e.responsible_person || '—'}</div></div>
+        ${e.description ? `<div class="row wide"><div class="lbl">Notes</div><div class="val">${e.description}</div></div>` : ''}
+      </div>
+
+      <div class="amount">
+        <div class="v">${formatINR(amount)}</div>
+        <div class="w">${toWordsINR(amount)}</div>
+      </div>
+
+      <div class="declare">Received the above sum in full and final settlement of the particulars stated.</div>
+
+      <div class="sig">
+        <div class="box">Receiver&rsquo;s Signature<br/><small>${e.paid_to || ''}</small></div>
+        <div class="box">Prepared / Paid by<br/><small>${e.paid_by || ''}</small></div>
+        <div class="box">For FANBE DEVELOPERS<br/>Authorised Signatory</div>
+      </div>
+    </section>
+  `
+}
+
+const VOUCHER_CSS = `
+  @page { size: A4 portrait; margin: 0 }
+  * { box-sizing: border-box }
+  body { font-family:'Helvetica Neue',Arial,sans-serif; color:#0f172a; font-size:11px; margin:0; padding:0; background:#fff }
+  .page { width:210mm; min-height:297mm; padding:12mm; display:flex; flex-direction:column; gap:8mm }
+  .half { position:relative; flex:1 1 0; padding:6mm 8mm; border:1px solid #cbd5e1; border-radius:6px; background:#fff }
+  .copy-tag { position:absolute; top:6mm; right:8mm; font-size:9px; font-weight:700; letter-spacing:1px; color:#94a3b8 }
+  .head { display:flex; justify-content:space-between; gap:10mm; border-bottom:2px solid #0f172a; padding-bottom:3mm }
+  .brand { font-size:16px; font-weight:900; letter-spacing:0.5px; line-height:1.15 }
+  .brand small { display:block; font-size:8px; font-weight:400; color:#64748b; letter-spacing:0; margin-top:1.5mm }
+  .meta { text-align:right; font-size:9px; color:#64748b; white-space:nowrap }
+  .meta .vno { font-size:14px; font-weight:800; color:#b45309; letter-spacing:0.5px; margin:0.5mm 0 1mm }
+  h2 { font-size:12px; letter-spacing:2px; text-align:center; margin:4mm 0 3mm; color:#b45309 }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:1.5mm 6mm }
+  .row { display:flex; gap:2mm; align-items:baseline; border-bottom:1px dotted #cbd5e1; padding-bottom:1mm }
+  .row.wide { grid-column:1 / -1 }
+  .lbl { color:#64748b; font-size:9px; min-width:26mm }
+  .val { font-weight:600; flex:1 }
+  .val.strong { font-size:12px }
+  .miss { color:#b45309; font-weight:500; font-style:italic }
+  .amount { margin-top:4mm; padding:3mm 4mm; background:#fffbeb; border:1px solid #fde68a; border-radius:4px; display:flex; justify-content:space-between; align-items:center; gap:6mm }
+  .amount .v { font-size:18px; font-weight:900; color:#92400e; white-space:nowrap }
+  .amount .w { font-size:9.5px; color:#78350f; text-align:right; font-style:italic }
+  .declare { margin-top:3mm; font-size:9px; color:#475569; font-style:italic }
+  .sig { display:flex; gap:8mm; margin-top:9mm }
+  .sig .box { flex:1; border-top:1px solid #0f172a; padding-top:1.5mm; font-size:9px; text-align:center; color:#475569 }
+  .sig .box small { color:#94a3b8; font-size:8px }
+  .toolbar { position:fixed; top:0; left:0; right:0; display:flex; gap:10px; justify-content:center; align-items:center; padding:10px; background:#0f172a; z-index:9999 }
+  .toolbar button { font:600 13px/1 'Helvetica Neue',Arial,sans-serif; padding:9px 18px; border-radius:8px; border:0; cursor:pointer }
+  .toolbar .pr { background:#16a34a; color:#fff }
+  .toolbar .cl { background:#334155; color:#e2e8f0 }
+  .toolbar span { color:#94a3b8; font:500 11px/1.3 'Helvetica Neue',Arial,sans-serif }
+  @media print { .toolbar, .toolbar-spacer { display:none !important } }
+`
+
+function openVouchers(items: { e: any; ctx?: VoucherCtx }[], title: string) {
+  if (items.length === 0) return
+  // One sheet per voucher, office copy above payee copy — the same two-up arrangement the
+  // payment receipt uses, so the office files both documents the same way.
+  const pages = items
+    .map(it => `<div class="page">${voucherBody(it.e, it.ctx || {}, 'OFFICE COPY')}${voucherBody(it.e, it.ctx || {}, 'PAYEE COPY')}</div>`)
+    .join('<div style="break-after:page;page-break-after:always"></div>')
+
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"/><title>${title}</title>
+<style>${VOUCHER_CSS}</style></head>
+<body>
+  <div class="toolbar">
+    <button class="pr" onclick="window.print()">\u{1F5A8} Print${items.length > 1 ? ` ${items.length} vouchers` : ' voucher'}</button>
+    <button class="cl" onclick="window.close()">Close</button>
+    <span>Cancelled the dialog? Tap Print again.</span>
+  </div>
+  <div class="toolbar-spacer" style="height:48px"></div>
+  ${pages}
+  <script>window.onload=()=>setTimeout(()=>window.print(),200)</script>
+</body></html>`
+
+  const w = window.open('', '_blank', 'width=900,height=1100')
+  if (w) { w.document.write(html); w.document.close() }
+}
+
+export function printExpenseVoucher(e: any, ctx: VoucherCtx = {}) {
+  openVouchers([{ e, ctx }], `Voucher ${e.voucher_no || ''}`)
+}
+
+// Bulk print for a filtered period — one window and one dialog, because a popup per
+// voucher is blocked by the browser after the first few.
+export function printExpenseVouchers(items: { e: any; ctx?: VoucherCtx }[]) {
+  openVouchers(items, `Vouchers — ${items.length}`)
 }

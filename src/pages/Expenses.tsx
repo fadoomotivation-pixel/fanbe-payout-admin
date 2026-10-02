@@ -14,8 +14,9 @@ import { Input, Select, Textarea } from '@/components/ui/Input.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import {
   Plus, Search, Download, X, Pencil, Trash2, Tag, Wallet,
-  TrendingUp, TrendingDown, AlertTriangle, Users,
+  TrendingUp, TrendingDown, AlertTriangle, Users, Printer, Banknote, Smartphone,
 } from 'lucide-react'
+import { printExpenseVoucher, printExpenseVouchers } from '@/lib/printTemplates'
 import toast from 'react-hot-toast'
 
 type Head = { id: string; name: string; active?: boolean }
@@ -26,6 +27,18 @@ type Row = {
   responsible_person: string | null; broker_id: string | null
   paid_to: string | null; paid_by: string | null
   payment_mode: string | null; reference_no: string | null
+  voucher_no: string | null
+}
+
+// Cash leaving the drawer and money moving through a bank are two different control
+// problems — cash needs a signature, a transfer leaves its own trail — so the split is
+// shown rather than left for someone to work out from the table.
+const ONLINE_MODES = ['upi', 'bank', 'cheque', 'neft', 'imps', 'rtgs', 'online']
+function isCashMode(mode: string | null | undefined) {
+  const m = (mode || '').trim().toLowerCase()
+  // Anything not recognised as a bank route counts as cash: an unlabelled payment is far
+  // more likely to be cash out of the drawer, and over-reporting cash is the safer error.
+  return m === '' || m === 'cash' || !ONLINE_MODES.includes(m)
 }
 
 // Heads that are about money owed to / taken by a specific broker.  Picking one makes
@@ -109,7 +122,11 @@ export default function Expenses() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('expenses')
-        .select('id,item_name,amount,head_id,expense_date,description,responsible_person,broker_id,paid_to,paid_by,payment_mode,reference_no')
+        // Deliberately '*' rather than a column list.  voucher_no arrives with the
+        // migration that adds it, and naming a column PostgREST does not have yet turns
+        // the whole page into an error — so the page reads whatever the table currently
+        // has and the voucher simply prints without a number until the migration lands.
+        .select('*')
         .order('expense_date', { ascending: false })
         .limit(2000)
       if (error) throw error
@@ -182,15 +199,51 @@ export default function Expenses() {
   // Advances are the spend that quietly reduces what a broker can withdraw, so they get
   // their own panel rather than being buried in the table.
   const advanceHeadIds = heads.filter(h => (h.name || '').toLowerCase() === 'advance').map(h => h.id)
+
+  // "Agent advance list — how much the company has already given out."
+  // All time, not the selected period: an advance given in March is still money the
+  // company is owed in October, so narrowing it to a date window would hide the debt.
   const advancesByBroker = useMemo(() => {
-    const m = new Map<string, number>()
+    const m = new Map<string, { amount: number; count: number; last: string }>()
     for (const r of all) {
       if (!r.broker_id || !r.head_id || !advanceHeadIds.includes(r.head_id)) continue
-      m.set(r.broker_id, (m.get(r.broker_id) || 0) + Number(r.amount || 0))
+      const cur = m.get(r.broker_id) || { amount: 0, count: 0, last: '' }
+      cur.amount += Number(r.amount || 0)
+      cur.count  += 1
+      if (!cur.last || (r.expense_date || '') > cur.last) cur.last = r.expense_date || ''
+      m.set(r.broker_id, cur)
     }
-    return [...m.entries()].sort((a, b) => b[1] - a[1])
+    return [...m.entries()].sort((a, b) => b[1].amount - a[1].amount)
   }, [all, heads])
-  const advanceTotal = advancesByBroker.reduce((s, [, v]) => s + v, 0)
+  const advanceTotal = advancesByBroker.reduce((s, [, v]) => s + v.amount, 0)
+  const advanceCount = advancesByBroker.reduce((s, [, v]) => s + v.count, 0)
+
+  // "Voucher — how much spend by cash or online", for the window currently on screen.
+  const cashVsOnline = useMemo(() => {
+    let cash = 0, online = 0, cashN = 0, onlineN = 0, unlabelled = 0
+    for (const r of rows) {
+      const amt = Number(r.amount || 0)
+      if (isCashMode(r.payment_mode)) { cash += amt; cashN++ } else { online += amt; onlineN++ }
+      if (!r.payment_mode) unlabelled++
+    }
+    const tot = cash + online
+    return {
+      cash, online, cashN, onlineN, unlabelled,
+      cashPct:   tot > 0 ? Math.round((cash / tot) * 100) : 0,
+      onlinePct: tot > 0 ? Math.round((online / tot) * 100) : 0,
+    }
+  }, [rows])
+
+  // Printing needs the head name and the broker, which the expense row only holds as ids.
+  const voucherCtx = (r: Row) => ({
+    head: headNameOf(r.head_id),
+    broker: r.broker_id ? brokerById[r.broker_id] : undefined,
+  })
+  const printOne  = (r: Row) => printExpenseVoucher(r, voucherCtx(r))
+  const printMany = () => {
+    if (rows.length === 0) { toast.error('Nothing to print in this period.'); return }
+    printExpenseVouchers(rows.map(r => ({ e: r, ctx: voucherCtx(r) })))
+  }
 
   const openAdd = () => { setForm({ ...EMPTY_FORM }); setModal(true) }
   const openEdit = (r: Row) => {
@@ -277,6 +330,9 @@ export default function Expenses() {
         <div className="flex gap-2">
           <Button variant="secondary" onClick={() => setHeadsModal(true)}><Tag size={14}/>Heads</Button>
           <Button variant="secondary" onClick={exportCsv}><Download size={14}/>Export</Button>
+          <Button variant="secondary" onClick={printMany} title="Print a payment voucher for every expense in this period">
+            <Printer size={14}/>Print vouchers ({rows.length})
+          </Button>
           <Button onClick={openAdd}><Plus size={14}/>Add expense</Button>
         </div>
       </div>
@@ -327,6 +383,44 @@ export default function Expenses() {
         </div>
       </div>
 
+      {/* Cash vs online.  Cash is the half that needs a signed voucher to be accounted
+          for, so admin needs to see at a glance how much of the period left the drawer. */}
+      <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+          <h2 className="text-sm font-semibold text-gray-900">How it was paid</h2>
+          {cashVsOnline.unlabelled > 0 && (
+            <span className="text-[11px] text-amber-700 inline-flex items-center gap-1">
+              <AlertTriangle size={11}/>
+              {cashVsOnline.unlabelled} entr{cashVsOnline.unlabelled === 1 ? 'y has' : 'ies have'} no mode recorded — counted as cash
+            </span>
+          )}
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3">
+            <div className="flex items-center gap-2 text-emerald-900">
+              <Banknote size={14}/><span className="text-xs font-semibold uppercase tracking-wide">By cash</span>
+              <span className="ml-auto text-[11px] text-emerald-700">{cashVsOnline.cashN} entr{cashVsOnline.cashN === 1 ? 'y' : 'ies'}</span>
+            </div>
+            <div className="text-2xl font-bold text-emerald-900 mt-1">{formatINR(cashVsOnline.cash)}</div>
+            <div className="text-[11px] text-emerald-700">{cashVsOnline.cashPct}% of this period</div>
+          </div>
+          <div className="rounded-lg border border-blue-200 bg-blue-50/50 p-3">
+            <div className="flex items-center gap-2 text-blue-900">
+              <Smartphone size={14}/><span className="text-xs font-semibold uppercase tracking-wide">Online / bank</span>
+              <span className="ml-auto text-[11px] text-blue-700">{cashVsOnline.onlineN} entr{cashVsOnline.onlineN === 1 ? 'y' : 'ies'}</span>
+            </div>
+            <div className="text-2xl font-bold text-blue-900 mt-1">{formatINR(cashVsOnline.online)}</div>
+            <div className="text-[11px] text-blue-700">{cashVsOnline.onlinePct}% · UPI, bank transfer or cheque</div>
+          </div>
+        </div>
+        {(cashVsOnline.cash > 0 || cashVsOnline.online > 0) && (
+          <div className="mt-3 h-2 rounded-full overflow-hidden bg-gray-100 flex">
+            <div className="bg-emerald-500 h-full" style={{ width: `${cashVsOnline.cashPct}%` }} title={`Cash ${cashVsOnline.cashPct}%`}/>
+            <div className="bg-blue-500 h-full" style={{ width: `${cashVsOnline.onlinePct}%` }} title={`Online ${cashVsOnline.onlinePct}%`}/>
+          </div>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Where the money went — proportional bars beat a pie for reading exact splits. */}
         <div className="bg-white border border-gray-200 rounded-xl p-4">
@@ -353,16 +447,32 @@ export default function Expenses() {
         {/* Advances get their own panel: this money is already out of the door AND it
             reduces what each broker can withdraw, so it needs to be visible by name. */}
         <div className="bg-white border border-gray-200 rounded-xl p-4">
-          <h2 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-1.5"><Wallet size={14} className="text-amber-600"/>Broker advances</h2>
-          <p className="text-[11px] text-gray-500 mb-3">Deducted from what each broker can withdraw until recovered.</p>
+          <h2 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-1.5"><Wallet size={14} className="text-amber-600"/>Agent advances</h2>
+          <p className="text-[11px] text-gray-500 mb-3">What the company has already paid out in advance. Deducted from what each agent can withdraw until recovered.</p>
+
+          <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 mb-3">
+            <div className="text-[10px] uppercase tracking-wide text-amber-800 font-semibold">Company has given out</div>
+            <div className="text-xl font-bold text-amber-900 tabular-nums">{formatINR(advanceTotal)}</div>
+            <div className="text-[11px] text-amber-700">
+              {advanceCount} advance{advanceCount === 1 ? '' : 's'} to {advancesByBroker.length} agent{advancesByBroker.length === 1 ? '' : 's'} · all time
+            </div>
+          </div>
+
           {advancesByBroker.length === 0 ? (
-            <p className="text-xs text-gray-400">No advances given.</p>
+            <p className="text-xs text-gray-400">
+              No advances given yet. Record one by adding an expense under the <b>Advance</b> head and picking the agent.
+            </p>
           ) : (
             <ul className="space-y-1.5 max-h-48 overflow-y-auto">
-              {advancesByBroker.map(([bid, amt]) => (
-                <li key={bid} className="flex justify-between text-xs">
-                  <span className="text-gray-700 truncate">{brokerLabel(bid)}</span>
-                  <span className="font-semibold text-amber-800 tabular-nums shrink-0 ml-2">{formatINR(amt)}</span>
+              {advancesByBroker.map(([bid, v]) => (
+                <li key={bid} className="flex justify-between items-start text-xs gap-2">
+                  <span className="min-w-0">
+                    <span className="text-gray-700 truncate block">{brokerLabel(bid)}</span>
+                    <span className="text-[10px] text-gray-400">
+                      {v.count} advance{v.count === 1 ? '' : 's'}{v.last ? ` · last ${formatDate(v.last)}` : ''}
+                    </span>
+                  </span>
+                  <span className="font-semibold text-amber-800 tabular-nums shrink-0">{formatINR(v.amount)}</span>
                 </li>
               ))}
             </ul>
@@ -456,6 +566,7 @@ export default function Expenses() {
                         : <span className="text-amber-500" title="Nobody is recorded as having received this money">not recorded</span>}
                     </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
+                      <button onClick={() => printOne(r)} className="p-1.5 rounded-md text-gray-400 hover:text-amber-700 hover:bg-amber-50" title={`Print payment voucher${r.voucher_no ? ` ${r.voucher_no}` : ''}`}><Printer size={13}/></button>
                       <button onClick={() => openEdit(r)} className="p-1.5 rounded-md text-gray-400 hover:text-blue-700 hover:bg-blue-50" title="Edit"><Pencil size={13}/></button>
                       <button onClick={() => setDeleteFor(r)} className="p-1.5 rounded-md text-gray-400 hover:text-red-700 hover:bg-red-50" title="Delete"><Trash2 size={13}/></button>
                     </td>

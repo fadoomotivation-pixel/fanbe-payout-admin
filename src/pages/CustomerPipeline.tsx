@@ -13,6 +13,7 @@ import { printApplicationForm, printApplicationForms, printPaymentReceipt } from
 import { getCurrentUserId } from '@/lib/closure'
 import { bookingValue, balanceOf, paidByBooking, isFullyPaid, isRegistryDone } from '@/lib/bookingMath'
 import { waLink } from '@/lib/whatsapp'
+import { fetchEmiStatus, type EmiStatus } from '@/lib/emiStatus'
 import { deleteBookingSafely } from '@/lib/deleteBooking'
 import DeleteBookingModal from '@/components/DeleteBookingModal'
 import EmiPanel from '@/components/EmiPanel'
@@ -52,6 +53,9 @@ export default function CustomerPipeline() {
   const [searchScope, setSearchScope] = useState<'all' | 'customer' | 'broker' | 'booking' | 'plot'>('all')
   const [filterBroker, setFilterBroker] = useState('')
   const [filterProject, setFilterProject] = useState('')
+  // MLM and traditional sales pay commission by completely different rules, and with 806
+  // traditional against 71 MLM the MLM customers were impossible to find in one list.
+  const [filterMode, setFilterMode] = useState<'' | 'mlm' | 'traditional'>('')
   const [page, setPage] = useState(0)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [emiBooking, setEmiBooking] = useState<any>(null)
@@ -116,11 +120,11 @@ export default function CustomerPipeline() {
   }, [search])
 
   // Reset to page 0 whenever any filter changes — current page may not exist in the new result set.
-  useEffect(() => { setPage(0) }, [tab, debouncedSearch, searchScope, filterBroker, filterProject])
+  useEffect(() => { setPage(0) }, [tab, debouncedSearch, searchScope, filterBroker, filterProject, filterMode])
 
   // Drop the print selection when the list underneath it changes.  Keeping it would show
   // "5 selected" while only the 2 still on screen could actually be printed.
-  useEffect(() => { setSelected(new Set()) }, [tab, debouncedSearch, searchScope, filterBroker, filterProject, page])
+  useEffect(() => { setSelected(new Set()) }, [tab, debouncedSearch, searchScope, filterBroker, filterProject, filterMode, page])
 
   // Server-side search: resolve customer/broker IDs that match the query, then constrain bookings
   // via OR across booking_no.ilike and the resolved IDs.  PostgREST can't filter on nested table
@@ -212,7 +216,7 @@ export default function CustomerPipeline() {
   })
 
   // Build the bookings query: server-side filter + sort + range pagination + count.
-  const bookingsQueryKey = useMemo(() => ['cp_bookings_page', tab, debouncedSearch, searchScope, filterBroker, filterProject, page, searchTargets, customerFocusId, todayWork?.ids], [tab, debouncedSearch, searchScope, filterBroker, filterProject, page, searchTargets, customerFocusId, todayWork?.ids])
+  const bookingsQueryKey = useMemo(() => ['cp_bookings_page', tab, debouncedSearch, searchScope, filterBroker, filterProject, filterMode, page, searchTargets, customerFocusId, todayWork?.ids], [tab, debouncedSearch, searchScope, filterBroker, filterProject, filterMode, page, searchTargets, customerFocusId, todayWork?.ids])
   const { data: pageResult, isLoading } = useQuery({
     // On the Today tab the id list has to be resolved first, otherwise the page would
     // briefly show every booking before narrowing.
@@ -246,6 +250,10 @@ export default function CustomerPipeline() {
       if (tab === 'today' && todayWork) q = q.in('id', todayWork.ids)
       if (filterBroker)  q = q.eq('broker_id',  filterBroker)
       if (filterProject) q = q.eq('project_id', filterProject)
+      // Older rows predate commission_mode and carry NULL; those are MLM, which is
+      // what the business ran on before traditional deals existed.
+      if (filterMode === 'traditional') q = q.eq('commission_mode', 'traditional')
+      if (filterMode === 'mlm')         q = q.or('commission_mode.is.null,commission_mode.eq.mlm')
 
       if (debouncedSearch) {
         const orParts: string[] = []
@@ -327,40 +335,14 @@ export default function CustomerPipeline() {
     },
   })
 
-  const { data: emiSummary = {} } = useQuery<Record<string, { schedule_id: string; n: number; paid: number; partial: number; overdue: number; next_due: string | null; per_inst: number }>>({
+  // Reads the shared EMI summary rather than working it out again here.  This page had
+  // its own copy of the sum, the EMI panel had another, and Analytics counted straight off
+  // the instalments table — three answers to one question is how two screens end up
+  // disagreeing about who is overdue.
+  const { data: emiSummary = {} } = useQuery<Record<string, EmiStatus>>({
     queryKey: ['cp_emi', bookingIds],
     enabled: bookingIds.length > 0,
-    queryFn: async () => {
-      const { data: scheds } = await supabase
-        .from('emi_schedules')
-        .select('id, booking_id, num_installments')
-        .in('booking_id', bookingIds)
-      const schedIds = (scheds || []).map((s: any) => s.id)
-      if (schedIds.length === 0) return {}
-      const { data: insts } = await supabase
-        .from('emi_installments')
-        .select('schedule_id, due_date, amount, paid_amount, status')
-        .in('schedule_id', schedIds)
-      const schedToBooking: Record<string, string> = {}
-      for (const s of (scheds || [])) schedToBooking[s.id] = s.booking_id
-      const todayStr = today()
-      const out: Record<string, any> = {}
-      for (const s of (scheds || [])) {
-        const bid = schedToBooking[s.id]
-        out[bid] = { schedule_id: s.id, n: s.num_installments, paid: 0, partial: 0, overdue: 0, next_due: null as string | null, per_inst: 0 }
-      }
-      for (const i of (insts || [])) {
-        const bid = schedToBooking[i.schedule_id]
-        if (!bid) continue
-        const row = out[bid]
-        if (!row.per_inst && i.amount) row.per_inst = i.amount
-        if (i.status === 'paid')    row.paid++
-        if (i.status === 'partial') row.partial++
-        if (i.status !== 'paid' && i.due_date < todayStr) row.overdue++
-        if (i.status !== 'paid' && (!row.next_due || i.due_date < row.next_due)) row.next_due = i.due_date
-      }
-      return out
-    },
+    queryFn: () => fetchEmiStatus(bookingIds),
   })
 
   // Post-dated cheques held against each booking.  Shown on the row because "kitne cheque
@@ -908,6 +890,16 @@ export default function CustomerPipeline() {
           <option value="">All projects</option>
           {(projects as any[]).map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
+        {/* Sale type.  Kept as a pill group rather than a fourth dropdown because admin
+            flips between the two books constantly, and a dropdown hides which one is on. */}
+        <div className="inline-flex rounded-full border border-gray-200 overflow-hidden text-sm bg-white">
+          <button onClick={() => setFilterMode('')}
+            className={`px-3 py-2.5 ${filterMode === '' ? 'bg-gray-900 text-white' : 'text-gray-700 hover:bg-gray-50'}`}>All</button>
+          <button onClick={() => setFilterMode('mlm')}
+            className={`px-3 py-2.5 border-l border-gray-200 ${filterMode === 'mlm' ? 'bg-blue-600 text-white' : 'text-blue-700 hover:bg-blue-50'}`}>MLM</button>
+          <button onClick={() => setFilterMode('traditional')}
+            className={`px-3 py-2.5 border-l border-gray-200 ${filterMode === 'traditional' ? 'bg-amber-600 text-white' : 'text-amber-700 hover:bg-amber-50'}`}>Traditional</button>
+        </div>
         <span className="text-[12px] text-gray-400 tabular-nums ml-auto">
           {totalBookings.toLocaleString('en-IN')} result{totalBookings === 1 ? '' : 's'}
         </span>
@@ -1099,9 +1091,26 @@ export default function CustomerPipeline() {
                 {r.pm.count > 0 && (
                   <span className="text-gray-400">{r.pm.count} receipt{r.pm.count === 1 ? '' : 's'}</span>
                 )}
+                {/* Which commission rule this sale runs on.  Shown on every row because the
+                    two books are managed differently and were indistinguishable in a list. */}
+                <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 font-bold border text-[9px] ${
+                  r.commission_mode === 'traditional'
+                    ? 'text-amber-800 bg-amber-50 border-amber-200'
+                    : 'text-blue-800 bg-blue-50 border-blue-200'}`}>
+                  {r.commission_mode === 'traditional' ? 'TRAD' : 'MLM'}
+                </span>
+                {/* How much EMI is still to come — the question admin asked to see without
+                    opening each row. */}
+                {r.emi && r.emi.amount_left > 0 && (
+                  <span className="inline-flex items-center gap-1 text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-full px-1.5 py-0.5 font-medium"
+                    title={`${r.emi.left} of ${r.emi.total} instalments still to pay`}>
+                    EMI left {formatINR(r.emi.amount_left)}
+                  </span>
+                )}
                 {r.emi?.overdue > 0 && (
-                  <span className="inline-flex items-center gap-1 text-rose-700 bg-rose-50 border border-rose-200 rounded-full px-1.5 py-0.5 font-semibold">
-                    <AlertTriangle size={10}/>{r.emi.overdue} EMI overdue
+                  <span className="inline-flex items-center gap-1 text-rose-700 bg-rose-50 border border-rose-200 rounded-full px-1.5 py-0.5 font-semibold"
+                    title={`${formatINR(r.emi.amount_overdue)} past its due date`}>
+                    <AlertTriangle size={10}/>{r.emi.overdue} EMI overdue · {formatINR(r.emi.amount_overdue)}
                   </span>
                 )}
 
@@ -1204,11 +1213,18 @@ export default function CustomerPipeline() {
 
                     <DetailRow
                       icon={r.emi ? (r.emi.overdue > 0 ? '◴' : '✓') : '○'}
-                      label="EMI"
+                      label="EMI left"
                       value={
                         r.emi
-                          ? `${r.emi.paid + r.emi.partial}/${r.emi.n}${r.emi.overdue > 0 ? ` · ${r.emi.overdue} overdue` : r.emi.next_due ? ` · next ${formatDate(r.emi.next_due)}` : ''}`
+                          ? `${formatINR(r.emi.amount_left)} · ${r.emi.left} of ${r.emi.total} instalment${r.emi.left === 1 ? '' : 's'}`
                           : r.hasBooking ? 'no schedule yet' : '—'
+                      }
+                      sub={
+                        r.emi
+                          ? (r.emi.overdue > 0
+                              ? `${r.emi.overdue} overdue · ${formatINR(r.emi.amount_overdue)} past due`
+                              : r.emi.next_due ? `next ${formatDate(r.emi.next_due)}${r.emi.per_inst ? ` · ${formatINR(r.emi.per_inst)} ea` : ''}` : undefined)
+                          : undefined
                       }
                       tone={r.emi ? (r.emi.overdue > 0 ? 'rose' : 'blue') : 'gray'}/>
 

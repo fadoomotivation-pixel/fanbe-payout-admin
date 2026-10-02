@@ -250,13 +250,16 @@ export default function Analytics() {
           sub={`${totals.marginPct}% margin · cash − commissions`}
           tone={totals.margin >= 0 ? 'emerald' : 'rose'}
         />
+        {/* Opens the overdue list itself.  This tile used to point at the pipeline's EMI
+            tab, which lists every booking that HAS a plan rather than the ones that are
+            late — so the figure led nowhere anyone could act on. */}
         <KpiCard
           icon={<AlertCircle size={14}/>}
           label="EMI Overdue (today)"
           value={formatINR(totals.pendingEmi)}
           sub={`${totals.pendingEmiCount} past-due instalments`}
           tone={totals.pendingEmi > 0 ? 'rose' : 'gray'}
-          href={totals.pendingEmiCount > 0 ? '/customer-pipeline?tab=emi_active' : undefined}
+          href={totals.pendingEmiCount > 0 ? '/emi-overdue' : undefined}
         />
       </div>
 
