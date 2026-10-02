@@ -1,5 +1,6 @@
 import { formatINR } from './utils'
 import { supabase } from './supabase'
+import { fetchEmiStatus } from './emiStatus'
 
 // Receipts printed more than once must be marked DUPLICATE COPY (admin: "duplicate
 // receipt if customer took 2nd recipt it should show").  We know a reprint two ways:
@@ -124,6 +125,23 @@ export async function printPaymentReceipt(p: any, ctx: { customer?: any; booking
   const brokerLine = brk
     ? `${brk.name || '—'}${brk.broker_id ? ` [${brk.broker_id}]` : ''}`
     : '—'
+
+  // On an EMI receipt, show where the plan has reached, so the customer's copy doubles as a
+  // mini statement: how many kist done, how many left, and the next due date.  Read from the
+  // shared rule, so it matches the pipeline and the EMI card.  Any failure is swallowed — a
+  // receipt must print regardless.
+  let emiLine = ''
+  if ((p.payment_type === 'emi') && (p.booking_id || bk.id)) {
+    try {
+      const st = (await fetchEmiStatus([p.booking_id || bk.id]))[p.booking_id || bk.id]
+      if (st) {
+        const paidCount = st.total - st.left
+        emiLine = `${paidCount} of ${st.total} paid · ${st.left} left`
+          + (st.amount_left > 0 ? ` · ${formatINR(st.amount_left)} balance` : '')
+          + (st.next_due ? ` · next due ${new Date(st.next_due).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}` : '')
+      }
+    } catch { /* receipt prints without it */ }
+  }
   const date = p.payment_date ? new Date(p.payment_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
   const amount = Number(p.amount || 0)
   const inWords = p.rupees_in_words || toWordsINR(amount)
@@ -169,6 +187,7 @@ export async function printPaymentReceipt(p: any, ctx: { customer?: any; booking
         <div class="row"><div class="lbl">Plot &amp; Size</div><div class="val">${pl.plot_no || pl.plot_number || '—'}${pl.size_sqyd ? ' / ' + pl.size_sqyd + ' sq.yd' : ''}</div></div>
         <div class="row"><div class="lbl">Project</div><div class="val">${pj.name || pj.project_name || '—'}</div></div>
         <div class="row"><div class="lbl">Booking No</div><div class="val">${bk.booking_no || '—'}</div></div>
+        ${emiLine ? `<div class="row"><div class="lbl">EMI status</div><div class="val">${emiLine}</div></div>` : ''}
         <div class="row"><div class="lbl">Broker / Agent</div><div class="val">${brokerLine}</div></div>
         <div class="row"><div class="lbl">Mode</div><div class="val">${(p.payment_mode || '—').toUpperCase()}${p.instalment_no ? ' · Instalment ' + p.instalment_no : ''}</div></div>
         <div class="row"><div class="lbl">${p.payment_mode === 'cheque' ? 'Cheque No' : p.payment_mode === 'dd' ? 'Draft No' : 'UTR / Ref'}</div><div class="val">${p.utr_ref || p.reference_no || (p.payment_mode === 'cash' ? 'Cash' : '—')}</div></div>
@@ -799,4 +818,155 @@ export function printEmiCards(items: EmiCardItem[]) {
   .sig div{flex:1;border-top:1px solid #0f172a;padding-top:3px;text-align:center;color:#475569;font-size:9px}
   `
   openPrintWindow(`EMI cards — ${items.length}`, css, sheets, items.length > 1 ? `Print ${items.length} EMI cards` : 'Print EMI card')
+}
+
+// ── Customer account statement ──────────────────────────────────────
+//
+// The full account for one customer on a single document: every booking, every payment
+// with its receipt number, and the EMI schedule with what is paid and what is left — with
+// a running total the customer and the office can both reconcile to.  The team made this by
+// hand in Excel every time a customer asked "mera kitna jama hua, kitna baaki".  Printable
+// and handed over as the customer's statement of account.
+
+export type StatementPayment = {
+  date: string | null
+  receipt_no: string | null
+  type: string | null
+  mode: string | null
+  ref: string | null
+  booking_no: string | null
+  amount: number
+}
+export type StatementEmi = {
+  booking_no: string | null
+  seq: number
+  due_date: string | null
+  amount: number
+  paid_amount: number
+  state: 'paid' | 'overdue' | 'partial' | 'upcoming'
+}
+export type StatementData = {
+  customer: any
+  bookings: { booking_no: string | null; plot_no: string | null; project_name: string | null; value: number; paid: number }[]
+  payments: StatementPayment[]       // newest first or oldest first — caller decides; printed as given
+  emis: StatementEmi[]
+  totals: { value: number; paid: number; balance: number; emiLeft: number; emiOverdue: number }
+}
+
+const PTYPE_LABEL: Record<string, string> = {
+  token: 'Token', booking: 'Booking deposit', emi: 'EMI', full: 'Full payment', full_payment: 'Full payment',
+}
+
+export function printCustomerStatement(s: StatementData) {
+  const c = s.customer || {}
+  const bookingRows = s.bookings.map(b => `
+    <tr>
+      <td><span class="m">${esc(b.booking_no || '—')}</span></td>
+      <td>${esc(b.plot_no || '—')}</td>
+      <td>${esc(b.project_name || '—')}</td>
+      <td class="r">${b.value > 0 ? formatINR(b.value) : '<span class="warn">not set</span>'}</td>
+      <td class="r">${formatINR(b.paid)}</td>
+      <td class="r"><b>${formatINR(Math.max(0, b.value - b.paid))}</b></td>
+    </tr>`).join('')
+
+  let running = 0
+  const payRows = s.payments.map(p => {
+    running += Number(p.amount || 0)
+    return `<tr>
+      <td>${d(p.date)}</td>
+      <td><span class="m">${esc(p.receipt_no || '—')}</span></td>
+      <td>${esc(PTYPE_LABEL[p.type || ''] || p.type || 'Payment')}</td>
+      <td>${esc((p.mode || '').toUpperCase())}${p.ref ? ` · ${esc(p.ref)}` : ''}</td>
+      <td class="r">${formatINR(p.amount)}</td>
+      <td class="r">${formatINR(running)}</td>
+    </tr>`
+  }).join('')
+
+  const emiRows = s.emis.map(e => `
+    <tr class="${e.state}">
+      <td><span class="m">${esc(e.booking_no || '—')}</span></td>
+      <td class="c">${e.seq}</td>
+      <td>${d(e.due_date)}</td>
+      <td class="r">${formatINR(e.amount)}</td>
+      <td class="r">${e.state === 'paid' && !e.paid_amount ? formatINR(e.amount) : (e.paid_amount ? formatINR(e.paid_amount) : '—')}</td>
+      <td class="c"><span class="tag ${e.state}">${({ paid: 'Paid', overdue: 'Late', partial: 'Part', upcoming: 'Due' } as any)[e.state]}</span></td>
+    </tr>`).join('')
+
+  const css = `
+  @page{size:A4 portrait;margin:11mm}
+  *{box-sizing:border-box}
+  body{font-family:'Helvetica Neue',Arial,sans-serif;color:#0f172a;font-size:10.5px;margin:0}
+  .head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #0f172a;padding-bottom:5px}
+  .brand{font-size:17px;font-weight:900}
+  .brand small{display:block;font-size:8.5px;font-weight:400;color:#64748b;margin-top:2px}
+  .meta{text-align:right;font-size:9.5px;color:#475569}
+  h2{font-size:12px;letter-spacing:1px;text-align:center;margin:10px 0 2px;color:#334155}
+  .who{display:grid;grid-template-columns:1fr 1fr 1fr;gap:3px 10px;margin:8px 0}
+  .who div{border-bottom:1px dotted #cbd5e1;padding-bottom:2px}
+  .who span{display:block;color:#64748b;font-size:8.5px;text-transform:uppercase;letter-spacing:.3px}
+  .sum{display:flex;gap:6px;margin:8px 0;flex-wrap:wrap}
+  .sum div{border:1px solid #e2e8f0;border-radius:4px;padding:4px 9px}
+  .sum .bad{border-color:#fecaca;background:#fef2f2;color:#991b1b}
+  .sum .ok{border-color:#a7f3d0;background:#ecfdf5}
+  .sec{font-size:11px;font-weight:700;color:#334155;margin:12px 0 3px;border-bottom:1px solid #e2e8f0;padding-bottom:2px}
+  table{width:100%;border-collapse:collapse}
+  thead{display:table-header-group}
+  th{background:#f1f5f9;color:#475569;font-size:8.5px;text-transform:uppercase;letter-spacing:.3px;text-align:left;padding:4px 6px;border-bottom:1px solid #cbd5e1}
+  td{padding:3.5px 6px;border-bottom:1px solid #eef2f7}
+  tr{page-break-inside:avoid}
+  tr.paid td{color:#64748b}
+  tr.overdue td{background:#fff5f5}
+  .r{text-align:right;font-variant-numeric:tabular-nums}
+  .c{text-align:center}
+  .m{font-family:'SFMono-Regular',Consolas,monospace;font-size:9.5px}
+  .warn{color:#b45309;font-style:italic}
+  tfoot td{font-weight:700;border-top:2px solid #0f172a;background:#f8fafc}
+  .tag{font-size:8px;font-weight:700;padding:1px 6px;border-radius:9px;border:1px solid}
+  .tag.paid{color:#047857;border-color:#a7f3d0;background:#ecfdf5}
+  .tag.overdue{color:#b91c1c;border-color:#fecaca;background:#fef2f2}
+  .tag.partial{color:#b45309;border-color:#fde68a;background:#fffbeb}
+  .tag.upcoming{color:#475569;border-color:#e2e8f0;background:#fff}
+  .note{font-size:9px;color:#64748b;margin-top:6px}
+  .sig{display:flex;gap:30px;margin-top:26px}
+  .sig div{flex:1;border-top:1px solid #0f172a;padding-top:3px;text-align:center;color:#475569;font-size:9px}
+  `
+  const body = `
+  <div class="head">
+    <div class="brand">FANBE DEVELOPERS<small>2nd Floor, Balaji Tower, Plot No.35, Nathu Colony, Ballabgarh, Faridabad · www.fanbeindia.com</small></div>
+    <div class="meta">Statement of Account<br/>as on ${d(new Date().toISOString())}</div>
+  </div>
+  <h2>CUSTOMER STATEMENT</h2>
+  <div class="who">
+    <div><span>Name</span><b>${esc(c.name || '—')}</b></div>
+    <div><span>Customer ID</span><b>${esc(c.customer_code || '—')}</b></div>
+    <div><span>Mobile</span><b>${esc(c.phone || '—')}</b></div>
+    ${c.father_or_husband_name ? `<div><span>S/o, W/o, D/o</span><b>${esc(c.father_or_husband_name)}</b></div>` : ''}
+    ${c.pan ? `<div><span>PAN</span><b>${esc(c.pan)}</b></div>` : ''}
+    ${c.address ? `<div><span>Address</span><b>${esc(c.address)}</b></div>` : ''}
+  </div>
+  <div class="sum">
+    <div>Total value <b>${formatINR(s.totals.value)}</b></div>
+    <div class="ok">Paid <b>${formatINR(s.totals.paid)}</b></div>
+    <div>Balance <b>${formatINR(s.totals.balance)}</b></div>
+    <div>EMI left <b>${formatINR(s.totals.emiLeft)}</b></div>
+    ${s.totals.emiOverdue > 0 ? `<div class="bad">EMI overdue <b>${formatINR(s.totals.emiOverdue)}</b></div>` : ''}
+  </div>
+
+  <div class="sec">Bookings</div>
+  <table><thead><tr><th>Booking</th><th>Plot</th><th>Project</th><th class="r">Value</th><th class="r">Paid</th><th class="r">Balance</th></tr></thead>
+    <tbody>${bookingRows || '<tr><td colspan="6" class="c">No bookings</td></tr>'}</tbody></table>
+
+  <div class="sec">Payments received</div>
+  <table><thead><tr><th>Date</th><th>Receipt</th><th>Type</th><th>Mode / Ref</th><th class="r">Amount</th><th class="r">Running total</th></tr></thead>
+    <tbody>${payRows || '<tr><td colspan="6" class="c">No payments recorded yet</td></tr>'}</tbody>
+    <tfoot><tr><td colspan="4">Total received</td><td class="r">${formatINR(s.totals.paid)}</td><td></td></tr></tfoot></table>
+
+  ${s.emis.length ? `<div class="sec">EMI schedule</div>
+  <table><thead><tr><th>Booking</th><th class="c">Kist</th><th>Due date</th><th class="r">Amount</th><th class="r">Paid</th><th class="c">Status</th></tr></thead>
+    <tbody>${emiRows}</tbody></table>` : ''}
+
+  <div class="note">This statement is a summary of records held by Fanbe Developers as on the date above. Please report any discrepancy within 7 days.</div>
+  <div class="sig"><div>Customer signature</div><div>For FANBE DEVELOPERS<br/>Authorised signatory</div></div>
+  `
+  openPrintWindow(`Statement — ${esc(c.name || '')}`, css, body, 'Print statement')
 }

@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import { distributePaymentCommission } from '@/lib/payoutEngine'
 import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
-import { printApplicationForm, printApplicationForms, printPaymentReceipt, printEmiCards, printPipelineRegister } from '@/lib/printTemplates'
+import { printApplicationForm, printApplicationForms, printPaymentReceipt, printEmiCards, printPipelineRegister, printCustomerStatement } from '@/lib/printTemplates'
 import { getCurrentUserId } from '@/lib/closure'
 import { bookingValue, sumVerified, balanceOf, collectionPct } from '@/lib/bookingMath'
 import { waLink } from '@/lib/whatsapp'
@@ -863,6 +863,65 @@ export default function CustomerPipeline() {
     window.open(url, '_blank')
   }
 
+  // Full account statement for the focused customer: bookings, every payment, the EMI
+  // schedule and a running total.  Replaces the by-hand Excel the team made on request.
+  const [statementBusy, setStatementBusy] = useState(false)
+  const printStatement = async () => {
+    if (!customerFocusId) return
+    setStatementBusy(true)
+    try {
+      const { data: c } = await supabase.from('bp_customers')
+        .select('id, customer_code, name, phone, address, father_or_husband_name, pan').eq('id', customerFocusId).maybeSingle()
+      const { data: bks } = await supabase.from('bp_bookings')
+        .select('id, booking_no, total_amount, plot_total_price, bp_plots(plot_no), bp_projects(name)')
+        .eq('customer_id', customerFocusId).neq('stage', 'cancelled')
+      const ids = (bks || []).map((b: any) => b.id)
+      if (ids.length === 0) { toast.error('This customer has no bookings to put on a statement.'); return }
+      const bookingNo: Record<string, string> = {}
+      for (const b of (bks || []) as any[]) bookingNo[b.id] = b.booking_no
+      const [{ data: pays }, emiDetail] = await Promise.all([
+        supabase.from('bp_payments')
+          .select('payment_date, receipt_no, payment_type, payment_mode, utr_ref, amount, booking_id, created_at')
+          .in('booking_id', ids).eq('verification_status', 'verified'),
+        fetchEmiSchedules(ids),
+      ])
+      // Payments oldest first so the running total climbs the way a passbook reads.
+      const payments = ((pays || []) as any[])
+        .sort((a, b) => `${a.payment_date || ''}${a.created_at || ''}`.localeCompare(`${b.payment_date || ''}${b.created_at || ''}`))
+        .map(p => ({
+          date: p.payment_date, receipt_no: p.receipt_no, type: p.payment_type, mode: p.payment_mode,
+          ref: p.utr_ref || null, booking_no: bookingNo[p.booking_id] || null, amount: Number(p.amount || 0),
+        }))
+      const emis: any[] = []
+      let emiLeft = 0, emiOverdue = 0
+      for (const id of ids) {
+        const det = emiDetail[id]
+        if (!det) continue
+        emiLeft += det.status.amount_left
+        emiOverdue += det.status.amount_overdue
+        for (const row of det.rows) {
+          emis.push({ booking_no: bookingNo[id] || null, seq: row.seq, due_date: row.due_date, amount: row.amount, paid_amount: row.paid_amount, state: row.state })
+        }
+      }
+      const bookings = ((bks || []) as any[]).map(b => {
+        const value = Number(b.total_amount || b.plot_total_price || 0)
+        const paid = payments.filter(p => p.booking_no === b.booking_no).reduce((x, p) => x + p.amount, 0)
+        return { booking_no: b.booking_no, plot_no: b.bp_plots?.plot_no || null, project_name: b.bp_projects?.name || null, value, paid }
+      })
+      const totalValue = bookings.reduce((x, b) => x + b.value, 0)
+      const totalPaid = payments.reduce((x, p) => x + p.amount, 0)
+      printCustomerStatement({
+        customer: c || { name: customerFocus?.customer?.name },
+        bookings, payments, emis,
+        totals: { value: totalValue, paid: totalPaid, balance: Math.max(0, totalValue - totalPaid), emiLeft, emiOverdue },
+      })
+    } catch (e: any) {
+      toast.error(e?.message || 'Could not build the statement.')
+    } finally {
+      setStatementBusy(false)
+    }
+  }
+
   return (
     <div className="p-4 md:p-8 space-y-6 max-w-6xl mx-auto">
       <div>
@@ -920,6 +979,10 @@ export default function CustomerPipeline() {
             <div className="flex flex-col gap-1.5 shrink-0">
               <button onClick={() => setEditCustomer(customerFocus.customer)} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white">
                 <Pencil size={12}/>Edit
+              </button>
+              <button onClick={printStatement} disabled={statementBusy}
+                className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-white border border-blue-300 text-blue-700 hover:bg-blue-50 disabled:opacity-50">
+                <FileText size={12}/>{statementBusy ? 'Building…' : 'Statement'}
               </button>
               <button onClick={clearCustomerFocus} className="text-xs text-blue-700 hover:text-blue-900 underline">
                 Clear filter →

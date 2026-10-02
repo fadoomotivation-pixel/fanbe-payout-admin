@@ -41,6 +41,7 @@ import CustomerPipeline from '@/pages/CustomerPipeline'
 import BrokerTree from '@/pages/BrokerTree'
 import AgentReport from '@/pages/AgentReport'
 import EmiOverdue from '@/pages/EmiOverdue'
+import EmiCollection from '@/pages/EmiCollection'
 import DayBook from '@/pages/DayBook'
 import DataHealth from '@/pages/DataHealth'
 
@@ -140,6 +141,7 @@ export default function App(){
         <Route path="/pdc-cheques" element={<PdcCheques/>}/>
         <Route path="/registry" element={<Registry/>}/>
         <Route path="/emi-overdue" element={<EmiOverdue/>}/>
+        <Route path="/emi-collection" element={<EmiCollection/>}/>
         <Route path="/agent-report" element={<AgentReport/>}/>
         <Route path="/day-book" element={<DayBook/>}/>
         <Route path="/record-health" element={<DataHealth/>}/>
