@@ -56,7 +56,10 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.next_voucher_no() TO authenticated, service_role;
+-- Functions are executable by PUBLIC by default.  After 20260916 closed anonymous table
+-- access, a public RPC that burns voucher numbers would be the one door left open.
+REVOKE EXECUTE ON FUNCTION public.next_voucher_no() FROM PUBLIC, anon;
+GRANT  EXECUTE ON FUNCTION public.next_voucher_no() TO authenticated, service_role;
 
 -- Backfill in the order the money actually went out, so the numbers read chronologically.
 DO $$

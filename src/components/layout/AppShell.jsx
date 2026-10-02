@@ -5,7 +5,7 @@ import {
   UserCheck, Layers, MessageSquare, Megaphone, ShieldCheck, Receipt,
   Wallet, Calculator, TrendingUp, Landmark, Trophy, Star, Gift,
   ScrollText, CalendarRange, Inbox, UserPlus, History, Network,
-  Bell, Menu, X, Phone, ChevronRight as Chevron, AlertTriangle, UserSearch
+  Bell, Menu, X, Phone, ChevronRight as Chevron, AlertTriangle, UserSearch, BookMarked
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
@@ -17,6 +17,10 @@ const NAV = [
   { group: 'Overview', items: [
     { to: '/',               icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/analytics',      icon: BarChart2,        label: 'Analytics' },
+    // Close the day: money in, money out, cash the drawer should hold.
+    { to: '/day-book',       icon: BookMarked,       label: 'Day Book' },
+    // The incomplete records every report is quietly built on.
+    { to: '/record-health',  icon: ShieldCheck,      label: 'Record Health' },
     { to: '/reports',        icon: FileText,         label: 'Reports' },
     { to: '/activity',       icon: History,          label: 'Activity Log' },
     { to: '/collect',        icon: Phone,            label: 'Collection App' },

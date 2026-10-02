@@ -17,6 +17,7 @@ import {
   TrendingUp, TrendingDown, AlertTriangle, Users, Printer, Banknote, Smartphone,
 } from 'lucide-react'
 import { printExpenseVoucher, printExpenseVouchers } from '@/lib/printTemplates'
+import { isCashMode } from '@/lib/paymentMode'
 import toast from 'react-hot-toast'
 
 type Head = { id: string; name: string; active?: boolean }
@@ -28,17 +29,6 @@ type Row = {
   paid_to: string | null; paid_by: string | null
   payment_mode: string | null; reference_no: string | null
   voucher_no: string | null
-}
-
-// Cash leaving the drawer and money moving through a bank are two different control
-// problems — cash needs a signature, a transfer leaves its own trail — so the split is
-// shown rather than left for someone to work out from the table.
-const ONLINE_MODES = ['upi', 'bank', 'cheque', 'neft', 'imps', 'rtgs', 'online']
-function isCashMode(mode: string | null | undefined) {
-  const m = (mode || '').trim().toLowerCase()
-  // Anything not recognised as a bank route counts as cash: an unlabelled payment is far
-  // more likely to be cash out of the drawer, and over-reporting cash is the safer error.
-  return m === '' || m === 'cash' || !ONLINE_MODES.includes(m)
 }
 
 // Heads that are about money owed to / taken by a specific broker.  Picking one makes
