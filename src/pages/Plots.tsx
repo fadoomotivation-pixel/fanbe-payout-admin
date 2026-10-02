@@ -53,6 +53,13 @@ export default function Plots() {
   // client-side via bookingByPlot since commission_mode lives on bp_bookings, not bp_plots.
   const [saleModeFilter, setSaleModeFilter] = useState<'' | 'mlm' | 'traditional'>('')
   const [search, setSearch]               = useState('')
+  // Size and budget.  "100–125 gaj ka kaunsa khaali hai, 6 lakh tak" is the first thing a
+  // walk-in customer asks, and with 4,674 plots it was answered by scrolling.  Facing and
+  // category are not offered as filters on purpose: every plot currently carries the same
+  // value for both (east / residential), so filtering on them would only look useful.
+  const [minSize, setMinSize]   = useState('')
+  const [maxSize, setMaxSize]   = useState('')
+  const [maxPrice, setMaxPrice] = useState('')
 
   // ── Queries ──────────────────────────────────────────────────────
   const { data: projects = [] } = useQuery({
@@ -427,9 +434,18 @@ export default function Plots() {
         if (!bk) return false
         if (bk.commission_mode !== saleModeFilter) return false
       }
+      const size = Number(p.size_sqyd || 0)
+      if (minSize && size < Number(minSize)) return false
+      if (maxSize && size > Number(maxSize)) return false
+      if (maxPrice) {
+        // Price is what the customer would pay: the stored total, or size x rate when the
+        // total was never filled in.
+        const price = Number(p.total_price || 0) || size * Number(p.price_per_sqyd || 0)
+        if (!(price > 0) || price > Number(maxPrice)) return false
+      }
       return true
     })
-  }, [allPlots, search, saleModeFilter, bookingByPlot])
+  }, [allPlots, search, saleModeFilter, bookingByPlot, minSize, maxSize, maxPrice])
 
   const availableCount = allPlots.filter(p => p.status === 'available').length
   const tokenCount     = allPlots.filter(p => p.status === 'token').length
@@ -656,8 +672,18 @@ export default function Plots() {
             <option value="mlm">Sold · MLM</option>
             <option value="traditional">Sold · Traditional</option>
           </select>
-          {(search || projectFilter || statusFilter || saleModeFilter) && (
-            <button onClick={() => { setSearch(''); setProjectFilter(''); setStatusFilter(''); setSaleModeFilter('') }} className="text-xs text-gray-500 hover:text-gray-800 underline">Clear filters</button>
+          <div className="flex items-center gap-1 text-sm" title="Plot size in square yards (gaj)">
+            <input type="number" min={0} value={minSize} onChange={e => setMinSize(e.target.value)} placeholder="Min gaj"
+              className="w-20 border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"/>
+            <span className="text-gray-400 text-xs">–</span>
+            <input type="number" min={0} value={maxSize} onChange={e => setMaxSize(e.target.value)} placeholder="Max gaj"
+              className="w-20 border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"/>
+          </div>
+          <input type="number" min={0} value={maxPrice} onChange={e => setMaxPrice(e.target.value)} placeholder="Budget up to ₹"
+            title="Show plots priced at or below this amount"
+            className="w-32 border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"/>
+          {(search || projectFilter || statusFilter || saleModeFilter || minSize || maxSize || maxPrice) && (
+            <button onClick={() => { setSearch(''); setProjectFilter(''); setStatusFilter(''); setSaleModeFilter(''); setMinSize(''); setMaxSize(''); setMaxPrice('') }} className="text-xs text-gray-500 hover:text-gray-800 underline">Clear filters</button>
           )}
         </div>
         {/* Bulk action bar — only present when something is ticked, so it never competes

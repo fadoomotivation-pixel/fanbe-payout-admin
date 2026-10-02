@@ -10,26 +10,41 @@ import { formatINR, formatDate } from '@/lib/utils'
 import { printPaymentReceipt } from '@/lib/printTemplates'
 import { distributePaymentCommission, reversePaymentCommission } from '@/lib/payoutEngine'
 import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
-import { Plus, CheckCircle, XCircle, Printer, Clock } from 'lucide-react'
+import { Plus, CheckCircle, XCircle, Printer, Clock, Search, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
+// verification_status is 'pending' / 'verified' / 'rejected' — that is what the table's
+// check constraint allows.  This page used to write 'unverified', which the database
+// refuses outright: every "Record Payment" from here failed with a constraint error, and
+// the "Unverified" tab could never match a row.  Nobody noticed only because payments were
+// being entered from Customer Pipeline instead.
 const EMPTY = {
   booking_id:'', payment_type:'token', amount:'', payment_mode:'cash',
   utr_ref:'', payment_date:'', received_by:'', notes:'',
-  verification_status:'unverified',
+  verification_status:'pending',
   receipt_no:'', drawn_on_bank:'', branch:'', instalment_no:'',
   rupees_in_words:'', sponsor_name:'',
   is_cash_adjustment:false, subject_to_realisation:true,
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  unverified: 'bg-yellow-50 text-yellow-700 border border-yellow-200',
-  verified:   'bg-green-50 text-green-700 border border-green-200',
-  rejected:   'bg-red-50 text-red-700 border border-red-200',
+  pending:  'bg-yellow-50 text-yellow-700 border border-yellow-200',
+  verified: 'bg-green-50 text-green-700 border border-green-200',
+  rejected: 'bg-red-50 text-red-700 border border-red-200',
 }
 
-const TABS = ['All', 'Unverified', 'Verified', 'Rejected'] as const
-type Tab = typeof TABS[number]
+const TABS = [
+  { key: 'all',      label: 'All' },
+  { key: 'pending',  label: 'Awaiting verification' },
+  { key: 'verified', label: 'Verified' },
+  { key: 'rejected', label: 'Rejected' },
+] as const
+type Tab = typeof TABS[number]['key']
+
+// Only the types the table accepts.  'miscellaneous' used to be offered here too, and
+// picking it failed the save with a constraint error.
+const PAYMENT_TYPES = ['token', 'booking', 'emi', 'full_payment'] as const
+const PAYMENT_MODES = ['cash', 'neft', 'rtgs', 'imps', 'upi', 'cheque', 'dd'] as const
 
 function toWordsINR(n: number): string {
   if (!n || isNaN(n)) return ''
@@ -58,8 +73,16 @@ function toWordsINR(n: number): string {
 export default function Payments() {
   const qc = useQueryClient()
   const [modal, setModal] = useState(false)
-  const [tab, setTab] = useState<Tab>('All')
+  const [tab, setTab] = useState<Tab>('all')
   const [form, setForm] = useState<any>(EMPTY)
+  // This is the page the office opens a dozen times a day to answer "did X pay", "what
+  // came in by cheque this week", "find UTR 4471…".  It had status tabs and nothing else,
+  // so every one of those meant scrolling the whole ledger by eye.
+  const [q, setQ]               = useState('')
+  const [fromDate, setFromDate] = useState('')
+  const [toDate, setToDate]     = useState('')
+  const [modeF, setModeF]       = useState('')
+  const [typeF, setTypeF]       = useState('')
   const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }))
 
   const { data: payments = [], isLoading } = useQuery({
@@ -171,8 +194,33 @@ export default function Payments() {
     setModal(false); setForm(EMPTY)
   }
 
-  const filtered = tab === 'All' ? payments : payments.filter((p: any) => p.verification_status?.toLowerCase() === tab.toLowerCase())
-  const unverifiedCount = payments.filter((p: any) => p.verification_status === 'unverified').length
+  // Everything except the status tab, so the tab counts reflect the search and dates.
+  const narrowed = (payments as any[]).filter((p: any) => {
+    if (modeF && p.payment_mode !== modeF) return false
+    if (typeF) {
+      // 'full' and 'full_payment' are both allowed by the table and mean the same thing.
+      const t = p.payment_type === 'full' ? 'full_payment' : p.payment_type
+      if (t !== typeF) return false
+    }
+    if (fromDate && (p.payment_date || '') < fromDate) return false
+    if (toDate   && (p.payment_date || '') > toDate)   return false
+    const needle = q.trim().toLowerCase()
+    if (needle) {
+      const c = p.bp_bookings?.bp_customers || {}
+      const hay = [
+        p.receipt_no, p.utr_ref, p.bp_bookings?.booking_no, c.name, c.phone, c.customer_code,
+        p.drawn_on_bank, p.received_by, p.sponsor_name,
+      ].filter(Boolean).join(' ').toLowerCase()
+      if (!hay.includes(needle)) return false
+    }
+    return true
+  })
+  const countFor = (t: Tab) => t === 'all' ? narrowed.length : narrowed.filter((p: any) => p.verification_status === t).length
+  const filtered = tab === 'all' ? narrowed : narrowed.filter((p: any) => p.verification_status === tab)
+  const filteredTotal = filtered.reduce((s: number, p: any) => s + Number(p.amount || 0), 0)
+  const pendingCount = (payments as any[]).filter((p: any) => p.verification_status === 'pending').length
+  const anyFilter = !!(q || fromDate || toDate || modeF || typeF)
+  const clearFilters = () => { setQ(''); setFromDate(''); setToDate(''); setModeF(''); setTypeF('') }
 
   const cols = [
     { header: 'Receipt #', render: (r: any) => <span className="font-mono text-xs font-bold text-red-700">{r.receipt_no || '—'}</span> },
@@ -192,7 +240,7 @@ export default function Payments() {
     { header: 'Date',   render: (r: any) => formatDate(r.payment_date) },
     {
       header: 'Status',
-      render: (r: any) => <Badge label={r.verification_status || 'unverified'} className={STATUS_COLORS[r.verification_status || 'unverified']} />,
+      render: (r: any) => <Badge label={r.verification_status || 'pending'} className={STATUS_COLORS[r.verification_status || 'pending']} />,
     },
     {
       header: 'Actions',
@@ -220,21 +268,54 @@ export default function Payments() {
         <Button onClick={() => setModal(true)}><Plus size={14} />Record Payment</Button>
       </div>
 
-      {unverifiedCount > 0 && (
+      {pendingCount > 0 && (
         <div className="flex items-center gap-3 mb-5 p-3 bg-yellow-50 border border-yellow-200 rounded-xl text-sm">
           <Clock size={16} className="text-yellow-600 shrink-0" />
-          <span className="text-yellow-800 font-medium">{unverifiedCount} payment{unverifiedCount > 1 ? 's' : ''} awaiting verification</span>
-          <button onClick={() => setTab('Unverified')} className="ml-auto text-yellow-700 underline text-xs">View →</button>
+          <span className="text-yellow-800 font-medium">{pendingCount} payment{pendingCount > 1 ? 's' : ''} awaiting verification</span>
+          <button onClick={() => setTab('pending')} className="ml-auto text-yellow-700 underline text-xs">View →</button>
         </div>
       )}
 
-      <div className="flex gap-1 mb-4 bg-gray-100 p-1 rounded-xl w-fit">
-        {TABS.map(t => (
-          <button key={t} onClick={() => setTab(t)} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${tab === t ? 'bg-white shadow text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
-            {t}
-            {t === 'Unverified' && unverifiedCount > 0 && <span className="ml-1.5 bg-yellow-500 text-white text-xs rounded-full px-1.5 py-0.5">{unverifiedCount}</span>}
-          </button>
-        ))}
+      <div className="flex gap-1 mb-3 bg-gray-100 p-1 rounded-xl w-fit flex-wrap">
+        {TABS.map(t => {
+          const n = countFor(t.key)
+          return (
+            <button key={t.key} onClick={() => setTab(t.key)} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${tab === t.key ? 'bg-white shadow text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
+              {t.label}
+              <span className={`ml-1.5 text-xs rounded-full px-1.5 py-0.5 ${
+                t.key === 'pending' && n > 0 ? 'bg-yellow-500 text-white' : 'bg-gray-200 text-gray-600'}`}>{n}</span>
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Search + filters */}
+      <div className="bg-white border border-gray-100 rounded-xl p-3 mb-3 flex flex-wrap gap-2 items-center">
+        <div className="relative flex-1 min-w-[220px]">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
+          <input value={q} onChange={e => setQ(e.target.value)}
+            placeholder="Customer, phone, receipt no, UTR, booking…"
+            className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+        </div>
+        <select value={modeF} onChange={e => setModeF(e.target.value)} className="border border-gray-200 rounded-lg px-2.5 py-2 text-sm">
+          <option value="">All modes</option>
+          {PAYMENT_MODES.map(m => <option key={m} value={m}>{m.toUpperCase()}</option>)}
+        </select>
+        <select value={typeF} onChange={e => setTypeF(e.target.value)} className="border border-gray-200 rounded-lg px-2.5 py-2 text-sm">
+          <option value="">All types</option>
+          {PAYMENT_TYPES.map(t => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+        </select>
+        <div className="flex items-center gap-1.5 text-sm">
+          <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 text-sm" title="From date"/>
+          <span className="text-gray-400 text-xs">to</span>
+          <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 text-sm" title="To date"/>
+        </div>
+        {anyFilter && (
+          <button onClick={clearFilters} className="text-xs text-gray-500 hover:text-gray-900 underline inline-flex items-center gap-1"><X size={12}/>Clear</button>
+        )}
+        <div className="ml-auto text-sm text-gray-600 whitespace-nowrap">
+          {filtered.length} payment{filtered.length === 1 ? '' : 's'} · <b className="text-green-700">{formatINR(filteredTotal)}</b>
+        </div>
       </div>
 
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
@@ -249,7 +330,7 @@ export default function Payments() {
             {(bookings as any[]).map((b: any) => <option key={b.id} value={b.id}>{b.booking_no} — {b.bp_customers?.name}</option>)}
           </Select>
           <Select label="Payment Type" value={form.payment_type} onChange={(e: any) => set('payment_type', e.target.value)}>
-            {['token','booking','emi','full_payment','miscellaneous'].map(t => <option key={t} value={t}>{t.replace(/_/g,' ')}</option>)}
+            {PAYMENT_TYPES.map(t => <option key={t} value={t}>{t.replace(/_/g,' ')}</option>)}
           </Select>
           <Input label="Instalment No" type="number" value={form.instalment_no} onChange={(e: any) => set('instalment_no', e.target.value)} />
           <Input label="राशि / Amount (₹)" type="number" value={form.amount} onChange={(e: any) => { set('amount', e.target.value); set('rupees_in_words', toWordsINR(Number(e.target.value))) }} />
@@ -259,7 +340,7 @@ export default function Payments() {
         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-4 pt-3 border-t border-gray-100">Mode & Bank</div>
         <div className="grid grid-cols-2 gap-3">
           <Select label="Payment Mode" value={form.payment_mode} onChange={(e: any) => set('payment_mode', e.target.value)}>
-            {['cash','neft','rtgs','imps','upi','cheque','dd'].map(m => <option key={m} value={m}>{m.toUpperCase()}</option>)}
+            {PAYMENT_MODES.map(m => <option key={m} value={m}>{m.toUpperCase()}</option>)}
           </Select>
           <Input label="कैश/चेक नं. (UTR / Ref)" value={form.utr_ref} onChange={(e: any) => set('utr_ref', e.target.value)} />
           <Input label="Drawn On (Bank)" value={form.drawn_on_bank} onChange={(e: any) => set('drawn_on_bank', e.target.value)} placeholder="e.g. HDFC Bank" />
