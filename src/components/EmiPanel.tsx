@@ -8,6 +8,8 @@ import { formatINR, formatDate } from '@/lib/utils'
 import { distributePaymentCommission } from '@/lib/payoutEngine'
 import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
 import { printPaymentReceipt } from '@/lib/printTemplates'
+import { instalmentState, instalmentDue } from '@/lib/emiStatus'
+import { todayLocalISO } from '@/lib/fetchAll'
 import { CheckCircle, Calendar, Wallet, AlertTriangle, Plus, X, IndianRupee, ArrowUpRight, ArrowDownRight } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -43,13 +45,15 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
     queryFn: async () => {
       const { data, error } = await supabase.from('emi_installments').select('*').eq('schedule_id', sched.id).order('seq', { ascending: true })
       if (error) throw error
-      return data.map((i: any) => ({
-        ...i,
-        computed_status: i.status === 'paid'    ? 'paid'
-          : i.status === 'partial'              ? 'partial'
-          : new Date(i.due_date) < new Date()   ? 'overdue'
-          : 'pending',
-      }))
+      // Same rule every other screen uses (lib/emiStatus): settled by the money, and late
+      // only once the due date is behind today's local date.  This used to read the status
+      // flag and compare against a UTC clock, so an instalment due today showed "overdue"
+      // here from 05:30 while the pipeline still showed it as due.
+      const today = todayLocalISO()
+      return data.map((i: any) => {
+        const st = instalmentState(i, today)
+        return { ...i, computed_status: st === 'upcoming' ? 'pending' : st, due_now: instalmentDue(i) }
+      })
     },
   })
 
@@ -233,9 +237,12 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
   const allInsts = insts as any[]
   const paid = allInsts.filter((i: any) => i.computed_status === 'paid')
   const overdue = allInsts.filter((i: any) => i.computed_status === 'overdue')
-  const pending = allInsts.filter((i: any) => i.computed_status === 'pending')
-  const paidAmount = paid.reduce((s: number, i: any) => s + Number(i.amount), 0)
-  const outstanding = allInsts.reduce((s: number, i: any) => s + Number(i.amount), 0) - paidAmount
+  const pending = allInsts.filter((i: any) => i.computed_status === 'pending' || i.computed_status === 'partial')
+  // Outstanding is what is still owed on each unsettled instalment, so a part-paid one
+  // counts only its shortfall.  It used to subtract only fully-paid rows, which showed a
+  // half-paid instalment as entirely unpaid.
+  const outstanding = allInsts.filter((i: any) => i.computed_status !== 'paid').reduce((s: number, i: any) => s + Number(i.due_now || 0), 0)
+  const paidAmount = allInsts.reduce((s: number, i: any) => s + Number(i.amount || 0), 0) - outstanding
   const nextDue = pending.concat(overdue).sort((a: any, b: any) => a.due_date.localeCompare(b.due_date))[0]
 
   useEffect(() => { if (!open) setCreating(false) }, [open])

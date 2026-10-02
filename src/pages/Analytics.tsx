@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
+import { fetchEmiStatusAll } from '@/lib/emiStatus'
 import { formatINR } from '@/lib/utils'
 import {
   TrendingUp, TrendingDown, Coins, Wallet,
@@ -37,12 +38,14 @@ export default function Analytics() {
       const monthStartISO = monthStart.toISOString().slice(0, 10)
       const prevMonthStartISO = prevMonthStart.toISOString().slice(0, 10)
       const sixMonthsAgoISO = sixMonthsAgo.toISOString().slice(0, 10)
-      const today = now.toISOString().slice(0, 10)
 
       const [pay, book, inst, dist, inq, brk, proj] = await Promise.all([
         supabase.from('bp_payments').select('amount,verification_status,payment_type,payment_date'),
         supabase.from('bp_bookings').select('id,total_amount,plot_total_price,commission_amount,stage,application_date,project_id'),
-        supabase.from('emi_installments').select('amount,status,due_date'),
+        // Overdue is read from the shared EMI rule so this tile and the /emi-overdue list it
+        // opens can never disagree.  It used to count instalments due TODAY as past-due and
+        // add their full amount even when part had been paid.
+        fetchEmiStatusAll(),
         // Per-payment MLM distributions — the actually-paid commission.  Broker info is joined
         // in-memory below (against the brokers fetch) to avoid relying on a PostgREST FK embed
         // that may not be defined for this column.
@@ -56,7 +59,7 @@ export default function Analytics() {
 
       const payments = pay.data || []
       const bookings = book.data || []
-      const installments = inst.data || []
+      const emiAll = inst || {}
       const distributions = (dist.data || []) as any[]
       const inquiries = inq.data || []
       const brokers = brk.data || []
@@ -88,10 +91,9 @@ export default function Analytics() {
         .filter(d => (d.created_at || '') >= prevMonthStartISO && (d.created_at || '') < monthStartISO)
         .reduce((s, d) => s + Number(d.net_payout || 0), 0)
 
-      const pendingEmi = installments
-        .filter(i => i.status !== 'paid' && i.due_date <= today)
-        .reduce((s, i) => s + Number(i.amount || 0), 0)
-      const pendingEmiCount = installments.filter(i => i.status !== 'paid' && i.due_date <= today).length
+      const emiPositions = Object.values(emiAll)
+      const pendingEmi = emiPositions.reduce((s, e) => s + e.amount_overdue, 0)
+      const pendingEmiCount = emiPositions.reduce((s, e) => s + e.overdue, 0)
 
       const outstanding = Math.max(0, confirmedValue - totalRevenue)
       const collectionRate = pct(totalRevenue, confirmedValue)

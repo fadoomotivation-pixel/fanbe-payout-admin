@@ -9,18 +9,45 @@ import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import { distributePaymentCommission } from '@/lib/payoutEngine'
 import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
-import { printApplicationForm, printApplicationForms, printPaymentReceipt } from '@/lib/printTemplates'
+import { printApplicationForm, printApplicationForms, printPaymentReceipt, printEmiCards, printPipelineRegister } from '@/lib/printTemplates'
 import { getCurrentUserId } from '@/lib/closure'
-import { bookingValue, balanceOf, paidByBooking, isFullyPaid, isRegistryDone } from '@/lib/bookingMath'
+import { bookingValue, sumVerified, balanceOf, collectionPct } from '@/lib/bookingMath'
 import { waLink } from '@/lib/whatsapp'
-import { fetchEmiStatus, type EmiStatus } from '@/lib/emiStatus'
+import { fetchEmiStatus, fetchEmiSchedules } from '@/lib/emiStatus'
+import { fetchPipelineIndex, emiDueByToday, type IndexRow, type Bucket } from '@/lib/pipelineIndex'
+import { inChunks, todayLocalISO } from '@/lib/fetchAll'
 import { deleteBookingSafely } from '@/lib/deleteBooking'
 import DeleteBookingModal from '@/components/DeleteBookingModal'
 import EmiPanel from '@/components/EmiPanel'
-import { Users, Search, Filter, ChevronRight, Banknote, Calculator, ArrowUpRight, CheckCircle2, AlertTriangle, Coins, Phone, MessageCircle, IndianRupee, X, ExternalLink, FileText, Printer, Pencil, Landmark, ScrollText, CalendarClock, Trash2 } from 'lucide-react'
+import { Users, Search, Filter, ChevronRight, Banknote, Calculator, ArrowUpRight, CheckCircle2, AlertTriangle, Coins, Phone, MessageCircle, IndianRupee, X, ExternalLink, FileText, Printer, Pencil, Landmark, ScrollText, CalendarClock, Trash2, SlidersHorizontal, Download, ListOrdered, Hourglass, Tag } from 'lucide-react'
 import toast from 'react-hot-toast'
 
-type Tab = 'all' | 'today' | 'unpaid_booking' | 'emi_active' | 'settled'
+// 'today' and 'all' plus one tab per bucket from lib/pipelineIndex — every booking sits in
+// exactly one bucket, so the bucket tiles add up to "All".
+type Tab = 'all' | 'today' | Bucket
+const TAB_VALUES: Tab[] = ['all', 'today', 'not_started', 'token_only', 'balance_no_plan', 'emi_running', 'emi_overdue', 'settled', 'price_missing']
+// Older links (Analytics used to send ?tab=emi_active) still land on the right list.
+const LEGACY_TAB: Record<string, Tab> = { emi_active: 'emi_running', unpaid_booking: 'token_only' }
+
+const TAB_LABEL: Record<Tab, string> = {
+  all: 'All customers', today: "Today's work", not_started: 'No payment yet', token_only: 'Token only',
+  balance_no_plan: 'Balance, no EMI plan', emi_running: 'EMI running', emi_overdue: 'EMI overdue',
+  settled: 'Fully settled', price_missing: 'Price not set',
+}
+const EMPTY_TEXT: Record<Tab, string> = {
+  today: '✓ Nothing due today. No EMI, no cheque to bank, no registry waiting.',
+  all: 'No customers match. Clear a filter or the search.',
+  not_started: '✓ Every booking here has at least one payment.',
+  token_only: '✓ No deals waiting on the booking deposit.',
+  balance_no_plan: '✓ Every balance here has an EMI plan to collect it.',
+  emi_running: 'No running EMI plans under these filters.',
+  emi_overdue: '✓ Nobody here is late on an EMI.',
+  settled: 'No fully settled deals under these filters.',
+  price_missing: '✓ Every booking here has a price.',
+}
+
+type SortKey = 'newest' | 'oldest' | 'balance' | 'overdue' | 'next_due' | 'name' | 'kist_left'
+type DueWindow = '' | 'overdue' | 'today' | 'week' | 'month' | 'no_plan'
 
 const STAGE_COLORS: Record<string, string> = {
   token_received: 'bg-orange-50 text-orange-700 border-orange-200',
@@ -30,14 +57,21 @@ const STAGE_COLORS: Record<string, string> = {
 
 const PAYMENT_MODES = ['cash','neft','rtgs','imps','upi','cheque','dd']
 
-const today = () => new Date().toISOString().slice(0, 10)
+// Local calendar date.  toISOString() is UTC, which in India is still yesterday until 05:30.
+const today = () => todayLocalISO()
 
 const PAGE_SIZE = 25
 const SEARCH_DEBOUNCE_MS = 300
 
-// Built so the page stays responsive at 10,000+ bookings: pagination + debounced server-side
-// search + per-page derived queries.  Earlier .limit(500) loaded everything and filtered in
-// the browser — fine at small scale, broken at production scale.
+// How the data is split:
+//   - one light index of EVERY booking (lib/pipelineIndex) drives tabs, tiles, search,
+//     filters, sort and the printouts — so they all describe the whole book;
+//   - the heavy detail (receipts, commission, cheques, upline) is fetched only for the 25
+//     rows on screen.
+// The previous version paginated on the server and then counted the tiles from the 25 rows
+// it had, which is why the tiles read 0 / 0 / 0 beside "877 customers".  The index is a few
+// hundred bytes a booking, so it stays quick well past ten thousand bookings; fetchAllRows
+// pages past PostgREST's 1,000-row cap so nothing is silently cut off.
 export default function CustomerPipeline() {
   const qc = useQueryClient()
   const navigate = useNavigate()
@@ -46,8 +80,17 @@ export default function CustomerPipeline() {
   // top and filters the bookings list to just this customer's deals.  This is the entry
   // point that replaces the deleted /customer-history page; old /customer-history?customer=X
   // links redirect here in App.tsx.
+  // One refresh for everything this page shows.  Each action used to invalidate its own
+  // hand-picked keys, and two of them named keys that did not exist ('cp_bookings'), so
+  // the list kept showing the old state after a payment until the page was reloaded.
+  const refreshPipeline = () => qc.invalidateQueries({
+    predicate: q => typeof q.queryKey[0] === 'string' && (q.queryKey[0] as string).startsWith('cp_'),
+  })
   const customerFocusId = searchParams.get('customer')
-  const [tab, setTab] = useState<Tab>('all')
+  const [tab, setTab] = useState<Tab>(() => {
+    const t = searchParams.get('tab') || ''
+    return LEGACY_TAB[t] || (TAB_VALUES.includes(t as Tab) ? (t as Tab) : 'all')
+  })
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [searchScope, setSearchScope] = useState<'all' | 'customer' | 'broker' | 'booking' | 'plot'>('all')
@@ -56,6 +99,15 @@ export default function CustomerPipeline() {
   // MLM and traditional sales pay commission by completely different rules, and with 806
   // traditional against 71 MLM the MLM customers were impossible to find in one list.
   const [filterMode, setFilterMode] = useState<'' | 'mlm' | 'traditional'>('')
+  // The finer filters live behind "More filters" so the everyday bar stays four controls.
+  const [showMore, setShowMore]     = useState(false)
+  const [dueWindow, setDueWindow]   = useState<DueWindow>('')
+  const [registryF, setRegistryF]   = useState<'' | 'ready' | 'done' | 'not_done'>('')
+  const [stageF, setStageF]         = useState<'' | 'token_received' | 'booking_done'>('')
+  const [bookedFrom, setBookedFrom] = useState('')
+  const [bookedTo, setBookedTo]     = useState('')
+  const [minBalance, setMinBalance] = useState('')
+  const [sortBy, setSortBy]         = useState<SortKey>('newest')
   const [page, setPage] = useState(0)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [emiBooking, setEmiBooking] = useState<any>(null)
@@ -75,32 +127,32 @@ export default function CustomerPipeline() {
     queryKey: ['cp_customer_focus', customerFocusId],
     enabled: !!customerFocusId,
     queryFn: async () => {
-      const today = new Date().toISOString().slice(0, 10)
       const [{ data: c }, { data: bks }] = await Promise.all([
         supabase.from('bp_customers').select('id, customer_code, previous_customer_code, name, phone, email, address, father_or_husband_name, pan, dob, nominee_name, nominee_relation').eq('id', customerFocusId!).maybeSingle(),
         supabase.from('bp_bookings').select('id, booking_no, total_amount, plot_total_price, total_collected, stage').eq('customer_id', customerFocusId!),
       ])
       const bookingIds = (bks || []).map((b: any) => b.id)
-      const [{ data: pays }, { data: emis }] = await Promise.all([
+      // EMI comes from the shared rule.  This used to select booking_id off
+      // emi_installments — a column that table does not have — so the query failed and
+      // "Overdue EMI" in this header always read ₹0.
+      const [{ data: pays }, emiByBooking] = await Promise.all([
         bookingIds.length
           ? supabase.from('bp_payments').select('amount, verification_status, booking_id').in('booking_id', bookingIds)
           : Promise.resolve({ data: [] as any[] }),
-        bookingIds.length
-          ? supabase.from('emi_installments').select('amount, paid_amount, status, due_date, booking_id').in('booking_id', bookingIds)
-          : Promise.resolve({ data: [] as any[] }),
+        fetchEmiStatus(bookingIds),
       ])
-      const totalCost   = (bks || []).reduce((s, b: any) => s + Number(b.total_amount || b.plot_total_price || 0), 0)
-      const paid        = (pays || []).filter((p: any) => p.verification_status === 'verified').reduce((s, p: any) => s + Number(p.amount || 0), 0)
-      const overdueAmt  = (emis || []).filter((e: any) => e.status !== 'paid' && (e.due_date || '') <= today)
-                                       .reduce((s, e: any) => s + Math.max(0, Number(e.amount || 0) - Number(e.paid_amount || 0)), 0)
-      const overdueCnt  = (emis || []).filter((e: any) => e.status !== 'paid' && (e.due_date || '') <= today).length
+      const totalCost   = (bks || []).reduce((s, b: any) => s + bookingValue(b), 0)
+      const paid        = sumVerified(pays as any[])
+      const emiList     = Object.values(emiByBooking)
+      const overdueAmt  = emiList.reduce((s, e) => s + e.amount_overdue, 0)
+      const overdueCnt  = emiList.reduce((s, e) => s + e.overdue, 0)
       return {
         customer: c,
         bookingCount: (bks || []).length,
         totalCost,
         paid,
-        outstanding: Math.max(0, totalCost - paid),
-        collectionPct: totalCost > 0 ? Math.round((paid / totalCost) * 100) : 0,
+        outstanding: balanceOf(totalCost, paid),
+        collectionPct: collectionPct(totalCost, paid),
         overdueAmt,
         overdueCnt,
       }
@@ -120,113 +172,147 @@ export default function CustomerPipeline() {
   }, [search])
 
   // Reset to page 0 whenever any filter changes — current page may not exist in the new result set.
-  useEffect(() => { setPage(0) }, [tab, debouncedSearch, searchScope, filterBroker, filterProject, filterMode])
+  useEffect(() => { setPage(0) }, [tab, debouncedSearch, searchScope, filterBroker, filterProject, filterMode, dueWindow, registryF, stageF, bookedFrom, bookedTo, minBalance, sortBy, customerFocusId])
 
   // Drop the print selection when the list underneath it changes.  Keeping it would show
   // "5 selected" while only the 2 still on screen could actually be printed.
-  useEffect(() => { setSelected(new Set()) }, [tab, debouncedSearch, searchScope, filterBroker, filterProject, filterMode, page])
+  useEffect(() => { setSelected(new Set()) }, [tab, debouncedSearch, searchScope, filterBroker, filterProject, filterMode, dueWindow, registryF, stageF, bookedFrom, bookedTo, minBalance, sortBy, customerFocusId, page])
 
-  // Server-side search: resolve customer/broker IDs that match the query, then constrain bookings
-  // via OR across booking_no.ilike and the resolved IDs.  PostgREST can't filter on nested table
-  // columns directly, so we do this two-step lookup ourselves.
-  const { data: searchTargets } = useQuery({
-    queryKey: ['cp_search_targets', debouncedSearch, searchScope],
-    enabled: !!debouncedSearch,
+  // ── Every booking, once ────────────────────────────────────────────
+  // Tabs, tiles, search, filters and sort all run over this index, so they cover the whole
+  // book.  They used to run over the 25 rows on screen, which is why the tiles read
+  // 0 / 0 / 0 next to "877 customers" and a tab could never find anyone on page 2.
+  const { data: index = [], isLoading: indexLoading, isError: indexError } = useQuery<IndexRow[]>({
+    queryKey: ['cp_index'],
+    queryFn: fetchPipelineIndex,
+    staleTime: 30_000,
+  })
+  const indexById = useMemo(() => {
+    const m: Record<string, IndexRow> = {}
+    for (const r of index) m[r.id] = r
+    return m
+  }, [index])
+
+  // Cheques due to bank today or earlier.  The only part of "today's work" that is not in
+  // the index: EMI and registry are read off the index rows (same rules as everywhere).
+  const { data: chequeDueIds = new Set<string>() } = useQuery<Set<string>>({
+    queryKey: ['cp_today_cheques'],
     queryFn: async () => {
-      const q = debouncedSearch
-      const wantsCustomer = searchScope === 'all' || searchScope === 'customer'
-      const wantsBroker   = searchScope === 'all' || searchScope === 'broker'
-      const wantsPlot     = searchScope === 'all' || searchScope === 'plot'
-      const [cust, brk, plots] = await Promise.all([
-        wantsCustomer
-          ? supabase.from('bp_customers').select('id').or(`name.ilike.%${q}%,phone.ilike.%${q}%,customer_code.ilike.%${q}%,previous_customer_code.ilike.%${q}%`).limit(500)
-          : Promise.resolve({ data: [] as any[] }),
-        wantsBroker
-          ? supabase.from('brokers').select('id').or(`name.ilike.%${q}%,broker_id.ilike.%${q}%`).limit(500)
-          : Promise.resolve({ data: [] as any[] }),
-        wantsPlot
-          ? supabase.from('bp_plots').select('id').ilike('plot_no', `%${q}%`).limit(500)
-          : Promise.resolve({ data: [] as any[] }),
-      ])
-      return {
-        customerIds: (cust.data || []).map((r: any) => r.id),
-        brokerIds:   (brk.data  || []).map((r: any) => r.id),
-        plotIds:     (plots.data || []).map((r: any) => r.id),
-      }
+      const { data, error } = await supabase.from('bp_pdc_cheques')
+        .select('booking_id').in('status', ['pending', 'deposited']).lte('cheque_date', today())
+      if (error) throw error
+      return new Set(((data || []) as any[]).map(c => c.booking_id).filter(Boolean))
     },
   })
 
-  // "Today's work" — everything that needs chasing today, in one queue: an EMI due, a
-  // cheque to bank, or a finished sale still waiting on its registry.  These live in three
-  // different tables, so the ids are resolved first and the bookings query is narrowed to
-  // them.  Filtering the visible page client-side would only ever find what happened to be
-  // on that page.
-  const { data: todayWork } = useQuery({
-    queryKey: ['cp_today_work'],
-    enabled: tab === 'today',
+  const t0 = today()
+  const isToday = (r: IndexRow) => emiDueByToday(r, t0) || chequeDueIds.has(r.id) || r.readyForRegistry
+
+  // Everything except the tab, so each tile shows what it holds under the current filters.
+  const narrowed = useMemo(() => {
+    const needle = debouncedSearch.toLowerCase()
+    const digits = needle.replace(/\D/g, '')
+    const weekEnd  = (() => { const d = new Date(); d.setDate(d.getDate() + 7); return todayLocalISO(d) })()
+    const monthEnd = (() => { const d = new Date(); return todayLocalISO(new Date(d.getFullYear(), d.getMonth() + 1, 0)) })()
+    const minBal = Number(minBalance) || 0
+    return index.filter(r => {
+      if (customerFocusId && r.customer_id !== customerFocusId) return false
+      if (filterBroker  && r.broker_id  !== filterBroker)  return false
+      if (filterProject && r.project_id !== filterProject) return false
+      if (filterMode === 'traditional' && r.commission_mode !== 'traditional') return false
+      if (filterMode === 'mlm' && r.commission_mode === 'traditional') return false
+      if (stageF && r.stage !== stageF) return false
+      if (registryF === 'ready'    && !r.readyForRegistry) return false
+      if (registryF === 'done'     && !r.registryDone)     return false
+      if (registryF === 'not_done' && r.registryDone)      return false
+      const booked = r.application_date || (r.created_at || '').slice(0, 10)
+      if (bookedFrom && booked < bookedFrom) return false
+      if (bookedTo   && booked > bookedTo)   return false
+      if (minBal > 0 && r.balance < minBal) return false
+      if (dueWindow) {
+        const next = r.emi?.next_due || ''
+        if (dueWindow === 'no_plan') { if (r.emi || r.balance <= 0) return false }
+        else if (!r.emi || r.emi.left === 0) return false
+        else if (dueWindow === 'overdue' && !(r.emi.overdue > 0)) return false
+        else if (dueWindow === 'today'   && !(next && next <= t0)) return false
+        else if (dueWindow === 'week'    && !(next && next <= weekEnd)) return false
+        else if (dueWindow === 'month'   && !(next && next <= monthEnd)) return false
+      }
+      if (needle) {
+        const inCustomer = () =>
+          r.customer_name.toLowerCase().includes(needle) ||
+          r.customer_code.toLowerCase().includes(needle) ||
+          r.previous_customer_code.toLowerCase().includes(needle) ||
+          // Phones are matched on digits so "98765 43210" and "+91 9876543210" both hit.
+          (digits.length >= 3 && r.customer_phone.replace(/\D/g, '').includes(digits))
+        const inBroker  = () => r.broker_name.toLowerCase().includes(needle) || r.broker_code.toLowerCase().includes(needle)
+        const inBooking = () => r.booking_no.toLowerCase().includes(needle) || (r.legacy_booking_no || '').toLowerCase().includes(needle)
+        const inPlot    = () => r.plot_no.toLowerCase().includes(needle)
+        const hit =
+          searchScope === 'customer' ? inCustomer()
+        : searchScope === 'broker'   ? inBroker()
+        : searchScope === 'booking'  ? inBooking()
+        : searchScope === 'plot'     ? inPlot()
+        : inCustomer() || inBroker() || inBooking() || inPlot()
+        if (!hit) return false
+      }
+      return true
+    })
+  }, [index, customerFocusId, filterBroker, filterProject, filterMode, stageF, registryF, bookedFrom, bookedTo, minBalance, dueWindow, debouncedSearch, searchScope, t0])
+
+  // Tile counts and money, from the same narrowed list the tabs filter.
+  const counts = useMemo(() => {
+    const c: Record<string, { n: number; value: number; balance: number; overdue: number }> = {}
+    const add = (k: string, r: IndexRow) => {
+      const x = (c[k] ??= { n: 0, value: 0, balance: 0, overdue: 0 })
+      x.n++; x.value += r.value; x.balance += r.balance; x.overdue += r.emi?.amount_overdue || 0
+    }
+    let todayEmi = 0, todayCheque = 0, todayRegistry = 0
+    for (const r of narrowed) {
+      add('all', r)
+      add(r.bucket, r)
+      if (isToday(r)) {
+        add('today', r)
+        if (emiDueByToday(r, t0)) todayEmi++
+        if (chequeDueIds.has(r.id)) todayCheque++
+        if (r.readyForRegistry) todayRegistry++
+      }
+    }
+    const get = (k: string) => c[k] || { n: 0, value: 0, balance: 0, overdue: 0 }
+    return { get, todayEmi, todayCheque, todayRegistry }
+  }, [narrowed, chequeDueIds, t0])
+
+  const sorted = useMemo(() => {
+    const list = tab === 'all' ? narrowed
+      : tab === 'today' ? narrowed.filter(isToday)
+      : narrowed.filter(r => r.bucket === tab)
+    const out = [...list]
+    const far = '9999-12-31'
+    switch (sortBy) {
+      case 'oldest':    out.sort((a, b) => a.created_at.localeCompare(b.created_at)); break
+      case 'balance':   out.sort((a, b) => b.balance - a.balance); break
+      case 'overdue':   out.sort((a, b) => (b.emi?.amount_overdue || 0) - (a.emi?.amount_overdue || 0) || b.balance - a.balance); break
+      case 'next_due':  out.sort((a, b) => (a.emi?.next_due || far).localeCompare(b.emi?.next_due || far)); break
+      case 'name':      out.sort((a, b) => a.customer_name.localeCompare(b.customer_name, 'en', { sensitivity: 'base' })); break
+      case 'kist_left': out.sort((a, b) => (b.emi?.left || 0) - (a.emi?.left || 0)); break
+      default:          out.sort((a, b) => b.created_at.localeCompare(a.created_at))
+    }
+    return out
+  }, [narrowed, tab, sortBy, chequeDueIds, t0])
+
+  const totalBookings = sorted.length
+  const totalPages = Math.max(1, Math.ceil(totalBookings / PAGE_SIZE))
+  const pageIds = useMemo(() => sorted.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE).map(r => r.id), [sorted, page])
+  // A payment or an EMI can move rows out of the current tab; if that empties the last page,
+  // step back to the new last page instead of showing an empty list.
+  useEffect(() => { if (page > totalPages - 1) setPage(totalPages - 1) }, [page, totalPages])
+
+  // Full rows — receipts, upline, cheques, deed — only for the page on screen.
+  const { data: pageRows = [], isLoading: pageLoading } = useQuery({
+    queryKey: ['cp_page_detail', pageIds],
+    enabled: pageIds.length > 0,
     queryFn: async () => {
-      const t = today()
-      const [emiRes, chequeRes, bookingRes, paidRes] = await Promise.all([
-        supabase.from('emi_installments')
-          .select('due_date, status, emi_schedules!inner(booking_id)')
-          .neq('status', 'paid').lte('due_date', t),
-        supabase.from('bp_pdc_cheques')
-          .select('booking_id, cheque_date, status')
-          .in('status', ['pending', 'deposited']).lte('cheque_date', t),
-        // Both columns are checked: a registry saved before registry_completed_at existed
-        // carries only registry_date, and testing one alone would keep listing those as
-        // still pending long after the deed was done.
-        supabase.from('bp_bookings')
-          .select('id, total_amount, plot_total_price')
-          .eq('stage', 'booking_done')
-          .is('registry_completed_at', null)
-          .is('registry_date', null),
-        supabase.from('bp_payments')
-          .select('booking_id, amount').eq('verification_status', 'verified'),
-      ])
-
-      const emiIds = new Set<string>()
-      for (const r of (emiRes.data || []) as any[]) {
-        const bid = r.emi_schedules?.booking_id
-        if (bid) emiIds.add(bid)
-      }
-
-      const chequeIds = new Set<string>()
-      for (const c of (chequeRes.data || []) as any[]) {
-        if (c.booking_id) chequeIds.add(c.booking_id)
-      }
-
-      // Registry is only "due" once there is nothing left to collect.  Both the test and
-      // the sum come from lib/bookingMath, which is what the Registry page uses too — so a
-      // booking cannot be "ready" on one page and not the other.
-      const paid = paidByBooking(paidRes.data as any[])
-      const registryIds = new Set<string>()
-      for (const b of (bookingRes.data || []) as any[]) {
-        if (isFullyPaid(bookingValue(b), paid[b.id] || 0)) registryIds.add(b.id)
-      }
-
-      const all = Array.from(new Set([...emiIds, ...chequeIds, ...registryIds]))
-      return {
-        emi: emiIds.size, cheque: chequeIds.size, registry: registryIds.size,
-        emiIds, chequeIds, registryIds,
-        // Capped so one enormous backlog can't build a request URL the server rejects.
-        ids: all.slice(0, 500), truncated: all.length > 500, totalIds: all.length,
-      }
-    },
-  })
-
-  // Build the bookings query: server-side filter + sort + range pagination + count.
-  const bookingsQueryKey = useMemo(() => ['cp_bookings_page', tab, debouncedSearch, searchScope, filterBroker, filterProject, filterMode, page, searchTargets, customerFocusId, todayWork?.ids], [tab, debouncedSearch, searchScope, filterBroker, filterProject, filterMode, page, searchTargets, customerFocusId, todayWork?.ids])
-  const { data: pageResult, isLoading } = useQuery({
-    // On the Today tab the id list has to be resolved first, otherwise the page would
-    // briefly show every booking before narrowing.
-    enabled: tab !== 'today' || !!todayWork,
-    queryKey: bookingsQueryKey,
-    queryFn: async () => {
-      if (tab === 'today') {
-        if (!todayWork || todayWork.ids.length === 0) return { rows: [] as any[], total: 0 }
-      }
-      let q = supabase
+      const { data, error } = await supabase
         .from('bp_bookings')
         .select(`
           id, booking_no, legacy_booking_no, stage, application_date, total_amount, plot_total_price,
@@ -240,54 +326,19 @@ export default function CustomerPipeline() {
           bp_projects(name, location),
           brokers(name, broker_id, rank),
           bp_booking_plots(plot_id)
-        `, { count: 'exact' })
-        .not('stage', 'eq', 'cancelled')
-        .order('created_at', { ascending: false })
-
-      // Customer focus narrows the list to one customer's deals (replaces the deleted
-      // /customer-history page).  Applied before any other filter.
-      if (customerFocusId) q = q.eq('customer_id', customerFocusId)
-      if (tab === 'today' && todayWork) q = q.in('id', todayWork.ids)
-      if (filterBroker)  q = q.eq('broker_id',  filterBroker)
-      if (filterProject) q = q.eq('project_id', filterProject)
-      // Older rows predate commission_mode and carry NULL; those are MLM, which is
-      // what the business ran on before traditional deals existed.
-      if (filterMode === 'traditional') q = q.eq('commission_mode', 'traditional')
-      if (filterMode === 'mlm')         q = q.or('commission_mode.is.null,commission_mode.eq.mlm')
-
-      if (debouncedSearch) {
-        const orParts: string[] = []
-        if (searchScope === 'all' || searchScope === 'booking') {
-          orParts.push(`booking_no.ilike.%${debouncedSearch}%`)
-          // Imported bookings also carry their old paper-register number, and admin
-          // searches by whichever one is in front of them.
-          orParts.push(`legacy_booking_no.ilike.%${debouncedSearch}%`)
-        }
-        if ((searchScope === 'all' || searchScope === 'customer') && searchTargets?.customerIds?.length) {
-          orParts.push(`customer_id.in.(${searchTargets.customerIds.join(',')})`)
-        }
-        if ((searchScope === 'all' || searchScope === 'broker') && searchTargets?.brokerIds?.length) {
-          orParts.push(`broker_id.in.(${searchTargets.brokerIds.join(',')})`)
-        }
-        if ((searchScope === 'all' || searchScope === 'plot') && searchTargets?.plotIds?.length) {
-          orParts.push(`plot_id.in.(${searchTargets.plotIds.join(',')})`)
-        }
-        if (orParts.length === 0) {
-          // No targets matched at all — short-circuit to empty result without hitting bookings.
-          return { rows: [] as any[], total: 0 }
-        }
-        q = q.or(orParts.join(','))
-      }
-
-      q = q.range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
-      const { data, error, count } = await q
+        `)
+        .in('id', pageIds)
       if (error) throw error
-      return { rows: data || [], total: count || 0 }
+      return data || []
     },
   })
-  const bookings = pageResult?.rows ?? []
-  const totalBookings = pageResult?.total ?? 0
-  const totalPages = Math.max(1, Math.ceil(totalBookings / PAGE_SIZE))
+  // Kept in the order the index sorted them; .in() returns rows in any order.
+  const bookings = useMemo(() => {
+    const byId: Record<string, any> = {}
+    for (const b of pageRows as any[]) byId[b.id] = b
+    return pageIds.map(id => byId[id]).filter(Boolean)
+  }, [pageRows, pageIds])
+  const isLoading = indexLoading || (pageIds.length > 0 && pageLoading)
 
   const bookingIds = useMemo(() => bookings.map((b: any) => b.id), [bookings])
 
@@ -316,7 +367,7 @@ export default function CustomerPipeline() {
         if (p.payment_type === 'token')        row.token   += amt
         if (p.payment_type === 'booking')      row.booking += amt
         if (p.payment_type === 'emi')          row.emi     += amt
-        if (p.payment_type === 'full_payment') row.full    += amt
+        if (p.payment_type === 'full_payment' || p.payment_type === 'full') row.full += amt
         if (!row.last_date || (p.payment_date && p.payment_date > row.last_date)) {
           row.last_date = p.payment_date
         }
@@ -333,16 +384,6 @@ export default function CustomerPipeline() {
       }
       return m
     },
-  })
-
-  // Reads the shared EMI summary rather than working it out again here.  This page had
-  // its own copy of the sum, the EMI panel had another, and Analytics counted straight off
-  // the instalments table — three answers to one question is how two screens end up
-  // disagreeing about who is overdue.
-  const { data: emiSummary = {} } = useQuery<Record<string, EmiStatus>>({
-    queryKey: ['cp_emi', bookingIds],
-    enabled: bookingIds.length > 0,
-    queryFn: () => fetchEmiStatus(bookingIds),
   })
 
   // Post-dated cheques held against each booking.  Shown on the row because "kitne cheque
@@ -507,9 +548,7 @@ export default function CustomerPipeline() {
       return { distributed: rows.length, payment, booking: p.booking }
     },
     onSuccess: (res: any) => {
-      qc.invalidateQueries({ queryKey: ['cp_bookings'] })
-      qc.invalidateQueries({ queryKey: ['cp_payments'] })
-      qc.invalidateQueries({ queryKey: ['cp_mlm'] })
+      refreshPipeline()
       qc.invalidateQueries({ queryKey: ['bookings'] })
       qc.invalidateQueries({ queryKey: ['payments'] })
       qc.invalidateQueries({ queryKey: ['payouts'] })
@@ -557,7 +596,7 @@ export default function CustomerPipeline() {
       }
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['cp_pdc'] })
+      refreshPipeline()
       qc.invalidateQueries({ queryKey: ['pdc_cheques'] })
       toast.success('Cheque added to the register')
       setChequeFor(null)
@@ -592,7 +631,7 @@ export default function CustomerPipeline() {
       }
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['cp_bookings_page'] })
+      refreshPipeline()
       qc.invalidateQueries({ queryKey: ['bookings'] })
       qc.invalidateQueries({ queryKey: ['plots'] })
       qc.invalidateQueries({ queryKey: ['plots_avail'] })
@@ -607,9 +646,7 @@ export default function CustomerPipeline() {
   const removeBooking = useMutation({
     mutationFn: async (booking: any) => { await deleteBookingSafely(booking) },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['cp_bookings_page'] })
-      qc.invalidateQueries({ queryKey: ['cp_global_stats'] })
-      qc.invalidateQueries({ queryKey: ['cp_today_work'] })
+      refreshPipeline()
       qc.invalidateQueries({ queryKey: ['bookings'] })
       qc.invalidateQueries({ queryKey: ['plots'] })
       qc.invalidateQueries({ queryKey: ['plots_avail'] })
@@ -630,9 +667,7 @@ export default function CustomerPipeline() {
       if (error) throw error
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['cp_bookings_page'] })
-      qc.invalidateQueries({ queryKey: ['cp_customer_focus'] })
-      qc.invalidateQueries({ queryKey: ['cp_search_targets'] })
+      refreshPipeline()
       qc.invalidateQueries({ queryKey: ['bookings'] })
       toast.success('Customer updated')
       setEditCustomer(null)
@@ -641,65 +676,124 @@ export default function CustomerPipeline() {
   })
 
   // ── Derive per-row state ───────────────────────────────────────────
+  // Value, paid, balance, EMI and bucket are read off the index row — the same numbers the
+  // tiles and tabs were counted from — so a card can never disagree with the tile it sits
+  // under.  The per-page payment summary is kept only for the receipt detail it carries
+  // (last UTR, receipt no, mode) and the split shown when a row is expanded.
   const rows = useMemo(() => {
     return (bookings as any[]).map((b: any) => {
+      const ix = indexById[b.id]
       const pm = paymentsByBooking[b.id] || { token: 0, booking: 0, emi: 0, full: 0, total: 0, last_date: null, last_utr: null, last_receipt: null, last_mode: null, last_amount: 0, count: 0 }
-      const total = bookingValue(b)
-      const paid  = pm.total
-      const balance = balanceOf(total, paid)
-      const emi = emiSummary[b.id]
+      const total   = ix ? ix.value   : bookingValue(b)
+      const paid    = ix ? ix.paid    : pm.total
+      const balance = ix ? ix.balance : balanceOf(total, paid)
+      const emi = ix?.emi
       const mlm = mlmByBooking[b.id] || { rows: 0, net: 0 }
       const pdc = pdcByBooking[b.id] || { open: 0, next: null, overdue: 0, openAmount: 0 }
-      // Shared test: older rows carry registry_date without registry_completed_at, and
-      // checking only one of them made those look un-registered here but done on /registry.
-      const registryDone = isRegistryDone(b)
+      const registryDone = ix ? ix.registryDone : !!(b.registry_completed_at || b.registry_date)
+      const readyForRegistry = !!ix?.readyForRegistry
       const chain = brokerChains[b.broker_id] || []
       const expected = Number(b.expected_booking_amount || 0)
-      const hasToken   = pm.token > 0
-      const hasBooking = pm.booking > 0
+      const hasToken   = (ix ? ix.token : pm.token) > 0
+      const hasBooking = (ix ? ix.booking : pm.booking) > 0
       const bookingShortfall = expected > 0 && pm.booking < expected ? expected - pm.booking : 0
-      const category: Tab =
-        balance <= 0 && total > 0  ? 'settled'
-      : (hasToken && !hasBooking && pm.full === 0) ? 'unpaid_booking'
-      : (!!emi && balance > 0)      ? 'emi_active'
-                                    : 'all'
+      // No value set is its own state.  Treating it as "balance 0 → settled" is what put a
+      // green "Settled" on customers who had not paid a rupee and hid their Record-token
+      // button.
+      const priceMissing = !(total > 0)
+      const settled = !priceMissing && balance <= 0
+      const category: Bucket = ix?.bucket || (priceMissing ? 'price_missing' : settled ? 'settled' : 'not_started')
       return {
-        ...b, pm, total, paid, balance, emi, mlm, pdc, registryDone, chain, expected,
-        hasToken, hasBooking, bookingShortfall, category,
+        ...b, pm, total, paid, balance, emi, mlm, pdc, registryDone, readyForRegistry, chain, expected,
+        hasToken, hasBooking, bookingShortfall, priceMissing, settled, category,
       }
     })
-  }, [bookings, paymentsByBooking, emiSummary, mlmByBooking, pdcByBooking, brokerChains])
+  }, [bookings, indexById, paymentsByBooking, mlmByBooking, pdcByBooking, brokerChains])
 
-  // Global counts (independent of the visible page) so the four KPI tiles still show the truth.
-  // Run as a single round-trip with head:true counts; cheap even at 10k+ bookings.
-  const { data: globalStats } = useQuery({
-    queryKey: ['cp_global_stats'],
-    queryFn: async () => {
-      const { count: all } = await supabase.from('bp_bookings').select('id', { count: 'exact', head: true }).not('stage', 'eq', 'cancelled')
-      return { all: all || 0 }
-    },
-  })
+  // The page is already the tab's slice, cut from the whole index above.
+  const filtered = rows
+  const selectedShown = filtered.filter((r: any) => selected.has(r.id))
+  const [printingKist, setPrintingKist] = useState(false)
 
-  // Tab-scoped stats use the current page's data (derived locally).  At 10k+ rows it's
-  // intentionally a snapshot — admins switch tabs which re-queries with that tab applied.
-  const stats = useMemo(() => {
-    const all = globalStats?.all ?? totalBookings
-    const unpaid = rows.filter(r => r.category === 'unpaid_booking').length
-    const emi    = rows.filter(r => r.category === 'emi_active').length
-    const settled = rows.filter(r => r.category === 'settled').length
-    const expectedAmt = rows.filter(r => r.category === 'unpaid_booking').reduce((s, r) => s + r.expected, 0)
-    const balanceAmt  = rows.reduce((s, r) => s + r.balance, 0)
-    return { all, unpaid, emi, settled, expectedAmt, balanceAmt }
-  }, [rows, globalStats, totalBookings])
+  const moreActive = [dueWindow, registryF, stageF, bookedFrom || bookedTo, minBalance].filter(Boolean).length
+  const clearMore = () => { setDueWindow(''); setRegistryF(''); setStageF(''); setBookedFrom(''); setBookedTo(''); setMinBalance('') }
+  const listBalance = useMemo(() => sorted.reduce((sum, r) => sum + r.balance, 0), [sorted])
+  const projectName = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const p of projects as any[]) m[p.id] = p.name
+    return m
+  }, [projects])
 
-  // Tab filter is applied locally to the current page.  Search / broker / project are server-side
-  // (handled in the bookings query above) so the user can navigate the full data set.
-  const filtered = useMemo(() => {
-    // 'today' is already narrowed server-side to the exact bookings that need chasing, so
-    // the category buckets must not be applied on top of it.
-    if (tab === 'all' || tab === 'today') return rows
-    return rows.filter(r => r.category === tab)
-  }, [rows, tab])
+  // What is on screen, in words — printed at the top of the register so a sheet in a file
+  // still says which list it is.
+  const filterSummary = (): string[] => {
+    const f: string[] = []
+    if (customerFocusId && customerFocus?.customer) f.push(`Customer: ${customerFocus.customer.name}`)
+    if (filterBroker) { const b = (brokers as any[]).find(x => x.id === filterBroker); f.push(`Broker: ${b ? `${b.name} [${b.broker_id}]` : '—'}`) }
+    if (filterProject) f.push(`Project: ${projectName[filterProject] || '—'}`)
+    if (filterMode) f.push(filterMode === 'mlm' ? 'MLM only' : 'Traditional only')
+    if (debouncedSearch) f.push(`Search: "${debouncedSearch}"`)
+    const dueLabel: Record<string, string> = { overdue: 'EMI late', today: 'EMI due by today', week: 'EMI due in 7 days', month: 'EMI due this month', no_plan: 'Balance without EMI plan' }
+    if (dueWindow) f.push(dueLabel[dueWindow])
+    if (registryF) f.push(registryF === 'ready' ? 'Registry ready' : registryF === 'done' ? 'Registry done' : 'Registry not done')
+    if (stageF) f.push(stageF === 'booking_done' ? 'Booking done' : 'Token received')
+    if (bookedFrom || bookedTo) f.push(`Booked ${bookedFrom || '…'} to ${bookedTo || '…'}`)
+    if (minBalance) f.push(`Balance ≥ ${formatINR(Number(minBalance))}`)
+    return f
+  }
+
+  // The register and the CSV run over the WHOLE filtered list, not the 25 on screen.
+  const registerRows = () => sorted.map(r => ({
+    customer_name: r.customer_name, customer_code: r.customer_code, customer_phone: r.customer_phone,
+    booking_no: r.booking_no, legacy_booking_no: r.legacy_booking_no, plot_no: r.plot_no,
+    project_name: r.project_id ? (projectName[r.project_id] || '') : '',
+    broker_name: r.broker_name, broker_code: r.broker_code, commission_mode: r.commission_mode,
+    value: r.value, paid: r.paid, balance: r.balance, emi: r.emi || null,
+  }))
+  const printRegister = () => {
+    if (sorted.length === 0) return
+    printPipelineRegister(registerRows(), { title: TAB_LABEL[tab], filters: filterSummary() })
+  }
+  const exportCsv = () => {
+    const header = ['Customer', 'Customer code', 'Phone', 'Booking', 'Old no', 'Plot', 'Project', 'Broker', 'Broker code', 'Sale type',
+      'Value', 'Paid', 'Balance', 'Kist total', 'Kist paid', 'Kist left', 'Kist late', 'EMI left', 'EMI late', 'Next due', 'Status']
+    const body = registerRows().map((r, i) => [
+      r.customer_name, r.customer_code, r.customer_phone, r.booking_no, r.legacy_booking_no || '', r.plot_no, r.project_name,
+      r.broker_name, r.broker_code, r.commission_mode === 'traditional' ? 'Traditional' : 'MLM',
+      r.value, r.paid, r.balance,
+      r.emi?.total ?? '', r.emi?.paid ?? '', r.emi?.left ?? '', r.emi?.overdue ?? '', r.emi?.amount_left ?? '', r.emi?.amount_overdue ?? '', r.emi?.next_due ?? '',
+      TAB_LABEL[sorted[i].bucket],
+    ])
+    const csv = [header, ...body].map(line => line.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `customers-${tab}-${today()}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // Kist cards: the full instalment table for each booking, one sheet each.
+  const printKistCards = async (list: any[]) => {
+    const withPlan = list.filter((r: any) => r.emi)
+    if (withPlan.length === 0) { toast.error('No EMI plan on this booking yet.'); return }
+    setPrintingKist(true)
+    try {
+      const details = await fetchEmiSchedules(withPlan.map((r: any) => r.id))
+      const items = withPlan
+        .filter((r: any) => details[r.id])
+        .map((r: any) => ({
+          detail: details[r.id],
+          customer: r.bp_customers, booking: r, plot: r.bp_plots, project: r.bp_projects, broker: r.brokers,
+        }))
+      if (items.length === 0) { toast.error('Could not load the instalments.'); return }
+      printEmiCards(items)
+    } catch (e: any) {
+      toast.error(e?.message || 'Could not build the EMI cards.')
+    } finally {
+      setPrintingKist(false)
+    }
+  }
 
   const toggleExpand = (id: string) => setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
 
@@ -843,36 +937,61 @@ export default function CustomerPipeline() {
         </div>
       )}
 
-      {/* KPI tiles + tabs combined */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <TabTile active={tab==='today'}          onClick={() => setTab('today')}
-          icon={<CalendarClock size={16}/>}      label="Today's work"
-          value={todayWork ? String(todayWork.totalIds) : '—'}
-          sub={todayWork ? `${todayWork.emi} EMI · ${todayWork.cheque} cheque · ${todayWork.registry} registry` : 'due today or overdue'}
-          tint="rose"/>
-        <TabTile active={tab==='all'}            onClick={() => setTab('all')}
-          icon={<Users size={16}/>}              label="All customers"     value={String(stats.all)}                                tint="indigo"/>
-        <TabTile active={tab==='unpaid_booking'} onClick={() => setTab('unpaid_booking')}
-          icon={<AlertTriangle size={16}/>}      label="Unpaid booking"     value={String(stats.unpaid)} sub={stats.expectedAmt > 0 ? `expects ${formatINR(stats.expectedAmt)}` : 'token paid · deposit pending'} tint="amber"/>
-        <TabTile active={tab==='emi_active'}     onClick={() => setTab('emi_active')}
-          icon={<Calculator size={16}/>}         label="EMI collection"     value={String(stats.emi)} sub={`balance ${formatINR(stats.balanceAmt)}`}     tint="blue"/>
-        <TabTile active={tab==='settled'}        onClick={() => setTab('settled')}
-          icon={<CheckCircle2 size={16}/>}       label="Fully settled"      value={String(stats.settled)} sub="zero balance"                              tint="emerald"/>
+      {/* KPI tiles = tabs.  Counted across every booking under the current filters, and
+          the buckets are exclusive, so the bucket tiles add up to "All". */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+        <TabTile active={tab==='today'} onClick={() => setTab('today')} tint="rose"
+          label="Today's work" value={indexLoading ? '—' : String(counts.get('today').n)}
+          sub={`${counts.todayEmi} EMI · ${counts.todayCheque} cheque · ${counts.todayRegistry} registry`}/>
+        <TabTile active={tab==='all'} onClick={() => setTab('all')} tint="indigo"
+          label="All customers" value={indexLoading ? '—' : String(counts.get('all').n)}
+          sub={`${formatINR(counts.get('all').balance)} still to collect`}/>
+        <TabTile active={tab==='emi_overdue'} onClick={() => setTab('emi_overdue')} tint="rose"
+          label="EMI overdue" value={String(counts.get('emi_overdue').n)}
+          sub={`${formatINR(counts.get('emi_overdue').overdue)} late`}/>
+        <TabTile active={tab==='emi_running'} onClick={() => setTab('emi_running')} tint="blue"
+          label="EMI running" value={String(counts.get('emi_running').n)}
+          sub={`${formatINR(counts.get('emi_running').balance)} balance`}/>
+        <TabTile active={tab==='balance_no_plan'} onClick={() => setTab('balance_no_plan')} tint="violet"
+          label="Balance, no EMI plan" value={String(counts.get('balance_no_plan').n)}
+          sub={`${formatINR(counts.get('balance_no_plan').balance)} unplanned`}/>
+        <TabTile active={tab==='token_only'} onClick={() => setTab('token_only')} tint="amber"
+          label="Token only" value={String(counts.get('token_only').n)}
+          sub="booking deposit pending"/>
+        <TabTile active={tab==='not_started'} onClick={() => setTab('not_started')} tint="slate"
+          label="No payment yet" value={String(counts.get('not_started').n)}
+          sub={`${formatINR(counts.get('not_started').value)} booked`}/>
+        <TabTile active={tab==='settled'} onClick={() => setTab('settled')} tint="emerald"
+          label="Fully settled" value={String(counts.get('settled').n)}
+          sub={`${formatINR(counts.get('settled').value)} collected`}/>
+        <TabTile active={tab==='price_missing'} onClick={() => setTab('price_missing')} tint="amber"
+          label="Price not set" value={String(counts.get('price_missing').n)}
+          sub="plot / price never entered"/>
       </div>
 
-      {/* Search bar — scope dropdown disambiguates whether you mean customer or broker, etc. */}
+      {indexError && (
+        <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-800 flex items-center gap-2">
+          <AlertTriangle size={14}/>The customer list did not load. Counts and tabs below are not reliable — refresh the page.
+        </div>
+      )}
+
+      {/* Search + everyday filters */}
       <div className="flex flex-wrap gap-2 items-center">
         <div className="relative flex-1 min-w-[240px]">
           <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400"/>
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder={
-              searchScope === 'customer' ? 'Search customer name / phone / code'
-              : searchScope === 'broker' ? 'Search broker name / code'
-              : searchScope === 'booking' ? 'Search booking number (BK-…)'
-              : searchScope === 'plot' ? 'Search plot number'
-              : 'Search anything — pick scope to narrow'
+              searchScope === 'customer' ? 'Customer name, phone or code'
+              : searchScope === 'broker' ? 'Broker name or code'
+              : searchScope === 'booking' ? 'Booking number or old register number'
+              : searchScope === 'plot' ? 'Plot number'
+              : 'Name, phone, code, booking, broker or plot'
             }
-            className="w-full pl-10 pr-3 py-2.5 text-sm bg-white border border-gray-200 rounded-full focus:outline-none focus:border-gray-900 transition"/>
+            className="w-full pl-10 pr-9 py-2.5 text-sm bg-white border border-gray-200 rounded-full focus:outline-none focus:border-gray-900 transition"/>
+          {search && (
+            <button onClick={() => setSearch('')} title="Clear search"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700"><X size={14}/></button>
+          )}
         </div>
         <select value={searchScope} onChange={e => setSearchScope(e.target.value as any)}
           className="bg-white border border-gray-200 rounded-full px-3 py-2.5 text-sm focus:outline-none focus:border-gray-900">
@@ -900,12 +1019,94 @@ export default function CustomerPipeline() {
           <button onClick={() => setFilterMode('traditional')}
             className={`px-3 py-2.5 border-l border-gray-200 ${filterMode === 'traditional' ? 'bg-amber-600 text-white' : 'text-amber-700 hover:bg-amber-50'}`}>Traditional</button>
         </div>
-        <span className="text-[12px] text-gray-400 tabular-nums ml-auto">
-          {totalBookings.toLocaleString('en-IN')} result{totalBookings === 1 ? '' : 's'}
-        </span>
+        <button onClick={() => setShowMore(v => !v)}
+          className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-2.5 text-sm transition ${
+            showMore || moreActive ? 'border-gray-900 bg-gray-900 text-white' : 'border-gray-200 bg-white text-gray-700 hover:border-gray-400'}`}>
+          <SlidersHorizontal size={14}/>More filters{moreActive ? ` · ${moreActive}` : ''}
+        </button>
       </div>
 
-      {/* Select rows to print their forms together */}
+      {showMore && (
+        <div className="bg-white border border-gray-200 rounded-2xl p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <label className="text-[12px] text-gray-600 space-y-1">
+            <span className="block font-medium">Next EMI due</span>
+            <select value={dueWindow} onChange={e => setDueWindow(e.target.value as DueWindow)} className="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-sm">
+              <option value="">Any</option>
+              <option value="overdue">Already late</option>
+              <option value="today">Due today or late</option>
+              <option value="week">Due within 7 days</option>
+              <option value="month">Due by month end</option>
+              <option value="no_plan">Balance left but no EMI plan</option>
+            </select>
+          </label>
+          <label className="text-[12px] text-gray-600 space-y-1">
+            <span className="block font-medium">Registry</span>
+            <select value={registryF} onChange={e => setRegistryF(e.target.value as any)} className="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-sm">
+              <option value="">Any</option>
+              <option value="ready">Ready — fully paid, deed pending</option>
+              <option value="not_done">Not done yet</option>
+              <option value="done">Done</option>
+            </select>
+          </label>
+          <label className="text-[12px] text-gray-600 space-y-1">
+            <span className="block font-medium">Stage</span>
+            <select value={stageF} onChange={e => setStageF(e.target.value as any)} className="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-sm">
+              <option value="">Any</option>
+              <option value="token_received">Token received</option>
+              <option value="booking_done">Booking done</option>
+            </select>
+          </label>
+          <label className="text-[12px] text-gray-600 space-y-1">
+            <span className="block font-medium">Booked between</span>
+            <span className="flex items-center gap-1.5">
+              <input type="date" value={bookedFrom} onChange={e => setBookedFrom(e.target.value)} className="flex-1 min-w-0 border border-gray-200 rounded-lg px-2 py-1.5 text-sm"/>
+              <span className="text-gray-400">–</span>
+              <input type="date" value={bookedTo} onChange={e => setBookedTo(e.target.value)} className="flex-1 min-w-0 border border-gray-200 rounded-lg px-2 py-1.5 text-sm"/>
+            </span>
+          </label>
+          <label className="text-[12px] text-gray-600 space-y-1">
+            <span className="block font-medium">Balance at least (₹)</span>
+            <input type="number" min={0} value={minBalance} onChange={e => setMinBalance(e.target.value)} placeholder="e.g. 100000"
+              className="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-sm"/>
+          </label>
+          <div className="flex items-end">
+            <button onClick={clearMore} disabled={!moreActive}
+              className="text-sm text-gray-600 hover:text-gray-900 underline disabled:opacity-40 disabled:no-underline">Clear these filters</button>
+          </div>
+        </div>
+      )}
+
+      {/* List toolbar: count, sort, and the printouts that run on the WHOLE filtered list,
+          not just the 25 on screen. */}
+      <div className="flex items-center gap-2 flex-wrap px-1">
+        <span className="text-[13px] text-gray-700">
+          <b className="tabular-nums">{totalBookings.toLocaleString('en-IN')}</b> {tab === 'all' ? 'customer' : 'match'}{totalBookings === 1 ? '' : (tab === 'all' ? 's' : 'es')}
+          {totalBookings > 0 && <span className="text-gray-400"> · {formatINR(listBalance)} balance</span>}
+        </span>
+        <div className="ml-auto flex items-center gap-2 flex-wrap">
+          <label className="inline-flex items-center gap-1.5 text-[12px] text-gray-500">
+            <ListOrdered size={13}/>
+            <select value={sortBy} onChange={e => setSortBy(e.target.value as SortKey)} className="bg-white border border-gray-200 rounded-full px-2.5 py-1.5 text-[12px]">
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="balance">Highest balance</option>
+              <option value="overdue">Most EMI overdue</option>
+              <option value="next_due">Next EMI due soonest</option>
+              <option value="kist_left">Most kist left</option>
+              <option value="name">Customer A–Z</option>
+            </select>
+          </label>
+          <Button size="sm" variant="secondary" onClick={printRegister} disabled={totalBookings === 0}
+            title="Print every customer in this list with their EMI position">
+            <Printer size={13}/>Print list ({totalBookings})
+          </Button>
+          <Button size="sm" variant="secondary" onClick={exportCsv} disabled={totalBookings === 0}>
+            <Download size={13}/>CSV
+          </Button>
+        </div>
+      </div>
+
+      {/* Select rows to print forms / EMI cards together */}
       {filtered.length > 0 && (
         <div className="flex items-center gap-3 flex-wrap px-1">
           <label className="inline-flex items-center gap-2 text-[12px] text-gray-600 cursor-pointer">
@@ -913,13 +1114,18 @@ export default function CustomerPipeline() {
               className="w-4 h-4 accent-gray-900 cursor-pointer"/>
             Select all shown
           </label>
-          {selected.size > 0 && (
+          {selectedShown.length > 0 && (
             <>
-              <span className="text-[12px] font-semibold text-gray-900">{filtered.filter((r: any) => selected.has(r.id)).length} selected</span>
+              <span className="text-[12px] font-semibold text-gray-900">{selectedShown.length} selected</span>
               <button onClick={() => setSelected(new Set())}
                 className="text-[12px] text-gray-500 hover:text-gray-900 underline">Clear</button>
               <Button size="sm" onClick={printSelectedForms} loading={printing}>
-                <Printer size={13}/>Print {filtered.filter((r: any) => selected.has(r.id)).length} form{filtered.filter((r: any) => selected.has(r.id)).length === 1 ? '' : 's'}
+                <Printer size={13}/>Print {selectedShown.length} form{selectedShown.length === 1 ? '' : 's'}
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => printKistCards(selectedShown)} loading={printingKist}
+                disabled={!selectedShown.some((r: any) => r.emi)}
+                title={selectedShown.some((r: any) => r.emi) ? 'Print the instalment card for each selected customer' : 'None of the selected bookings has an EMI plan'}>
+                <Calculator size={13}/>Print EMI cards ({selectedShown.filter((r: any) => r.emi).length})
               </Button>
             </>
           )}
@@ -932,11 +1138,7 @@ export default function CustomerPipeline() {
         {!isLoading && filtered.length === 0 && (
           <div className="py-12 text-center">
             <div className="text-sm text-gray-400">
-              {tab === 'today' && '✓ Nothing due today. No EMI, no cheque to bank, no registry waiting.'}
-              {tab === 'unpaid_booking' && '✓ No deals waiting on booking deposit — well done.'}
-              {tab === 'emi_active' && 'No active EMI plans. Once a booking has an EMI schedule and balance, it appears here.'}
-              {tab === 'settled' && 'No fully settled deals yet.'}
-              {tab === 'all' && 'No customers in pipeline. Create a booking to start.'}
+              {EMPTY_TEXT[tab]}
             </div>
           </div>
         )}
@@ -947,23 +1149,31 @@ export default function CustomerPipeline() {
           const m1 = r.hasToken
           const m2 = r.hasBooking && r.bookingShortfall <= 0
           const m3 = !!r.emi
-          const m4 = r.balance <= 0 && r.total > 0
+          const m4 = r.settled
           const pct = r.total > 0 ? Math.min(100, Math.round((r.paid / r.total) * 100)) : 0
-          // ONE primary, contextual call-to-action
-          const primary = !r.hasToken && r.balance > 0
+          // ONE primary, contextual call-to-action.  "Not settled" rather than "balance > 0":
+          // a booking with no price has a balance of 0 too, and keying off the balance hid
+          // its Record-token button and showed it as Settled.
+          const open_ = !r.settled
+          const primary = !r.hasToken && open_
               ? { label: 'Record token',          onClick: () => setPayFor({ booking: r, type: 'token' }) }
-            : r.hasToken && !r.hasBooking && r.balance > 0
+            : r.priceMissing
+              ? { label: 'Set plot & price',      onClick: () => navigate(`/bookings?edit=${r.id}`) }
+            : r.hasToken && !r.hasBooking && open_
               ? { label: 'Record booking',        onClick: () => setPayFor({ booking: r, type: 'booking' }) }
             : r.hasBooking && r.bookingShortfall > 0
               ? { label: 'Top up booking',        onClick: () => setPayFor({ booking: r, type: 'booking' }) }
-            : !r.emi && r.balance > 0
+            : !r.emi && open_
               ? { label: 'Start EMI',             onClick: () => setEmiBooking(r) }
-            : r.emi && r.balance > 0
-              ? { label: 'Collect EMI payment',   onClick: () => setEmiBooking(r) }
+            : r.emi && open_
+              ? { label: r.emi.overdue > 0 ? 'Collect late EMI' : 'Collect EMI payment', onClick: () => setEmiBooking(r) }
             : null  // settled
 
           // Next-step subtitle that explains the primary action
-          const nextHint = !r.hasToken
+          const nextHint = r.priceMissing
+              ? (r.hasToken ? 'Token in, but no plot or price on this booking — set them so the balance can be worked out.'
+                            : 'No plot or price on this booking yet. Record the token now, set the price when the plot is allotted.')
+            : !r.hasToken
               ? 'Customer hasn\'t paid yet.'
             : !r.hasBooking
               ? r.expected > 0 ? `Booking deposit expected: ${formatINR(r.expected)}.` : 'Awaiting booking deposit.'
@@ -1041,8 +1251,17 @@ export default function CustomerPipeline() {
                   </div>
                 </div>
                 <div className="text-right shrink-0">
-                  <div className={`text-[18px] font-bold tabular-nums ${r.balance > 0 ? 'text-gray-900' : 'text-emerald-700'}`}>{formatINR(r.balance)}</div>
-                  <div className="text-[11px] text-gray-400 tabular-nums">{r.balance > 0 ? `paid ${formatINR(r.paid)} / ${formatINR(r.total)}` : 'settled'}</div>
+                  {r.priceMissing ? (
+                    <>
+                      <div className="text-[13px] font-semibold text-amber-700 inline-flex items-center gap-1"><Tag size={12}/>Price not set</div>
+                      <div className="text-[11px] text-gray-400 tabular-nums">{r.paid > 0 ? `paid ${formatINR(r.paid)}` : 'nothing paid'}</div>
+                    </>
+                  ) : (
+                    <>
+                      <div className={`text-[18px] font-bold tabular-nums ${r.settled ? 'text-emerald-700' : 'text-gray-900'}`}>{formatINR(r.balance)}</div>
+                      <div className="text-[11px] text-gray-400 tabular-nums">{r.settled ? 'settled' : `paid ${formatINR(r.paid)} / ${formatINR(r.total)}`}</div>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -1101,10 +1320,13 @@ export default function CustomerPipeline() {
                 </span>
                 {/* How much EMI is still to come — the question admin asked to see without
                     opening each row. */}
-                {r.emi && r.emi.amount_left > 0 && (
+                {/* "Kitni EMI hai" answered on the row: kist paid of total, kist left, and the
+                    money still to come. */}
+                {r.emi && (
                   <span className="inline-flex items-center gap-1 text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-full px-1.5 py-0.5 font-medium"
-                    title={`${r.emi.left} of ${r.emi.total} instalments still to pay`}>
-                    EMI left {formatINR(r.emi.amount_left)}
+                    title={`${r.emi.paid} of ${r.emi.total} instalments paid · ${r.emi.left} left${r.emi.per_inst ? ` · ${formatINR(r.emi.per_inst)} each` : ''}`}>
+                    <Hourglass size={10}/>EMI {r.emi.paid}/{r.emi.total} kist
+                    {r.emi.left > 0 ? ` · ${r.emi.left} left · ${formatINR(r.emi.amount_left)}` : ' · all paid'}
                   </span>
                 )}
                 {r.emi?.overdue > 0 && (
@@ -1138,7 +1360,7 @@ export default function CustomerPipeline() {
                 )}
                 {/* Only nudged once the money is actually in — chasing a registry on an
                     unpaid deal is not the next step. */}
-                {!r.registryDone && r.balance <= 0 && r.total > 0 && (
+                {r.readyForRegistry && (
                   <span className="inline-flex items-center gap-1 text-amber-800 bg-amber-50 border border-amber-200 rounded-full px-1.5 py-0.5 font-semibold">
                     <ScrollText size={10}/>Registry pending
                   </span>
@@ -1152,11 +1374,11 @@ export default function CustomerPipeline() {
                     className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-gray-900 text-white text-sm font-semibold hover:bg-black shadow-sm transition">
                     {primary.label} <ArrowUpRight size={14}/>
                   </button>
-                ) : (
+                ) : r.settled ? (
                   <span className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-emerald-50 text-emerald-700 text-sm font-semibold">
                     <CheckCircle2 size={14}/>Settled
                   </span>
-                )}
+                ) : null}
                 {/* The two operations admin was leaving the page for.  Kept next to the
                     primary action rather than inside Details, since both are counter work
                     done while the customer is standing there. */}
@@ -1175,10 +1397,17 @@ export default function CustomerPipeline() {
                   className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border border-gray-300 bg-white text-gray-800 text-sm font-medium hover:bg-gray-50 hover:border-gray-400 shadow-sm transition">
                   <Landmark size={14}/>PDC cheque
                 </button>
+                {r.emi && (
+                  <button onClick={() => printKistCards([r])} disabled={printingKist}
+                    title="Print every instalment of this plan — paid, late and still to come"
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border border-gray-300 bg-white text-gray-800 text-sm font-medium hover:bg-gray-50 hover:border-gray-400 shadow-sm transition disabled:opacity-50">
+                    <Printer size={14}/>EMI card
+                  </button>
+                )}
                 {!r.registryDone && (
                   <button onClick={() => setRegistryFor(r)}
                     className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border text-sm font-medium shadow-sm transition ${
-                      r.balance <= 0 && r.total > 0
+                      r.readyForRegistry
                         ? 'border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100'
                         : 'border-gray-300 bg-white text-gray-800 hover:bg-gray-50 hover:border-gray-400'}`}>
                     <ScrollText size={14}/>Mark registry
@@ -1327,7 +1556,9 @@ export default function CustomerPipeline() {
       )}
 
       {/* EMI panel (reuse from Bookings) */}
-      <EmiPanel booking={emiBooking} open={!!emiBooking} onClose={() => setEmiBooking(null)}/>
+      {/* Closing the panel refreshes the list: an EMI collected or a plan created inside it
+          moves the booking between tiles, and the row used to stay in its old bucket. */}
+      <EmiPanel booking={emiBooking} open={!!emiBooking} onClose={() => { setEmiBooking(null); refreshPipeline() }}/>
 
       {/* Quick payment modal */}
       <RecordPaymentModal
@@ -1405,7 +1636,10 @@ function AddChequeModal({ booking, open, onClose, onSubmit, submitting }: any) {
       <div className="space-y-4">
         <div className="text-[13px] space-y-1.5">
           <Leader label="Booking" value={booking.booking_no || '—'}/>
-          <Leader label="Balance remaining" value={formatINR(booking.balance)} accent={booking.balance > 0 ? 'text-orange-700' : 'text-emerald-700'}/>
+          {/* With no price there is no balance to show — "₹0" in green read as "nothing owed". */}
+          {!booking.priceMissing && (
+            <Leader label="Balance remaining" value={formatINR(booking.balance)} accent={booking.balance > 0 ? 'text-orange-700' : 'text-emerald-700'}/>
+          )}
           {booking.pdc?.open > 0 && (
             <Leader label="Cheques already on file" value={`${booking.pdc.open} · ${formatINR(booking.pdc.openAmount)}`} accent="text-purple-700"/>
           )}
@@ -1653,6 +1887,8 @@ function TabTile({ active, onClick, label, value, sub, tint }: any) {
     blue:    'bg-blue-500',
     emerald: 'bg-emerald-500',
     rose:    'bg-rose-500',
+    slate:   'bg-slate-400',
+    violet:  'bg-violet-500',
   }
   return (
     <button onClick={onClick}
@@ -1734,14 +1970,17 @@ function RecordPaymentModal({ open, booking, type, onClose, onSubmit, submitting
     presets.push({ label: `Expected · ${formatINR(expectedRemaining)}`, value: expectedRemaining, tone: 'bg-gray-900 text-white border-gray-900' })
     presets.push({ label: `Half · ${formatINR(Math.round(expectedRemaining / 2))}`, value: Math.round(expectedRemaining / 2), tone: 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50' })
   }
-  presets.push({ label: `Full balance · ${formatINR(booking.balance)}`, value: booking.balance, tone: 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50' })
+  // No "full balance" button when there is no price: it would offer to record ₹0.
+  if (booking.balance > 0) {
+    presets.push({ label: `Full balance · ${formatINR(booking.balance)}`, value: booking.balance, tone: 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50' })
+  }
 
   return (
     <Modal open={open} onClose={onClose} title={type === 'token' ? `Record token · ${booking.bp_customers?.name || ''}` : `Record booking deposit · ${booking.bp_customers?.name || ''}`} size="sm">
       <div className="space-y-4">
         {/* Context — leader-dot rows (Apple style) */}
         <div className="text-[13px] space-y-1.5">
-          <Leader label="Total plot value" value={formatINR(booking.total)}/>
+          <Leader label="Total plot value" value={booking.priceMissing ? 'Not set yet' : formatINR(booking.total)} accent={booking.priceMissing ? 'text-amber-700' : undefined}/>
           <Leader label="Already paid" value={formatINR(booking.paid)} accent="text-emerald-700"/>
           {type === 'booking' && Number(booking.pm?.booking || 0) > 0 && (
             <Leader label="Booking deposit so far" value={formatINR(booking.pm.booking)} accent="text-blue-700"/>
@@ -1785,10 +2024,16 @@ function RecordPaymentModal({ open, booking, type, onClose, onSubmit, submitting
               {type === 'booking' && liveExpected > 0 && amt >= expectedRemaining && (
                 <div className="text-emerald-700">✓ Booking deposit fully covered{amt > expectedRemaining ? ` · ${formatINR(amt - expectedRemaining)} extra towards balance` : ''}</div>
               )}
-              {amt > booking.balance && (
-                <div className="text-rose-700">⚠ Amount exceeds balance ({formatINR(booking.balance)}). Excess will be recorded but not applied to outstanding.</div>
+              {booking.priceMissing ? (
+                <div className="text-amber-700">No price on this booking yet — the payment is recorded now; the balance is worked out once the plot and price are set.</div>
+              ) : (
+                <>
+                  {amt > booking.balance && (
+                    <div className="text-rose-700">⚠ Amount exceeds balance ({formatINR(booking.balance)}). Excess will be recorded but not applied to outstanding.</div>
+                  )}
+                  {amt <= booking.balance && <div className="text-gray-500">Balance after this payment: <b className="text-orange-700">{formatINR(balanceAfter)}</b></div>}
+                </>
               )}
-              {amt <= booking.balance && <div className="text-gray-500">Balance after this payment: <b className="text-orange-700">{formatINR(balanceAfter)}</b></div>}
             </div>
           )}
         </div>
