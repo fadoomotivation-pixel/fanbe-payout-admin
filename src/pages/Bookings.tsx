@@ -144,10 +144,20 @@ const EMPTY: any = {
 export default function Bookings() {
   const qc = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
-  // ?mode=traditional puts the whole page into "Traditional Bookings" mode: the list
-  // filters to traditional bookings only and the New Booking modal defaults to the
-  // traditional form.  Driven by the "Traditional Bookings" sidebar entry.
-  const modeFilter = (searchParams.get('mode') === 'traditional') ? 'traditional' as const : 'all' as const
+  // ?mode= splits the page by how the sale is paid for.  It used to understand only
+  // "traditional", which meant there was no way to look at MLM bookings on their own —
+  // and with 806 traditional against 71 MLM, the MLM ones were simply lost in the list.
+  // The New Booking modal follows the same switch, so the form opens in the mode you are
+  // already looking at instead of defaulting to MLM every time.
+  const modeParam = searchParams.get('mode')
+  const modeFilter = modeParam === 'traditional' ? 'traditional' as const
+                   : modeParam === 'mlm'         ? 'mlm' as const
+                   : 'all' as const
+  const setMode = (m: 'all' | 'mlm' | 'traditional') => {
+    const next = new URLSearchParams(searchParams)
+    if (m === 'all') next.delete('mode'); else next.set('mode', m)
+    setSearchParams(next, { replace: true })
+  }
   const [modal, setModal]     = useState(false)
   const [editing, setEditing] = useState<any>(null)
   const [form, setForm]       = useState<any>(EMPTY)
@@ -194,9 +204,11 @@ export default function Bookings() {
         .select('*,bp_plots(*),bp_customers(*),brokers(name,broker_id),bp_projects(*),bp_booking_plots(position,plot_id,bp_plots(*))')
         .in('stage', ['token_received','booking_done','cancelled'])
         .order('created_at', { ascending: false })
-      // Server-side filter: don't even fetch MLM rows when admin is on the Traditional
-      // Bookings menu.  Belt-and-suspenders with the client-side filter below.
+      // Server-side filter so the other mode's rows are never fetched at all.
+      // MLM is matched with "is null or 'mlm'" because older bookings predate the column
+      // and carry NULL — treating those as traditional would hide most of the MLM book.
       if (modeFilter === 'traditional') q = q.eq('commission_mode', 'traditional')
+      if (modeFilter === 'mlm')         q = q.or('commission_mode.is.null,commission_mode.eq.mlm')
       const { data, error } = await q
       if (error) throw error
       return data
@@ -1229,10 +1241,9 @@ export default function Bookings() {
 
   // Apply admin filters (search, project, broker, stage, date range, sale mode)
   const filtered = inCategory.filter((b: any) => {
-    // ?mode=traditional narrows the page to traditional bookings only — driven by the
-    // "Traditional Bookings" sidebar entry so the same /bookings page can serve both
-    // browsing experiences without splitting into a second route.
+    // Mirror of the server-side filter above, so a cached page cannot show the wrong mode.
     if (modeFilter === 'traditional' && b.commission_mode !== 'traditional') return false
+    if (modeFilter === 'mlm' && b.commission_mode === 'traditional') return false
     if (filterProject && b.project_id !== filterProject) return false
     if (filterBroker  && b.broker_id  !== filterBroker)  return false
     if (filterStage   && b.stage      !== filterStage)   return false
@@ -1521,14 +1532,36 @@ export default function Bookings() {
     <div className="p-4 md:p-8 space-y-6 max-w-4xl mx-auto">
       <div>
         <h1 className="text-2xl md:text-3xl font-bold text-gray-900 tracking-tight">
-          {modeFilter === 'traditional' ? 'Traditional Bookings' : 'Create a booking'}
+          {modeFilter === 'traditional' ? 'Traditional Bookings'
+           : modeFilter === 'mlm'       ? 'MLM Bookings'
+           : 'Create a booking'}
         </h1>
         <p className="text-sm text-gray-500 mt-1">
           {modeFilter === 'traditional'
-            ? <>Custom-commission sales (single or multi-broker split). New bookings here default to traditional mode. <Link to="/bookings" className="text-blue-700 hover:underline">All bookings →</Link></>
+            ? <>Custom-commission sales (single or multi-broker split). New bookings here default to traditional mode.</>
+            : modeFilter === 'mlm'
+            ? <>Sponsor-tree sales — commission cascades up the upline. New bookings here default to MLM mode.</>
             : <>{all.length} bookings · Confirmed value {formatINR(totalValue)}. Manage payments &amp; EMIs in <Link to="/customer-pipeline" className="text-blue-700 hover:underline">Customer Pipeline →</Link></>
           }
         </p>
+      </div>
+
+      {/* Sale type.  The two kinds of sale pay commission in completely different ways, so
+          mixing them in one list made it impossible to look at either on its own — and the
+          MLM book (71 bookings) was simply buried under the traditional one (806). */}
+      <div className="inline-flex rounded-xl border border-gray-200 overflow-hidden text-sm bg-white">
+        <button
+          onClick={() => setMode('all')}
+          className={`px-4 py-2 transition ${modeFilter === 'all' ? 'bg-gray-900 text-white' : 'text-gray-700 hover:bg-gray-50'}`}
+        >All sales</button>
+        <button
+          onClick={() => setMode('mlm')}
+          className={`px-4 py-2 border-l border-gray-200 transition ${modeFilter === 'mlm' ? 'bg-blue-600 text-white' : 'text-blue-700 hover:bg-blue-50'}`}
+        >MLM</button>
+        <button
+          onClick={() => setMode('traditional')}
+          className={`px-4 py-2 border-l border-gray-200 transition ${modeFilter === 'traditional' ? 'bg-amber-600 text-white' : 'text-amber-700 hover:bg-amber-50'}`}
+        >Traditional</button>
       </div>
 
       <div className="flex flex-wrap gap-3 items-center">
@@ -1559,7 +1592,16 @@ export default function Bookings() {
           {recent.map((r: any) => (
             <div key={r.id} className="px-4 py-3 hover:bg-gray-50/40 flex items-center gap-3">
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-semibold text-gray-900 truncate">{r.bp_customers?.name || '—'}</div>
+                <div className="text-sm font-semibold text-gray-900 truncate flex items-center gap-1.5">
+                  <span className="truncate">{r.bp_customers?.name || '—'}</span>
+                  {/* Which commission rule paid on this sale — visible without opening it. */}
+                  <span className={`shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${
+                    r.commission_mode === 'traditional'
+                      ? 'bg-amber-50 text-amber-800 border-amber-200'
+                      : 'bg-blue-50 text-blue-800 border-blue-200'}`}>
+                    {r.commission_mode === 'traditional' ? 'TRAD' : 'MLM'}
+                  </span>
+                </div>
                 <div className="text-[12px] text-gray-500 truncate">
                   <span className="font-mono">{r.booking_no}</span>
                   {r.legacy_booking_no && <span className="font-mono text-gray-400"> (पुराना {r.legacy_booking_no})</span>}

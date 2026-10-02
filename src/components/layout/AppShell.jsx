@@ -5,7 +5,7 @@ import {
   UserCheck, Layers, MessageSquare, Megaphone, ShieldCheck, Receipt,
   Wallet, Calculator, TrendingUp, Landmark, Trophy, Star, Gift,
   ScrollText, CalendarRange, Inbox, UserPlus, History, Network,
-  Bell, Menu, X, Phone, ChevronRight as Chevron
+  Bell, Menu, X, Phone, ChevronRight as Chevron, AlertTriangle, UserSearch
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
@@ -41,9 +41,13 @@ const NAV = [
     { to: '/pdc-cheques',       icon: Landmark,   label: 'PDC Cheques' },
     // Registry is the last step of a sale, so it sits after the money entries.
     { to: '/registry',          icon: ScrollText, label: 'Registry' },
+    // The chase list.  Analytics shows the overdue total; this is who it belongs to.
+    { to: '/emi-overdue',       icon: AlertTriangle, label: 'EMI Overdue' },
   ]},
   { group: 'Broker Network', items: [
     { to: '/brokers',          icon: Users,    label: 'Brokers' },
+    // One agent's whole book — what they sold, what came in, who stopped paying.
+    { to: '/agent-report',     icon: UserSearch, label: 'Agent Report' },
     { to: '/team-tree',        icon: Network,  label: 'Team Tree' },
     { to: '/kyc',              icon: UserCheck,label: 'KYC Review' },
     { to: '/commission-ranks', icon: Trophy,   label: 'Rank Slabs' },

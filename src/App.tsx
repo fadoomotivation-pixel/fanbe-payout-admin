@@ -39,6 +39,8 @@ import PayoutTerms from '@/pages/PayoutTerms'
 import PayoutCycles from '@/pages/PayoutCycles'
 import CustomerPipeline from '@/pages/CustomerPipeline'
 import BrokerTree from '@/pages/BrokerTree'
+import AgentReport from '@/pages/AgentReport'
+import EmiOverdue from '@/pages/EmiOverdue'
 
 // Preserve search params when redirecting (so old links like
 // /customer-history?customer=X still land on the right customer view).
@@ -135,6 +137,8 @@ export default function App(){
         <Route path="/payments" element={<Payments/>}/>
         <Route path="/pdc-cheques" element={<PdcCheques/>}/>
         <Route path="/registry" element={<Registry/>}/>
+        <Route path="/emi-overdue" element={<EmiOverdue/>}/>
+        <Route path="/agent-report" element={<AgentReport/>}/>
         <Route path="/activity" element={<ActivityLog/>}/>
         <Route path="/emi" element={<Navigate to="/customer-pipeline" replace/>}/>
         <Route path="/brokers" element={<Brokers/>}/>
