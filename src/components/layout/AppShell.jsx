@@ -45,6 +45,8 @@ const NAV = [
     { to: '/pdc-cheques',       icon: Landmark,   label: 'PDC Cheques' },
     // Registry is the last step of a sale, so it sits after the money entries.
     { to: '/registry',          icon: ScrollText, label: 'Registry' },
+    // Cash-flow cockpit: what is due each month vs what came in.
+    { to: '/emi-collection',    icon: Calculator,    label: 'EMI Collection' },
     // The chase list.  Analytics shows the overdue total; this is who it belongs to.
     { to: '/emi-overdue',       icon: AlertTriangle, label: 'EMI Overdue' },
   ]},
