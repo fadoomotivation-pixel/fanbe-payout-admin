@@ -407,8 +407,10 @@ export default function Dashboard() {
 
       {/* Receipts are held back on these bookings (90-day EMI lapsation).  Surfaced here
           because a blocked receipt is discovered at the counter otherwise. */}
+      {/* The chase list, worst first — the old link opened the pipeline's "EMI running"
+          tab, which by definition holds nobody who is late. */}
       {lapsed.bookings > 0 && (
-        <Link to="/customer-pipeline?tab=emi_active"
+        <Link to="/emi-overdue"
           className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 hover:border-rose-300 transition">
           <ShieldAlert size={16} className="text-rose-600 mt-0.5 shrink-0"/>
           <div className="text-sm">
@@ -424,7 +426,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <FollowUp icon={<ShieldAlert size={14}/>}   label="KYC pending"      value={String(followUps.kycPending)}      href="/kyc"                              active={followUps.kycPending > 0}      tone="amber"/>
         <FollowUp icon={<Briefcase size={14}/>}     label="Pipeline active"  value={String(followUps.pipelineActive)}   href="/customer-pipeline"                active={followUps.pipelineActive > 0}  tone="indigo"/>
-        <FollowUp icon={<CalendarClock size={14}/>} label="EMI overdue"      value={String(followUps.emiOverdue)} sub={followUps.emiOverdueAmount > 0 ? formatINR(followUps.emiOverdueAmount) : undefined} href="/customer-pipeline?tab=emi_active" active={followUps.emiOverdue > 0} tone="rose"/>
+        <FollowUp icon={<CalendarClock size={14}/>} label="EMI overdue"      value={String(followUps.emiOverdue)} sub={followUps.emiOverdueAmount > 0 ? formatINR(followUps.emiOverdueAmount) : undefined} href="/customer-pipeline?tab=emi_overdue" active={followUps.emiOverdue > 0} tone="rose"/>
         <FollowUp icon={<Users size={14}/>}         label="Open withdrawals" value={String(followUps.openWithdrawals)}  href="/withdrawals"                     active={followUps.openWithdrawals > 0} tone="blue"/>
       </div>
 

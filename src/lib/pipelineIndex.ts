@@ -16,7 +16,7 @@
 // disagree with those screens.
 import { supabase } from '@/lib/supabase'
 import { fetchAllRows, todayLocalISO } from '@/lib/fetchAll'
-import { bookingValue, balanceOf, paidByBooking, isRegistryReady, isRegistryDone } from '@/lib/bookingMath'
+import { bookingValue, balanceOf, paidByBooking, isRegistryReady, isRegistryDone, collectionPct, isImported, isPaidUnknown } from '@/lib/bookingMath'
 import { fetchEmiStatusAll, type EmiStatus } from '@/lib/emiStatus'
 
 // Exclusive and in priority order: every booking is in exactly one bucket, so the tiles
@@ -26,6 +26,7 @@ export type Bucket =
   | 'settled'           // value > 0 and nothing left to collect
   | 'emi_overdue'       // on an EMI plan and at least one instalment is late
   | 'emi_running'       // on an EMI plan, nothing late
+  | 'old_unrecorded'    // imported from the old register, and what was paid before is not entered
   | 'not_started'       // has a value, nothing paid yet
   | 'token_only'        // token paid, booking deposit not
   | 'balance_no_plan'   // paid something, balance left, no EMI plan to collect it
@@ -49,9 +50,15 @@ export type IndexRow = {
   broker_name: string
   broker_code: string
   plot_no: string
+  /** came from the old records sheet, not booked in this system */
+  imported: boolean
   value: number
   paid: number
   balance: number
+  /** collected as a % of value (0 when no value is set) */
+  paidPct: number
+  /** date of the latest verified payment, if any */
+  last_paid: string | null
   token: number
   booking: number
   full: number
@@ -62,11 +69,14 @@ export type IndexRow = {
   bucket: Bucket
 }
 
-function bucketOf(value: number, balance: number, paid: number, token: number, booking: number, full: number, emi?: EmiStatus): Bucket {
+function bucketOf(value: number, balance: number, paid: number, token: number, booking: number, full: number, emi: EmiStatus | undefined, paidUnknown: boolean): Bucket {
   if (!(value > 0)) return 'price_missing'
   if (balance <= 0) return 'settled'
   if (emi && emi.overdue > 0) return 'emi_overdue'
   if (emi && emi.left > 0) return 'emi_running'
+  // An old-register booking with nothing recorded (lib/bookingMath isPaidUnknown) is not
+  // "no payment yet" — what was paid before the switch is simply not entered.
+  if (paidUnknown) return 'old_unrecorded'
   if (!(paid > 0)) return 'not_started'
   if (token > 0 && booking <= 0 && full <= 0) return 'token_only'
   return 'balance_no_plan'
@@ -76,7 +86,7 @@ export async function fetchPipelineIndex(): Promise<IndexRow[]> {
   const [bookings, payments, emiByBooking] = await Promise.all([
     fetchAllRows((from, to) =>
       supabase.from('bp_bookings')
-        .select(`id, booking_no, legacy_booking_no, stage, created_at, application_date,
+        .select(`id, booking_no, legacy_booking_no, notes, stage, created_at, application_date,
                  total_amount, plot_total_price, customer_id, broker_id, project_id, plot_id,
                  commission_mode, registry_date, registry_completed_at,
                  bp_customers(name, phone, customer_code, previous_customer_code),
@@ -87,7 +97,7 @@ export async function fetchPipelineIndex(): Promise<IndexRow[]> {
         .range(from, to)),
     fetchAllRows((from, to) =>
       supabase.from('bp_payments')
-        .select('booking_id, amount, payment_type, verification_status')
+        .select('booking_id, amount, payment_type, payment_date, verification_status')
         .eq('verification_status', 'verified')
         .order('id')
         .range(from, to)),
@@ -96,8 +106,10 @@ export async function fetchPipelineIndex(): Promise<IndexRow[]> {
 
   const paidTotal = paidByBooking(payments as any[])
   const byType: Record<string, { token: number; booking: number; full: number }> = {}
+  const lastPaid: Record<string, string> = {}
   for (const p of payments as any[]) {
     if (!p.booking_id) continue
+    if (p.payment_date && (!lastPaid[p.booking_id] || p.payment_date > lastPaid[p.booking_id])) lastPaid[p.booking_id] = p.payment_date
     const t = (byType[p.booking_id] ??= { token: 0, booking: 0, full: 0 })
     const amt = Number(p.amount || 0)
     if (p.payment_type === 'token')   t.token   += amt
@@ -113,6 +125,7 @@ export async function fetchPipelineIndex(): Promise<IndexRow[]> {
     const t       = byType[b.id] || { token: 0, booking: 0, full: 0 }
     const emi     = emiByBooking[b.id]
     const registryDone = isRegistryDone(b)
+    const imported = isImported(b)
     return {
       id: b.id,
       booking_no: b.booking_no || '',
@@ -132,13 +145,16 @@ export async function fetchPipelineIndex(): Promise<IndexRow[]> {
       broker_name: b.brokers?.name || '',
       broker_code: b.brokers?.broker_id || '',
       plot_no: b.bp_plots?.plot_no || '',
+      imported,
       value, paid, balance,
+      paidPct: collectionPct(value, paid),
+      last_paid: lastPaid[b.id] || null,
       token: t.token, booking: t.booking, full: t.full,
       emi,
       registryDone,
       // The Registry page's own test, so a booking is "ready" on both or on neither.
       readyForRegistry: isRegistryReady(b, paid),
-      bucket: bucketOf(value, balance, paid, t.token, t.booking, t.full, emi),
+      bucket: bucketOf(value, balance, paid, t.token, t.booking, t.full, emi, isPaidUnknown(b, paid)),
     }
   })
 }

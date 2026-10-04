@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { formatINR, formatDate } from '@/lib/utils'
-import { bookingValue, balanceOf, paidByBooking, sumVerified } from '@/lib/bookingMath'
+import { bookingValue, balanceOf, paidByBooking, sumVerified, isPaidUnknown } from '@/lib/bookingMath'
 import { instalmentDue } from '@/lib/emiStatus'
 import { waLink } from '@/lib/whatsapp'
 import { useCallQueue, useCallHistory, todayISO, type CallTarget } from './useCollection'
@@ -38,7 +38,7 @@ function rowToTarget(b: BookingRow): CallTarget {
   return {
     bookingId: b.id, customerId: b.customerId, name: b.name, phone: b.phone,
     bookingNo: b.bookingNo, projectName: b.projectName, plotNo: b.plotNo,
-    totalValue: b.value, paid: b.paid, balance: b.balance,
+    totalValue: b.value, paid: b.paid, balance: b.balance, paidUnknown: b.paidUnknown,
     // The detail screen works these out from the instalments it loads itself, so a
     // booking opened from Bookings shows the same overdue figure as one opened from Today.
     overdueAmount: 0, overdueCount: 0, oldestDueDate: null, daysLate: 0,
@@ -224,10 +224,14 @@ function TodayScreen({ onLog, onOpen }: { onLog: (t: CallTarget) => void; onOpen
 }
 
 function CallCard({ t, onLog, onOpen, onDone }: { t: CallTarget; onLog: () => void; onOpen: () => void; onDone: () => void }) {
+  // An old record's "balance" is only its price — never put it in a message to the customer.
+  const amountLine = t.overdueAmount > 0 ? `Overdue amount: ${formatINR(t.overdueAmount)}.`
+    : t.paidUnknown ? null
+    : `Balance due: ${formatINR(t.balance)}.`
   const wa = waLink(t.phone, [
     `Dear ${t.name},`, '',
     `This is a payment reminder from Fanbe Group for booking ${t.bookingNo}.`,
-    t.overdueAmount > 0 ? `Overdue amount: ${formatINR(t.overdueAmount)}.` : `Balance due: ${formatINR(t.balance)}.`,
+    ...(amountLine ? [amountLine] : []),
     '', 'Please pay at your earliest. Ignore this message if you have already paid.',
     '', 'Thank you.',
   ].join('\n'))
@@ -245,12 +249,21 @@ function CallCard({ t, onLog, onOpen, onDone }: { t: CallTarget; onLog: () => vo
             </div>
           </div>
           <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 18, fontWeight: 700, color: t.overdueAmount > 0 ? 'var(--m-red)' : 'var(--m-ink)' }}>
-              {formatINR(t.overdueAmount > 0 ? t.overdueAmount : t.balance)}
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--m-ink-3)' }}>
-              {t.overdueAmount > 0 ? 'overdue' : 'balance'}
-            </div>
+            {t.overdueAmount <= 0 && t.paidUnknown ? (
+              <>
+                <div style={{ fontSize: 13, fontWeight: 650, color: '#C2410C' }}>Paid not entered</div>
+                <div style={{ fontSize: 11, color: 'var(--m-ink-3)' }}>old record · don't quote</div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 18, fontWeight: 700, color: t.overdueAmount > 0 ? 'var(--m-red)' : 'var(--m-ink)' }}>
+                  {formatINR(t.overdueAmount > 0 ? t.overdueAmount : t.balance)}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--m-ink-3)' }}>
+                  {t.overdueAmount > 0 ? 'overdue' : 'balance'}
+                </div>
+              </>
+            )}
           </div>
         </div>
 
@@ -315,7 +328,7 @@ function CustomerScreen({ target, onBack, onLog }: { target: CallTarget; onBack:
     queryFn: async () => {
       const [{ data: b }, { data: pays }] = await Promise.all([
         supabase.from('bp_bookings')
-          .select('id, booking_no, total_amount, plot_total_price, stage, customer_id, bp_customers(id, name, phone), bp_projects(name), bp_plots(plot_no)')
+          .select('id, booking_no, legacy_booking_no, notes, total_amount, plot_total_price, stage, customer_id, bp_customers(id, name, phone), bp_projects(name), bp_plots(plot_no)')
           .eq('id', target.bookingId).maybeSingle(),
         supabase.from('bp_payments')
           .select('amount, verification_status, payment_date, payment_type, receipt_no')
@@ -331,6 +344,7 @@ function CustomerScreen({ target, onBack, onLog }: { target: CallTarget; onBack:
         projectName: (b as any).bp_projects?.name || target.projectName,
         plotNo: (b as any).bp_plots?.plot_no || target.plotNo,
         value, paid, balance: balanceOf(value, paid),
+        paidUnknown: isPaidUnknown(b, paid),
         payments: (pays || []).filter((p: any) => p.verification_status === 'verified'),
       }
     },
@@ -366,6 +380,7 @@ function CustomerScreen({ target, onBack, onLog }: { target: CallTarget; onBack:
     value: detail?.value ?? target.totalValue,
     paid: detail?.paid ?? target.paid,
     balance: detail?.balance ?? target.balance,
+    paidUnknown: detail?.paidUnknown ?? target.paidUnknown,
   }
 
   return (
@@ -380,10 +395,15 @@ function CustomerScreen({ target, onBack, onLog }: { target: CallTarget; onBack:
 
       <div className="m-card" style={{ padding: 16, marginTop: 18, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <Money label="Overdue"  value={overdue} tone={overdue > 0 ? 'var(--m-red)' : undefined}/>
-        <Money label="Balance"  value={view.balance}/>
-        <Money label="Paid"     value={view.paid} tone="var(--m-green)"/>
+        <Money label="Balance"  value={view.balance} text={view.paidUnknown ? 'Not known' : undefined}/>
+        <Money label="Paid"     value={view.paid} tone="var(--m-green)" text={view.paidUnknown ? 'Not entered' : undefined}/>
         <Money label="Total"    value={view.value}/>
       </div>
+      {view.paidUnknown && (
+        <div style={{ fontSize: 12, color: '#C2410C', marginTop: 8 }}>
+          Old record — what this customer paid before the switch is not entered yet. Do not quote a balance; ask the office.
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
         {view.phone && (
@@ -486,7 +506,7 @@ function SearchScreen({ onOpen }: { onOpen: (t: CallTarget) => void }) {
       const parts = [`booking_no.ilike.%${term}%`]
       if (custIds.length) parts.push(`customer_id.in.(${custIds.join(',')})`)
       const { data: bks } = await supabase.from('bp_bookings')
-        .select('id, booking_no, total_amount, plot_total_price, customer_id, bp_customers(id, name, phone), bp_projects(name), bp_plots(plot_no)')
+        .select('id, booking_no, legacy_booking_no, notes, total_amount, plot_total_price, customer_id, bp_customers(id, name, phone), bp_projects(name), bp_plots(plot_no)')
         .or(parts.join(',')).neq('stage', 'cancelled').limit(40)
       const ids = (bks || []).map((b: any) => b.id)
       const { data: pays } = ids.length
@@ -501,7 +521,7 @@ function SearchScreen({ onOpen }: { onOpen: (t: CallTarget) => void }) {
           name: b.bp_customers?.name || '(no name)', phone: b.bp_customers?.phone || null,
           bookingNo: b.booking_no || '', projectName: b.bp_projects?.name || null,
           plotNo: b.bp_plots?.plot_no || null,
-          totalValue: value, paid: got, balance: balanceOf(value, got),
+          totalValue: value, paid: got, balance: balanceOf(value, got), paidUnknown: isPaidUnknown(b, got),
           overdueAmount: 0, overdueCount: 0, oldestDueDate: null, daysLate: 0,
           lastCall: null, followUpDate: null, promisedAmount: null, reason: 'followup',
         } as CallTarget
@@ -531,8 +551,17 @@ function SearchScreen({ onOpen }: { onOpen: (t: CallTarget) => void }) {
                 <div style={{ fontSize: 12, color: 'var(--m-ink-2)', marginTop: 2 }}>{r.bookingNo}{r.phone ? ` · ${r.phone}` : ''}</div>
               </div>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontWeight: 700 }}>{formatINR(r.balance)}</div>
-                <div style={{ fontSize: 11, color: 'var(--m-ink-3)' }}>balance</div>
+                {r.paidUnknown ? (
+                  <>
+                    <div style={{ fontWeight: 650, fontSize: 13, color: '#C2410C' }}>Paid not entered</div>
+                    <div style={{ fontSize: 11, color: 'var(--m-ink-3)' }}>old record</div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontWeight: 700 }}>{formatINR(r.balance)}</div>
+                    <div style={{ fontSize: 11, color: 'var(--m-ink-3)' }}>balance</div>
+                  </>
+                )}
               </div>
             </div>
           </button>
@@ -592,11 +621,13 @@ function MeScreen() {
 }
 
 /* ── bits ──────────────────────────────────────────────────────── */
-function Money({ label, value, tone }: { label: string; value: number; tone?: string }) {
+function Money({ label, value, tone, text }: { label: string; value: number; tone?: string; text?: string }) {
   return (
     <div>
       <div style={{ fontSize: 11, color: 'var(--m-ink-3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em' }}>{label}</div>
-      <div style={{ fontSize: 19, fontWeight: 700, color: tone || 'var(--m-ink)', marginTop: 2 }}>{formatINR(value)}</div>
+      {text
+        ? <div style={{ fontSize: 15, fontWeight: 650, color: '#C2410C', marginTop: 4 }}>{text}</div>
+        : <div style={{ fontSize: 19, fontWeight: 700, color: tone || 'var(--m-ink)', marginTop: 2 }}>{formatINR(value)}</div>}
     </div>
   )
 }

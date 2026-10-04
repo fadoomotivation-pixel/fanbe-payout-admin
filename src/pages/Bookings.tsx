@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
+import { fetchAllRows } from '@/lib/fetchAll'
 import { Table } from '@/components/ui/Table.tsx'
 import { Button } from '@/components/ui/Button.tsx'
 import { Input, Select, Textarea } from '@/components/ui/Input.tsx'
@@ -199,19 +200,21 @@ export default function Bookings() {
     // Include modeFilter in the key so the cache splits properly per view (all vs traditional).
     queryKey: ['bookings', modeFilter],
     queryFn: async () => {
-      let q = supabase
-        .from('bp_bookings')
-        .select('*,bp_plots(*),bp_customers(*),brokers(name,broker_id),bp_projects(*),bp_booking_plots(position,plot_id,bp_plots(*))')
-        .in('stage', ['token_received','booking_done','cancelled'])
-        .order('created_at', { ascending: false })
-      // Server-side filter so the other mode's rows are never fetched at all.
-      // MLM is matched with "is null or 'mlm'" because older bookings predate the column
-      // and carry NULL — treating those as traditional would hide most of the MLM book.
-      if (modeFilter === 'traditional') q = q.eq('commission_mode', 'traditional')
-      if (modeFilter === 'mlm')         q = q.or('commission_mode.is.null,commission_mode.eq.mlm')
-      const { data, error } = await q
-      if (error) throw error
-      return data
+      // Paged past the API's silent 1,000-row cap.  At 877 bookings this was weeks from
+      // cutting the oldest off — and an "Edit" link from the pipeline to one of them would
+      // then open nothing, because the edit modal looks the booking up in this list.
+      return await fetchAllRows((from, to) => {
+        let q = supabase
+          .from('bp_bookings')
+          .select('*,bp_plots(*),bp_customers(*),brokers(name,broker_id),bp_projects(*),bp_booking_plots(position,plot_id,bp_plots(*))')
+          .in('stage', ['token_received','booking_done','cancelled'])
+        // Server-side filter so the other mode's rows are never fetched at all.
+        // MLM is matched with "is null or 'mlm'" because older bookings predate the column
+        // and carry NULL — treating those as traditional would hide most of the MLM book.
+        if (modeFilter === 'traditional') q = q.eq('commission_mode', 'traditional')
+        if (modeFilter === 'mlm')         q = q.or('commission_mode.is.null,commission_mode.eq.mlm')
+        return q.order('created_at', { ascending: false }).order('id').range(from, to)
+      })
     },
   })
 
@@ -219,13 +222,14 @@ export default function Bookings() {
   const { data: paidByBooking = {} } = useQuery<Record<string, number>>({
     queryKey: ['payments_by_booking'],
     queryFn: async () => {
-      const { data, error } = await supabase
+      const data = await fetchAllRows((from, to) => supabase
         .from('bp_payments')
         .select('booking_id, amount')
         .eq('verification_status', 'verified')
-      if (error) throw error
+        .order('id')
+        .range(from, to))
       const out: Record<string, number> = {}
-      for (const p of data || []) {
+      for (const p of data as any[]) {
         if (!p.booking_id) continue
         out[p.booking_id] = (out[p.booking_id] || 0) + Number(p.amount || 0)
       }
@@ -1632,7 +1636,10 @@ export default function Bookings() {
                 </div>
               </div>
               <div className="text-right shrink-0">
-                <div className="text-sm font-semibold text-gray-900 tabular-nums">{formatINR(bookingValue(r))}</div>
+                {/* "₹0" read as a free plot; it means the price was never entered. */}
+                {bookingValue(r) > 0
+                  ? <div className="text-sm font-semibold text-gray-900 tabular-nums">{formatINR(bookingValue(r))}</div>
+                  : <div className="text-[12px] font-semibold text-amber-700">Price not set</div>}
                 <div className="text-[11px] text-gray-400">{formatDate(r.application_date || r.created_at)}</div>
               </div>
               <Link to={`/customer-pipeline?booking=${r.id}`} className="text-[12px] text-blue-700 hover:underline whitespace-nowrap">Manage →</Link>

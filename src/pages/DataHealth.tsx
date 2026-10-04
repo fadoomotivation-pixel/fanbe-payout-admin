@@ -20,6 +20,7 @@ import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { formatINR } from '@/lib/utils'
 import { bookingValue } from '@/lib/bookingMath'
+import { fetchAllRows } from '@/lib/fetchAll'
 import { ShieldCheck, Search, AlertTriangle, ArrowRight, Download } from 'lucide-react'
 
 type Issue = 'no_payment' | 'no_broker' | 'no_plot' | 'no_value' | 'no_project' | 'bad_phone'
@@ -65,15 +66,19 @@ export default function DataHealth() {
     // coming back shows the queue shrink without a manual refresh.
     refetchOnWindowFocus: true,
     queryFn: async () => {
+      // Paged: at 1,000 rows the API stops without an error, and this page would quietly
+      // report the first thousand bookings as the whole book.
       const [bk, pay] = await Promise.all([
-        supabase.from('bp_bookings')
+        fetchAllRows((from, to) => supabase.from('bp_bookings')
           .select('id, booking_no, legacy_booking_no, customer_id, broker_id, plot_id, project_id, stage, size_sqyd, total_amount, plot_total_price, base_price, bp_customers(name, phone), bp_projects(name)')
-          .neq('stage', 'cancelled'),
-        supabase.from('bp_payments').select('booking_id'),
+          .neq('stage', 'cancelled')
+          .order('id').range(from, to)),
+        // Verified only — the same "money received" the pipeline and every report count.
+        fetchAllRows((from, to) => supabase.from('bp_payments').select('booking_id')
+          .eq('verification_status', 'verified').order('id').range(from, to)),
       ])
-      if (bk.error) throw bk.error
-      const paid = new Set(((pay.data || []) as any[]).map(p => p.booking_id))
-      return ((bk.data || []) as any[]).map(b => {
+      const paid = new Set((pay as any[]).map(p => p.booking_id))
+      return (bk as any[]).map(b => {
         const value = bookingValue(b)
         const digits = String(b.bp_customers?.phone || '').replace(/\D/g, '')
         const issues: Issue[] = []
@@ -130,8 +135,11 @@ export default function DataHealth() {
 
   const meta = ISSUES.find(i => i.key === active)!
 
+  // A missing payment history is entered on the booking's own card in the pipeline
+  // ("Enter paid till date" on an old record), so that link opens exactly that booking.
   const fixHref = (r: Row) =>
-    meta.fix === 'customer' && r.customer_id
+    active === 'no_payment' ? `/customer-pipeline?booking=${r.id}`
+    : meta.fix === 'customer' && r.customer_id
       ? `/customer-pipeline?customer=${r.customer_id}`
       : `/bookings?edit=${r.id}`
 

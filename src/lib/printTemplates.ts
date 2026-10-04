@@ -636,15 +636,20 @@ export type RegisterRow = {
   paid: number
   balance: number
   emi?: { total: number; paid: number; left: number; overdue: number; amount_left: number; amount_overdue: number; next_due: string | null; per_inst: number } | null
+  /** an old-register booking whose paid-till-date is not entered: paid and balance are unknown */
+  paid_unknown?: boolean
 }
 
 export function printPipelineRegister(rows: RegisterRow[], meta: { title: string; filters: string[] }) {
   if (rows.length === 0) return
+  // An old record's balance is only its price — kept out of the Balance total and counted
+  // on its own line, the same way the pipeline's "to collect" figure treats it.
   const tot = rows.reduce((a, r) => ({
-    value: a.value + r.value, paid: a.paid + r.paid, balance: a.balance + r.balance,
+    value: a.value + r.value, paid: a.paid + r.paid, balance: a.balance + (r.paid_unknown ? 0 : r.balance),
     kistLeft: a.kistLeft + (r.emi?.left || 0), kistLate: a.kistLate + (r.emi?.overdue || 0),
     late: a.late + (r.emi?.amount_overdue || 0), emiLeft: a.emiLeft + (r.emi?.amount_left || 0),
-  }), { value: 0, paid: 0, balance: 0, kistLeft: 0, kistLate: 0, late: 0, emiLeft: 0 })
+    unknownN: a.unknownN + (r.paid_unknown ? 1 : 0), unknownValue: a.unknownValue + (r.paid_unknown ? r.value : 0),
+  }), { value: 0, paid: 0, balance: 0, kistLeft: 0, kistLate: 0, late: 0, emiLeft: 0, unknownN: 0, unknownValue: 0 })
   const onPlan = rows.filter(r => r.emi).length
 
   const body = rows.map((r, i) => {
@@ -657,8 +662,8 @@ export function printPipelineRegister(rows: RegisterRow[], meta: { title: string
       <td>${esc(r.project_name || '—')}<div class="s">${r.commission_mode === 'traditional' ? 'Traditional' : 'MLM'}</div></td>
       <td>${esc(r.broker_name || '—')}${r.broker_code ? `<div class="s">${esc(r.broker_code)}</div>` : ''}</td>
       <td class="r">${r.value > 0 ? formatINR(r.value) : '<span class="warn">not set</span>'}</td>
-      <td class="r">${formatINR(r.paid)}</td>
-      <td class="r"><b>${formatINR(r.balance)}</b></td>
+      <td class="r">${r.paid_unknown ? '<span class="warn">not entered</span>' : formatINR(r.paid)}</td>
+      <td class="r">${r.paid_unknown ? '<span class="s">old record</span>' : `<b>${formatINR(r.balance)}</b>`}</td>
       <td class="c">${e ? `${e.paid}/${e.total}` : '—'}</td>
       <td class="c">${e ? `<b>${e.left}</b>` : '—'}${e && e.per_inst ? `<div class="s">${formatINR(e.per_inst)} ea</div>` : ''}</td>
       <td class="c">${late ? `<b class="bad">${e!.overdue}</b><div class="s bad">${formatINR(e!.amount_overdue)}</div>` : (e ? '0' : '—')}</td>
@@ -702,6 +707,7 @@ export function printPipelineRegister(rows: RegisterRow[], meta: { title: string
     <div>Value <b>${formatINR(tot.value)}</b></div>
     <div>Collected <b>${formatINR(tot.paid)}</b></div>
     <div>Balance <b>${formatINR(tot.balance)}</b></div>
+    ${tot.unknownN ? `<div class="warn">Old records, paid not entered <b>${tot.unknownN}</b> · price ${formatINR(tot.unknownValue)}</div>` : ''}
     <div>On EMI <b>${onPlan}</b></div>
     <div>Kist left <b>${tot.kistLeft}</b> · ${formatINR(tot.emiLeft)}</div>
     <div class="bad">Kist late <b>${tot.kistLate}</b> · ${formatINR(tot.late)}</div>

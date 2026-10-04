@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
-import { bookingValue, balanceOf, paidByBooking, isRegistryDone } from '@/lib/bookingMath'
+import { bookingValue, balanceOf, paidByBooking, isRegistryDone, isPaidUnknown } from '@/lib/bookingMath'
 
 // Data for the business screens (bookings, customers, projects, plots).
 //
@@ -26,6 +26,8 @@ export type BookingRow = {
   value: number
   paid: number
   balance: number
+  /** old-register booking with nothing recorded — its balance is only the price */
+  paidUnknown: boolean
   registryDone: boolean
   date: string | null
 }
@@ -46,13 +48,14 @@ function toRow(b: any, paid: Record<string, number>): BookingRow {
     value,
     paid: got,
     balance: balanceOf(value, got),
+    paidUnknown: isPaidUnknown(b, got),
     registryDone: isRegistryDone(b),
     date: b.application_date || null,
   }
 }
 
 const BOOKING_SELECT = `
-  id, booking_no, legacy_booking_no, stage, application_date, total_amount, plot_total_price,
+  id, booking_no, legacy_booking_no, notes, stage, application_date, total_amount, plot_total_price,
   customer_id, registry_date, registry_completed_at,
   bp_customers(id, name, phone, customer_code),
   bp_projects(name),
@@ -118,7 +121,7 @@ export function useCustomers(opts: { search: string; page: number }) {
       const ids = custs.map((c: any) => c.id)
       const { data: bks } = ids.length
         ? await supabase.from('bp_bookings')
-            .select('id, customer_id, total_amount, plot_total_price, stage')
+            .select('id, customer_id, total_amount, plot_total_price, stage, legacy_booking_no, notes')
             .in('customer_id', ids).neq('stage', 'cancelled')
         : { data: [] as any[] }
       const bookingIds = (bks || []).map((b: any) => b.id)
@@ -127,22 +130,27 @@ export function useCustomers(opts: { search: string; page: number }) {
         : { data: [] as any[] }
       const paid = paidByBooking(pays as any[])
 
-      const agg: Record<string, { bookings: number; value: number; paid: number }> = {}
+      // Balance is summed booking by booking over the ones whose paid amount is known; an
+      // old-register booking with nothing entered is counted separately, never as owed.
+      const agg: Record<string, { bookings: number; value: number; paid: number; balance: number; unknown: number }> = {}
       for (const b of (bks || []) as any[]) {
-        const a = (agg[b.customer_id] ||= { bookings: 0, value: 0, paid: 0 })
+        const a = (agg[b.customer_id] ||= { bookings: 0, value: 0, paid: 0, balance: 0, unknown: 0 })
+        const got = paid[b.id] || 0
         a.bookings += 1
         a.value += bookingValue(b)
-        a.paid += paid[b.id] || 0
+        a.paid += got
+        if (isPaidUnknown(b, got)) a.unknown += 1
+        else a.balance += balanceOf(bookingValue(b), got)
       }
 
       return {
         rows: custs.map((c: any) => {
-          const a = agg[c.id] || { bookings: 0, value: 0, paid: 0 }
+          const a = agg[c.id] || { bookings: 0, value: 0, paid: 0, balance: 0, unknown: 0 }
           return {
             id: c.id, name: c.name || '(no name)', phone: c.phone || null,
             code: c.customer_code || '', city: c.city || null,
             bookings: a.bookings, value: a.value, paid: a.paid,
-            balance: balanceOf(a.value, a.paid),
+            balance: a.balance, unknown: a.unknown,
           }
         }),
         total: count || 0,
