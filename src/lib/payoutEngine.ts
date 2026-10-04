@@ -17,6 +17,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { supabase } from '@/lib/supabase'
+import { fetchAllRows } from '@/lib/fetchAll'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -389,11 +390,31 @@ export async function distributeBookingCommission(bookingId: string): Promise<Di
 }
 
 /**
- * Reverse: remove any payout_distributions for this booking. Used when a booking is
- * cancelled or reopened so the MLM chain doesn't keep stale commissions.
+ * Reverse a booking's commission that has NOT been paid out yet.
+ *
+ * Rows already stamped into a closed payout cycle are money that has left the business;
+ * deleting them (as this used to) rewrote a closed cycle and dropped the broker's "earned"
+ * below what they were paid.  Those stay — recovering them is a decision, not a delete.
  */
 export async function reverseBookingCommission(bookingId: string): Promise<void> {
-  await supabase.from('payout_distributions').delete().eq('booking_id', bookingId)
+  const { error } = await supabase.from('payout_distributions')
+    .delete()
+    .eq('booking_id', bookingId)
+    .is('cycle_id', null)
+  if (error) throw error
+}
+
+/**
+ * Everything that must stop when a booking is cancelled: unpaid commission is reversed and
+ * the EMI plan is closed so its kist stop counting as owed/overdue.
+ */
+export async function closeBookingMoney(bookingId: string): Promise<void> {
+  await reverseBookingCommission(bookingId)
+  const { error } = await supabase.from('emi_schedules')
+    .update({ status: 'closed' })
+    .eq('booking_id', bookingId)
+    .neq('status', 'closed')
+  if (error) throw error
 }
 
 /**
@@ -435,13 +456,32 @@ export async function reversePaymentCommission(paymentId: string): Promise<void>
     .not('cycle_id', 'is', null)
     .limit(1)
   if (cycled && cycled.length > 0) {
-    throw new Error('This payment is already part of a closed payout cycle. Reopen the cycle on /payout-cycles first.')
+    throw new Error(CYCLED_PAYMENT_MSG)
   }
-  await supabase
+  const { error } = await supabase
     .from('payout_distributions')
     .delete()
     .eq('payment_id', paymentId)
     .is('cycle_id', null)
+  if (error) throw error
+}
+
+const CYCLED_PAYMENT_MSG = 'Commission on this payment has already been paid out in a closed payout cycle. Reopen that cycle on /payout-cycles first.'
+
+/**
+ * Call BEFORE rejecting or deleting a payment.  Rejecting first and checking after (as the
+ * Payments page did) left the payment rejected while its paid-out commission stayed; a
+ * delete went further and cascaded the closed cycle's rows away.
+ */
+export async function assertPaymentNotCycled(paymentId: string): Promise<void> {
+  const { data, error } = await supabase
+    .from('payout_distributions')
+    .select('id')
+    .eq('payment_id', paymentId)
+    .not('cycle_id', 'is', null)
+    .limit(1)
+  if (error) throw error
+  if (data && data.length > 0) throw new Error(CYCLED_PAYMENT_MSG)
 }
 
 // ── Config Loader ─────────────────────────────────────────────────────────────
@@ -458,8 +498,14 @@ export async function loadPayoutConfig(): Promise<PayoutConfig> {
 // ── Withdrawal Computation ────────────────────────────────────────────────────
 
 /**
- * Computes net withdrawal after admin charge + TDS deductions.
- * Admin charge and TDS are applied to the gross withdrawal amount.
+ * What a broker receives for a withdrawal of `amount`.
+ *
+ * Nothing further is deducted.  The wallet a withdrawal is drawn from is the sum of
+ * payout_distributions.net_payout — TDS and the admin charge were already taken off each
+ * commission row when it was credited (gross → tds_amount + admin_charge → net_payout), and
+ * payout cycles pay that net as-is.  This used to deduct them a SECOND time on withdrawal
+ * (admin side: admin % + TDS %; broker portal: TDS % only — the two did not even agree),
+ * and the wallet then only reduced by the smaller net, leaving a phantom balance behind.
  */
 export function computeWithdrawal(
   amount: number,
@@ -471,16 +517,8 @@ export function computeWithdrawal(
   net: number
   eligible: boolean
 } {
-  const admin = round2((amount * cfg.admin_charge_pct) / 100)
-  const tds = round2((amount * cfg.tds_pct) / 100)
-  const net = round2(amount - admin - tds)
-  return {
-    gross: amount,
-    admin,
-    tds,
-    net,
-    eligible: amount >= cfg.min_withdrawal,
-  }
+  const gross = round2(amount)
+  return { gross, admin: 0, tds: 0, net: gross, eligible: amount >= cfg.min_withdrawal }
 }
 
 // ── Achievers Club ────────────────────────────────────────────────────────────
@@ -530,14 +568,18 @@ export type BrokerWallet = {
 }
 
 export async function loadBrokerWallets(): Promise<Record<string, BrokerWallet>> {
-  const [{ data: dist }, { data: wds }, { data: txns }, { data: advances }] = await Promise.all([
-    supabase.from('payout_distributions').select('beneficiary_broker_id, net_payout'),
-    supabase.from('withdrawal_requests').select('broker_id, amount, net_amount, status'),
-    supabase.from('bp_payout_transactions').select('broker_id, amount, net_amount, status'),
+  // Every list is paged through in full.  At 1,000 rows the API stops without an error, and
+  // a wallet built on a cut-off list is wrong in the dangerous direction: once withdrawals
+  // pass 1,000 the older payouts drop out of "paid" and Available goes UP — money a broker
+  // has already received becomes withdrawable again.
+  const [dist, wds, txns, advances] = await Promise.all([
+    fetchAllRows((from, to) => supabase.from('payout_distributions').select('beneficiary_broker_id, net_payout').order('id').range(from, to)),
+    fetchAllRows((from, to) => supabase.from('withdrawal_requests').select('broker_id, amount, net_amount, status').order('id').range(from, to)),
+    fetchAllRows((from, to) => supabase.from('bp_payout_transactions').select('broker_id, amount, net_amount, status').order('id').range(from, to)),
     // Advances given to a broker (an Expense under the "Advance" head, attributed to
     // them) reduce what they can WITHDRAW until recovered — earnings history is
     // untouched, only 'available' drops.  Admin chose "reduce available only".
-    supabase.from('expenses').select('broker_id, amount, expense_heads(name)').not('broker_id', 'is', null),
+    fetchAllRows((from, to) => supabase.from('expenses').select('broker_id, amount, expense_heads(name)').not('broker_id', 'is', null).order('id').range(from, to)),
   ])
   const out: Record<string, BrokerWallet> = {}
   const ensure = (id: string) => (out[id] ??= { earned: 0, paid: 0, pending: 0, advance: 0, available: 0 })

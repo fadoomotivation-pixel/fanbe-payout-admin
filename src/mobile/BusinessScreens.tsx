@@ -157,10 +157,22 @@ export function BookingCard({ b, onOpen }: { b: BookingRow; onOpen: () => void }
           </div>
         </div>
         <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 17, fontWeight: 700, color: b.balance > 0 ? 'var(--m-ink)' : 'var(--m-green)' }}>
-            {formatINR(b.balance)}
-          </div>
-          <div style={{ fontSize: 10.5, color: 'var(--m-ink-3)' }}>{b.balance > 0 ? 'balance' : 'settled'}</div>
+          {b.stage === 'cancelled' ? (
+            // Nothing is owed on a cancelled deal; its leftover "balance" is not a debt.
+            <div style={{ fontSize: 13, fontWeight: 650, color: 'var(--m-ink-3)' }}>cancelled</div>
+          ) : b.paidUnknown ? (
+            <>
+              <div style={{ fontSize: 13, fontWeight: 650, color: '#C2410C' }}>Paid not entered</div>
+              <div style={{ fontSize: 10.5, color: 'var(--m-ink-3)' }}>old record</div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 17, fontWeight: 700, color: b.balance > 0 ? 'var(--m-ink)' : 'var(--m-green)' }}>
+                {formatINR(b.balance)}
+              </div>
+              <div style={{ fontSize: 10.5, color: 'var(--m-ink-3)' }}>{b.balance > 0 ? 'balance' : 'settled'}</div>
+            </>
+          )}
         </div>
       </div>
 
@@ -175,7 +187,7 @@ export function BookingCard({ b, onOpen }: { b: BookingRow; onOpen: () => void }
         </span>
         {b.registryDone && <span className="m-chip m-chip-green">Registered</span>}
         <span style={{ fontSize: 11.5, color: 'var(--m-ink-3)', marginLeft: 'auto' }}>
-          {formatINR(b.paid)} of {formatINR(b.value)}
+          {b.paidUnknown ? `price ${formatINR(b.value)}` : `${formatINR(b.paid)} of ${formatINR(b.value)}`}
         </span>
       </div>
     </button>
@@ -220,11 +232,18 @@ export function CustomersScreen({ onOpen }: { onOpen: (c: any) => void }) {
                 </div>
               </div>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 15.5, fontWeight: 700, color: c.balance > 0 ? 'var(--m-ink)' : 'var(--m-green)' }}>
-                  {formatINR(c.balance)}
-                </div>
+                {/* ₹0 in green would read as "nothing owed" when the only booking is an old
+                    record whose payments are simply not entered. */}
+                {c.balance === 0 && c.unknown > 0 ? (
+                  <div style={{ fontSize: 13, fontWeight: 650, color: '#C2410C' }}>Paid not entered</div>
+                ) : (
+                  <div style={{ fontSize: 15.5, fontWeight: 700, color: c.balance > 0 ? 'var(--m-ink)' : 'var(--m-green)' }}>
+                    {formatINR(c.balance)}
+                  </div>
+                )}
                 <div style={{ fontSize: 10.5, color: 'var(--m-ink-3)' }}>
                   {c.bookings} booking{c.bookings === 1 ? '' : 's'}
+                  {c.unknown > 0 ? ` · ${c.unknown} old, paid not entered` : ''}
                 </div>
               </div>
             </div>
@@ -247,8 +266,13 @@ export function CustomerDetailScreen({ customer, onBack, onOpenBooking }: { cust
       <div className="m-card" style={{ padding: 16, marginTop: 18, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
         <Figure label="Value"   value={customer.value}/>
         <Figure label="Paid"    value={customer.paid} tone="var(--m-green)"/>
-        <Figure label="Balance" value={customer.balance} tone={customer.balance > 0 ? 'var(--m-red)' : 'var(--m-green)'}/>
+        <Figure label="Balance" value={customer.balance} tone={customer.balance > 0 ? 'var(--m-red)' : customer.unknown > 0 ? undefined : 'var(--m-green)'}/>
       </div>
+      {customer.unknown > 0 && (
+        <div style={{ fontSize: 12, color: '#C2410C', marginTop: 8 }}>
+          {customer.unknown} old booking{customer.unknown === 1 ? '' : 's'} from the old register — what was paid before is not entered, so it is not in the balance. Do not quote a figure for {customer.unknown === 1 ? 'it' : 'them'}.
+        </div>
+      )}
 
       {customer.phone && (
         <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>

@@ -26,7 +26,7 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
   const [creating, setCreating] = useState(false)
   const [n, setN] = useState('12')
   const [freq, setFreq] = useState<'monthly'|'quarterly'|'half_yearly'|'annual'>('monthly')
-  const [start, setStart] = useState(new Date().toISOString().slice(0,10))
+  const [start, setStart] = useState(todayLocalISO())
 
   // Existing schedule for this booking
   const { data: sched, isLoading: schedLoading } = useQuery({
@@ -124,15 +124,25 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
    * Inserts ONE bp_payments row for the actual amount, plus per-payment MLM distribution.
    */
   const applyPayment = async ({
-    amount, mode = 'cash', date = new Date().toISOString().slice(0,10),
+    amount, mode = 'cash', date = todayLocalISO(),
     utr = '', drawnOn = '', branch = '', notes = '',
-  }: { amount: number; mode?: string; date?: string; utr?: string; drawnOn?: string; branch?: string; notes?: string }) => {
+  }: { amount: number; mode?: string; date?: string; utr?: string; drawnOn?: string; branch?: string; notes?: string }): Promise<boolean> => {
     const incoming = Number(amount) || 0
-    if (incoming <= 0) { toast.error('Enter an amount greater than zero'); return }
+    if (incoming <= 0) { toast.error('Enter an amount greater than zero'); return false }
+    if (!sched?.id) { toast.error('No EMI plan on this booking'); return false }
 
-    // Order: by seq (oldest first). Apply against pending/partial installments.
-    const queue = (allInsts as any[])
-      .filter(i => i.status !== 'paid')
+    // Allocate against what is in the database NOW, not the copy this screen loaded.  Two
+    // payments in a row (or a second screen) would otherwise both start from the same
+    // paid_amount, and the second write would wipe out the first payment's allocation.
+    const { data: fresh, error: fErr } = await supabase.from('emi_installments')
+      .select('id, seq, due_date, amount, paid_amount, status')
+      .eq('schedule_id', sched.id)
+      .order('seq', { ascending: true })
+    if (fErr) { toast.error(fErr.message); return false }
+
+    // Oldest first, and only what is still open by the shared rule (lib/emiStatus).
+    const queue = ((fresh || []) as any[])
+      .filter(i => instalmentState(i) !== 'paid')
       .sort((a, b) => (a.seq || 0) - (b.seq || 0))
 
     const firstSeq = queue[0]?.seq
@@ -140,7 +150,7 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
     let remaining = incoming
     for (const inst of queue) {
       if (remaining <= 0) break
-      const due = Number(inst.amount) - Number(inst.paid_amount || 0)
+      const due = instalmentDue(inst)
       if (due <= 0) continue
       const apply = Math.min(remaining, due)
       allocations.push({ id: inst.id, seq: inst.seq, alreadyPaid: Number(inst.paid_amount || 0), apply, willClose: apply >= due })
@@ -154,7 +164,7 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
     const trimmedUtr = (utr || '').trim()
     if (trimmedUtr) {
       const conflict = await findUtrConflict(trimmedUtr)
-      if (conflict) { toast.error(utrConflictMessage(conflict)); return }
+      if (conflict) { toast.error(utrConflictMessage(conflict)); return false }
     }
 
     // Insert ONE payment row for the full incoming amount.
@@ -179,16 +189,29 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
       subject_to_realisation: false,
       notes: notes || `EMI payment · ${closes} closed${advance > 0 ? ` · ₹${advance} advance` : ''}`,
     }).select('*').single()
-    if (pErr) { toast.error(pErr.message); return }
+    if (pErr) { toast.error(pErr.message); return false }
     const receipt_no = payment?.receipt_no || ''
 
-    // Update each allocated installment
+    // Update each allocated instalment.  paid_at is the payment date (noon local, so it
+    // stays on that calendar day in every timezone) — the collection report puts money in
+    // the month it came in, and a back-dated receipt must land in its own month.  Partial
+    // payments are linked too, so every rupee on an instalment traces to a receipt.
+    const paidAt = new Date(`${date}T12:00:00`).toISOString()
+    const failed: number[] = []
     for (const a of allocations) {
-      const newPaid = a.alreadyPaid + a.apply
-      const newStatus = a.willClose ? 'paid' : 'partial'
-      const patch: any = { status: newStatus, paid_amount: newPaid }
-      if (a.willClose) { patch.paid_at = new Date().toISOString(); patch.payment_id = payment.id }
-      await supabase.from('emi_installments').update(patch).eq('id', a.id)
+      const patch: any = {
+        status: a.willClose ? 'paid' : 'partial',
+        paid_amount: a.alreadyPaid + a.apply,
+        paid_at: paidAt,
+        payment_id: payment.id,
+      }
+      const { error: uErr } = await supabase.from('emi_installments').update(patch).eq('id', a.id)
+      if (uErr) failed.push(a.seq)
+    }
+    if (failed.length) {
+      // The money IS recorded (the receipt exists); only the kist ticks did not save.
+      // Say so plainly — silently leaving them unticked would show a paying customer as overdue.
+      toast.error(`Receipt #${receipt_no} saved, but kist ${failed.join(', ')} could not be updated. Re-open this booking and tick them, or tell the office.`, { duration: 12000 })
     }
 
     // Per-payment MLM distribution
@@ -222,15 +245,27 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
         plot:     booking.bp_plots,
       })
     }
+    return true
   }
 
   // Modal-driven flexible-amount entry. Triggered from a single "Record Payment" CTA.
   const [payOpen, setPayOpen] = useState(false)
-  const [payForm, setPayForm] = useState<any>({ amount: '', mode: 'cash', date: new Date().toISOString().slice(0,10), utr: '', drawn_on: '', branch: '', notes: '' })
-  const openPay = (preset?: number) => { setPayForm({ amount: preset != null ? String(preset) : '', mode: 'cash', date: new Date().toISOString().slice(0,10), utr: '', drawn_on: '', branch: '', notes: '' }); setPayOpen(true) }
+  const [payForm, setPayForm] = useState<any>({ amount: '', mode: 'cash', date: todayLocalISO(), utr: '', drawn_on: '', branch: '', notes: '' })
+  // A double-click used to record the same cash twice — two receipts, two commissions.
+  const [payBusy, setPayBusy] = useState(false)
+  const openPay = (preset?: number) => { setPayForm({ amount: preset != null ? String(preset) : '', mode: 'cash', date: todayLocalISO(), utr: '', drawn_on: '', branch: '', notes: '' }); setPayOpen(true) }
   const submitPay = async () => {
-    await applyPayment({ amount: Number(payForm.amount), mode: payForm.mode, date: payForm.date, utr: payForm.utr, drawnOn: payForm.drawn_on, branch: payForm.branch, notes: payForm.notes })
-    setPayOpen(false)
+    if (payBusy) return
+    setPayBusy(true)
+    try {
+      const ok = await applyPayment({ amount: Number(payForm.amount), mode: payForm.mode, date: payForm.date || todayLocalISO(), utr: payForm.utr, drawnOn: payForm.drawn_on, branch: payForm.branch, notes: payForm.notes })
+      // Keep the form open on failure so nothing typed is lost.
+      if (ok) setPayOpen(false)
+    } catch (e: any) {
+      toast.error(e?.message || 'Could not record the payment')
+    } finally {
+      setPayBusy(false)
+    }
   }
 
   // Stats
@@ -427,7 +462,7 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
 
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="secondary" onClick={() => setPayOpen(false)}>Cancel</Button>
-              <Button onClick={submitPay} disabled={!Number(payForm.amount)}>Record &amp; distribute MLM</Button>
+              <Button onClick={submitPay} disabled={!Number(payForm.amount) || payBusy} loading={payBusy}>Record &amp; distribute MLM</Button>
             </div>
           </div>
         </div>

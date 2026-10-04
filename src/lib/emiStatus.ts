@@ -115,18 +115,39 @@ const INST_COLS  = 'id, schedule_id, seq, due_date, amount, paid_amount, paid_at
 export async function fetchEmiStatus(bookingIds: string[]): Promise<Record<string, EmiStatus>> {
   const ids = (bookingIds || []).filter(Boolean)
   if (ids.length === 0) return {}
-  const schedList = await inChunks(ids, chunk =>
-    supabase.from('emi_schedules').select(SCHED_COLS).in('booking_id', chunk))
+  const schedList = (await inChunks(ids, chunk =>
+    supabase.from('emi_schedules').select(SCHED_COLS).in('booking_id', chunk)))
+    .filter((s: any) => isLivePlan(s))
   if (schedList.length === 0) return {}
   const insts = await inChunks(schedList.map((s: any) => s.id), chunk =>
     supabase.from('emi_installments').select(INST_COLS).in('schedule_id', chunk))
   return aggregate(schedList, insts)
 }
 
+// A plan that is closed, or that belongs to a cancelled booking, is not money anybody is
+// owed.  Cancelling a booking never used to touch its EMI plan, so a cancelled customer's
+// unpaid kist kept turning up as "overdue" on the Dashboard, Analytics, the chase list and
+// the collection forecast.  Every whole-book EMI figure goes through this one filter.
+function isLivePlan(s: any, cancelled?: Set<string>): boolean {
+  if (s.status === 'closed') return false
+  return !(cancelled && cancelled.has(s.booking_id))
+}
+
+/** Every EMI plan that is still live — not closed, not on a cancelled booking. */
+export async function fetchLiveSchedules(): Promise<any[]> {
+  const [schedList, cancelledRows] = await Promise.all([
+    fetchAllRows((from, to) =>
+      supabase.from('emi_schedules').select(SCHED_COLS).order('id').range(from, to)),
+    fetchAllRows((from, to) =>
+      supabase.from('bp_bookings').select('id').eq('stage', 'cancelled').order('id').range(from, to)),
+  ])
+  const cancelled = new Set((cancelledRows as any[]).map(b => b.id))
+  return (schedList as any[]).filter(s => isLivePlan(s, cancelled))
+}
+
 /** Every booking's EMI position — for screens that work across the whole book. */
 export async function fetchEmiStatusAll(): Promise<Record<string, EmiStatus>> {
-  const schedList = await fetchAllRows((from, to) =>
-    supabase.from('emi_schedules').select(SCHED_COLS).order('id').range(from, to))
+  const schedList = await fetchLiveSchedules()
   if (schedList.length === 0) return {}
   const insts = await fetchAllRows((from, to) =>
     supabase.from('emi_installments').select(INST_COLS).order('id').range(from, to))

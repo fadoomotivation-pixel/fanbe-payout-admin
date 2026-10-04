@@ -68,3 +68,23 @@ export function collectionPct(value: number, paid: number): number {
   if (value <= 0) return 0
   return Math.min(100, Math.round((paid / value) * 100))
 }
+
+// The 796 bookings brought in from the old records sheet arrived with a name, a size and a
+// price — no payment history.  Read like a new booking, every one of them showed its full
+// price as "balance": ₹46 crore "to collect" that was mostly paid years ago, a Remind button
+// asking a 2023 customer for money they had already given, and a caller quoting that figure
+// over the phone.  Until someone enters what was paid before the switch, an imported
+// booking with nothing recorded has an UNKNOWN paid amount, not a zero one.
+//
+// The old-register number is the import's own signature (only the import sets it); the note
+// is the fallback for a row imported without one.
+export const IMPORT_NOTE = 'Imported from the old records sheet'
+
+export function isImported(b: { legacy_booking_no?: string | null; notes?: string | null } | null | undefined): boolean {
+  return !!b?.legacy_booking_no || String(b?.notes || '').startsWith(IMPORT_NOTE)
+}
+
+/** Imported, priced, and not a rupee recorded: what this customer paid is not known yet. */
+export function isPaidUnknown(b: any, paid: number): boolean {
+  return isImported(b) && bookingValue(b) > 0 && !(paid > 0)
+}

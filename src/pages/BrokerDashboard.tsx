@@ -410,8 +410,10 @@ export default function BrokerDashboard() {
     return { current, next, progress, hint }
   }, [broker, ranks, downline])
 
-  const tdsPct = broker?.tds_applicable ? 5 : 0
-  const wdNet = Math.max(0, (Number(wdAmount) || 0) * (1 - tdsPct / 100))
+  // Your balance is already after TDS and admin charge — they were taken off each commission
+  // when it was credited.  A withdrawal pays out exactly the amount asked for.
+  const tdsPct = 0
+  const wdNet = Math.max(0, Number(wdAmount) || 0)
 
   // ── Admin shadow actions ─────────────────────────────────────────
   const openProfile = () => {
@@ -878,7 +880,7 @@ export default function BrokerDashboard() {
                 return (
                   <div className="text-sm space-y-1">
                     <div className="flex justify-between"><span className="text-gray-500">Amount</span><b>{formatINR(w.amount)}</b></div>
-                    <div className="flex justify-between"><span className="text-gray-500">Net after TDS</span><b className="text-emerald-700">{formatINR(w.net_amount || w.amount)}</b></div>
+                    <div className="flex justify-between"><span className="text-gray-500">Net paid</span><b className="text-emerald-700">{formatINR(w.net_amount || w.amount)}</b></div>
                     <div className="flex justify-between"><span className="text-gray-500">Status</span><WdBadge status={w.status}/></div>
                     <div className="flex justify-between"><span className="text-gray-500">Requested</span><span>{formatDate(w.created_at)}</span></div>
                   </div>
@@ -1196,7 +1198,7 @@ export default function BrokerDashboard() {
             </div>
             <div className="text-xs bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-emerald-900">
               Available balance: <b>{formatINR(stats.availableBalance)}</b>
-              {tdsPct > 0 && <div className="mt-0.5">TDS applicable @ <b>{tdsPct}%</b> will be deducted.</div>}
+              <div className="mt-0.5">TDS and admin charge are already deducted from this balance.</div>
             </div>
             <div>
               <label className="text-xs text-gray-500 block mb-1">Amount (₹)</label>
@@ -1204,9 +1206,7 @@ export default function BrokerDashboard() {
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"/>
             </div>
             <div className="text-xs space-y-1 text-gray-600">
-              <div className="flex justify-between"><span>Gross</span><b>{formatINR(Number(wdAmount) || 0)}</b></div>
-              <div className="flex justify-between"><span>TDS ({tdsPct}%)</span><b className="text-red-600">−{formatINR((Number(wdAmount) || 0) * tdsPct / 100)}</b></div>
-              <div className="flex justify-between pt-1 border-t border-gray-100"><span>You'll receive</span><b className="text-emerald-700">{formatINR(wdNet)}</b></div>
+              <div className="flex justify-between"><span>You'll receive</span><b className="text-emerald-700">{formatINR(wdNet)}</b></div>
             </div>
             <div className="text-xs bg-gray-50 rounded-lg p-3">
               <div className="text-gray-500 mb-1">Credit to:</div>

@@ -5,11 +5,14 @@ import { supabase } from '@/lib/supabase'
 import { Button } from '@/components/ui/Button.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate, PAYOUT_STATUS_COLORS } from '@/lib/utils'
-import { loadPayoutConfig, type PayoutConfig } from '@/lib/payoutEngine'
+import { loadPayoutConfig, loadBrokerWallets, type PayoutConfig } from '@/lib/payoutEngine'
+import { fetchAllRows } from '@/lib/fetchAll'
 import { logClosure, getCurrentUserId } from '@/lib/closure'
 import { ClosureDialog } from '@/components/ClosureDialog'
 import { CalendarRange, Lock, Unlock, TrendingUp, Users, IndianRupee, Banknote, ChevronRight, ExternalLink } from 'lucide-react'
 import toast from 'react-hot-toast'
+
+const round2 = (n: number) => Math.round(n * 100) / 100
 
 const STATUS_COLORS: Record<string, string> = {
   open:     'bg-amber-50 text-amber-700 border border-amber-200',
@@ -74,14 +77,15 @@ export default function PayoutCycles() {
   const { data: pendingCommissions = [] } = useQuery<DistributionRow[]>({
     queryKey: ['cycle_pending_distributions', sliceMode, sliceFrom, sliceTo],
     queryFn: async () => {
-      let q = supabase
-        .from('payout_distributions')
-        .select('id, beneficiary_broker_id, booking_id, gross_payout, tds_amount, admin_charge, net_payout, created_at, brokers!payout_distributions_beneficiary_broker_id_fkey(name, broker_id)')
-        .is('cycle_id', null)
-      if (sliceMode === 'range' && sliceFrom) q = q.gte('created_at', sliceFrom)
-      if (sliceMode === 'range' && sliceTo)   q = q.lte('created_at', `${sliceTo}T23:59:59.999Z`)
-      const { data, error } = await q
-      if (error) throw error
+      const data = await fetchAllRows((from, to) => {
+        let q = supabase
+          .from('payout_distributions')
+          .select('id, beneficiary_broker_id, booking_id, gross_payout, tds_amount, admin_charge, net_payout, created_at, brokers!payout_distributions_beneficiary_broker_id_fkey(name, broker_id)')
+          .is('cycle_id', null)
+        if (sliceMode === 'range' && sliceFrom) q = q.gte('created_at', sliceFrom)
+        if (sliceMode === 'range' && sliceTo)   q = q.lte('created_at', `${sliceTo}T23:59:59.999Z`)
+        return q.order('id').range(from, to)
+      })
       return (data || []).map((d: any) => ({
         id:           d.id,
         broker_id:    d.beneficiary_broker_id,
@@ -149,6 +153,14 @@ export default function PayoutCycles() {
         throw new Error('Every broker in this batch has a pending withdrawal. Resolve those on /withdrawals first.')
       }
 
+      // Pay at most what the broker's wallet still holds.  These commission rows are already
+      // in "earned", so a broker who withdrew against them before this close has been paid
+      // once; paying the full batch again would pay the same money twice.  An Advance still
+      // outstanding is recovered here too (it is already netted out of "available").
+      const wallets = await loadBrokerWallets()
+      const payableFor = (b: { broker_id: string; net: number }) =>
+        round2(Math.max(0, Math.min(b.net, wallets[b.broker_id]?.available ?? 0)))
+
       const eligibleIds = new Set(eligible.map(b => b.broker_id))
       const eligibleDistributions = pendingCommissions.filter(d => eligibleIds.has(d.broker_id))
 
@@ -164,7 +176,7 @@ export default function PayoutCycles() {
         gross: eligible.reduce((s, r) => s + r.gross, 0),
         tds:   eligible.reduce((s, r) => s + r.tds,   0),
         admin: eligible.reduce((s, r) => s + r.admin, 0),
-        net:   eligible.reduce((s, r) => s + r.net,   0),
+        net:   round2(eligible.reduce((s, r) => s + payableFor(r), 0)),
         brokers: eligible.length,
         bookings: new Set(eligibleDistributions.map(d => d.booking_id).filter(Boolean)).size,
       }
@@ -206,17 +218,26 @@ export default function PayoutCycles() {
         if (updErr) throw updErr
       }
 
-      const tx = eligible.map(b => ({
-        broker_id:      b.broker_id,
-        cycle_id:       cycle.id,
-        payout_type:    'cycle',
-        amount:         b.gross,
-        tds_amount:     b.tds,
-        admin_charge:   b.admin,
-        net_amount:     b.net,
-        status:         'pending',
-        notes:          `${periodLabel} — ${b.distributions} distribution${b.distributions !== 1 ? 's' : ''} across ${b.bookings} booking${b.bookings !== 1 ? 's' : ''}`,
-      }))
+      const tx = eligible
+        .map(b => {
+          const payable = payableFor(b)
+          const held = round2(b.net - payable)
+          return {
+            broker_id:      b.broker_id,
+            cycle_id:       cycle.id,
+            payout_type:    'cycle',
+            amount:         b.gross,
+            tds_amount:     b.tds,
+            admin_charge:   b.admin,
+            net_amount:     payable,
+            status:         'pending',
+            notes:          `${periodLabel} — ${b.distributions} distribution${b.distributions !== 1 ? 's' : ''} across ${b.bookings} booking${b.bookings !== 1 ? 's' : ''}`
+              + (held > 0 ? ` · ₹${held.toLocaleString('en-IN')} held back: already withdrawn or advance outstanding` : ''),
+          }
+        })
+        // Nothing left to pay (all of it already withdrawn): the commission rows are still
+        // stamped into this cycle so they are settled, but no ₹0 payout line is created.
+        .filter(t => t.net_amount > 0)
       if (tx.length > 0) {
         const { error: txErr } = await supabase.from('bp_payout_transactions').insert(tx)
         if (txErr) throw txErr

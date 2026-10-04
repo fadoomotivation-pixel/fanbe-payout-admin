@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
-import { bookingValue, balanceOf, paidByBooking } from '@/lib/bookingMath'
+import { bookingValue, balanceOf, paidByBooking, isPaidUnknown } from '@/lib/bookingMath'
 import { instalmentDue } from '@/lib/emiStatus'
+import { todayLocalISO } from '@/lib/fetchAll'
 
 // The caller's queue, built once and shared by every screen in the app.
 //
@@ -13,7 +14,9 @@ import { instalmentDue } from '@/lib/emiStatus'
 // Sorted by how late the money is, so the worst account is the first call of the day
 // rather than whatever happens to sort first alphabetically.
 
-export const todayISO = () => new Date().toISOString().slice(0, 10)
+// The local calendar date.  toISOString() is UTC, which in India is still yesterday until
+// 05:30 — a caller starting early saw yesterday's queue and "due today" a day late.
+export const todayISO = () => todayLocalISO()
 
 export type CallTarget = {
   bookingId: string
@@ -26,6 +29,8 @@ export type CallTarget = {
   totalValue: number
   paid: number
   balance: number
+  /** old-register booking with nothing recorded — never quote its "balance" */
+  paidUnknown: boolean
   overdueAmount: number
   overdueCount: number
   oldestDueDate: string | null
@@ -94,7 +99,7 @@ export function useCallQueue() {
 
       const [bkRes, payRes] = await Promise.all([
         supabase.from('bp_bookings')
-          .select('id, booking_no, total_amount, plot_total_price, customer_id, stage, bp_customers(id, name, phone), bp_projects(name), bp_plots(plot_no)')
+          .select('id, booking_no, legacy_booking_no, notes, total_amount, plot_total_price, customer_id, stage, bp_customers(id, name, phone), bp_projects(name), bp_plots(plot_no)')
           .in('id', ids.slice(0, 500))
           .neq('stage', 'cancelled'),
         supabase.from('bp_payments').select('booking_id, amount, verification_status').in('booking_id', ids.slice(0, 500)),
@@ -106,8 +111,10 @@ export function useCallQueue() {
         const od = overdue[b.id] || { amount: 0, count: 0, oldest: null }
         const value = bookingValue(b)
         const got = paid[b.id] || 0
+        // Whole days between two calendar dates, both read the same way, so the count does
+        // not change with the hour of the day or the timezone.
         const daysLate = od.oldest
-          ? Math.max(0, Math.floor((Date.now() - new Date(od.oldest).getTime()) / 86400000))
+          ? Math.max(0, Math.floor((Date.parse(t) - Date.parse(od.oldest)) / 86400000))
           : 0
         const lc = lastCall[b.id] || null
         return {
@@ -121,6 +128,7 @@ export function useCallQueue() {
           totalValue: value,
           paid: got,
           balance: balanceOf(value, got),
+          paidUnknown: isPaidUnknown(b, got),
           overdueAmount: od.amount,
           overdueCount: od.count,
           oldestDueDate: od.oldest,
