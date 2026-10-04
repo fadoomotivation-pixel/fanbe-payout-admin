@@ -6,6 +6,7 @@ import { formatINR } from '@/lib/utils'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { Button } from '@/components/ui/Button.tsx'
 import { Input, Select } from '@/components/ui/Input.tsx'
+import { assertPaymentNotCycled } from '@/lib/payoutEngine'
 import toast from 'react-hot-toast'
 
 type Tab = 'payments' | 'commissions' | 'emi_due' | 'broker_summary'
@@ -89,8 +90,25 @@ export default function Reports() {
 
   const refresh = () => setReloadFlag(f => f + 1)
 
+  // A receipt that has been applied to EMI kist cannot just vanish or change amount: the
+  // kist would stay ticked as paid with no money behind them, and the customer would look
+  // up to date when they are not.
+  const assertNotOnEmi = async (id: string) => {
+    const { data, error } = await supabase.from('emi_installments').select('seq').eq('payment_id', id)
+    if (error) throw error
+    if (data && data.length > 0) {
+      throw new Error(`This receipt is applied to EMI kist ${data.map((r: any) => r.seq).sort((a: number, b: number) => a - b).join(', ')}. Correct those kist on the booking's EMI panel first.`)
+    }
+  }
+
   const deletePayment = async (id: string) => {
     if (!confirm('Delete this payment row? This cannot be undone.')) return
+    try {
+      // Deleting a payment cascades its commission rows away — including ones already paid
+      // out in a closed cycle, which would quietly rewrite that cycle.
+      await assertPaymentNotCycled(id)
+      await assertNotOnEmi(id)
+    } catch (e: any) { toast.error(e.message); return }
     const { error } = await supabase.from('bp_payments').delete().eq('id', id)
     if (error) toast.error(error.message); else { toast.success('Payment deleted'); refresh() }
   }
@@ -98,6 +116,18 @@ export default function Reports() {
   const savePayment = async () => {
     if (!editPayment) return
     const { id, ...rest } = editPayment
+    const { data: before, error: bErr } = await supabase.from('bp_payments')
+      .select('amount, verification_status, booking_id').eq('id', id).maybeSingle()
+    if (bErr) { toast.error(bErr.message); return }
+    const moneyChanged = !!before && (
+      Number(before.amount) !== (Number(rest.amount) || 0) ||
+      before.verification_status !== rest.verification_status)
+    if (moneyChanged) {
+      try {
+        await assertPaymentNotCycled(id)
+        await assertNotOnEmi(id)
+      } catch (e: any) { toast.error(e.message); return }
+    }
     const { error } = await supabase.from('bp_payments').update({
       amount: Number(rest.amount) || 0,
       payment_type: rest.payment_type,

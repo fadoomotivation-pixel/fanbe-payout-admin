@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase'
-import { fetchAllRows, todayLocalISO } from '@/lib/fetchAll'
-import { instalmentState, instalmentDue } from '@/lib/emiStatus'
+import { todayLocalISO } from '@/lib/fetchAll'
+import { instalmentState, instalmentDue, fetchLiveSchedules } from '@/lib/emiStatus'
+import { inChunks } from '@/lib/fetchAll'
 
 // The one EMI number a CEO asks for first: "is mahine kitna aana chahiye, kitna aaya".
 //
@@ -46,6 +47,13 @@ function monthLabel(ym: string): string {
   return new Date(y, m - 1, 1).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' })
 }
 function ymOf(dateStr: string): string { return (dateStr || '').slice(0, 7) }
+// paid_at is a UTC timestamp.  Slicing it as text put a payment taken at 1 a.m. IST on the
+// 1st into the previous month; read it as a local date first.
+function localYm(ts: string | null | undefined): string {
+  if (!ts) return ''
+  const d = new Date(ts)
+  return isNaN(d.getTime()) ? ymOf(ts) : todayLocalISO(d).slice(0, 7)
+}
 function addMonths(d: Date, n: number): Date { return new Date(d.getFullYear(), d.getMonth() + n, 1) }
 
 /**
@@ -53,10 +61,14 @@ function addMonths(d: Date, n: number): Date { return new Date(d.getFullYear(), 
  * @param ahead  months of forecast to show (default 6)
  */
 export async function fetchEmiForecast(back = 3, ahead = 6): Promise<EmiForecast> {
-  const insts = await fetchAllRows((from, to) =>
-    supabase.from('emi_installments')
-      .select('schedule_id, due_date, amount, paid_amount, paid_at, status')
-      .order('id').range(from, to))
+  // Only live plans: a closed plan or a cancelled booking's plan is not money coming in.
+  const plans = await fetchLiveSchedules()
+  const insts = plans.length
+    ? await inChunks(plans.map((p: any) => p.id), chunk =>
+        supabase.from('emi_installments')
+          .select('schedule_id, due_date, amount, paid_amount, paid_at, status')
+          .in('schedule_id', chunk))
+    : []
 
   const today = todayLocalISO()
   const curYm = today.slice(0, 7)
@@ -80,9 +92,13 @@ export async function fetchEmiForecast(back = 3, ahead = 6): Promise<EmiForecast
     const amount = Number(i.amount || 0)
     const dueYm = ymOf(i.due_date)
     const state = instalmentState(i, today)
-    const paidAmt = state === 'paid'
-      ? (Number(i.paid_amount || 0) || amount)   // a hand-ticked row has paid_amount 0 but is settled
-      : Number(i.paid_amount || 0)
+    // Same money rule as lib/emiStatus: a settled instalment counts its full amount (a
+    // hand-ticked row has paid_amount 0), anything over the instalment is not counted, and an
+    // open one counts what has actually been paid towards it.
+    const paidAmt = state === 'paid' ? amount : Math.min(amount, Number(i.paid_amount || 0))
+    // One key for "the month this money came in", used by the bar AND the tile so the two
+    // can never disagree.  No paid_at (an old hand-ticked row) falls back to the due month.
+    const paidYm = localYm(i.paid_at) || dueYm
 
     totalBilled += amount
     totalCollected += paidAmt
@@ -93,7 +109,6 @@ export async function fetchEmiForecast(back = 3, ahead = 6): Promise<EmiForecast
 
     // Collected falls in the month the money arrived.
     if (paidAmt > 0) {
-      const paidYm = ymOf(i.paid_at || i.due_date)
       if (byMonth[paidYm]) { byMonth[paidYm].collected += paidAmt; byMonth[paidYm].collectedKist += 1 }
     }
 
@@ -102,7 +117,7 @@ export async function fetchEmiForecast(back = 3, ahead = 6): Promise<EmiForecast
       thisExpected += amount
       if (state !== 'paid') thisStillDue += instalmentDue(i)
     }
-    if (paidAmt > 0 && ymOf(i.paid_at || '') === curYm) thisCollected += paidAmt
+    if (paidAmt > 0 && paidYm === curYm) thisCollected += paidAmt
 
     // Overdue carried = unpaid instalments whose due month is before this month.
     if (state === 'overdue' && dueYm < curYm) {
@@ -121,7 +136,9 @@ export async function fetchEmiForecast(back = 3, ahead = 6): Promise<EmiForecast
       expected: thisExpected,
       collected: thisCollected,
       stillDue: thisStillDue,
-      pct: thisExpected > 0 ? Math.round((thisCollected / thisExpected) * 100) : 0,
+      // Share of THIS month's instalments already settled.  Dividing collected by expected
+      // mixed in late money for earlier months and could read over 100%.
+      pct: thisExpected > 0 ? Math.round(((thisExpected - thisStillDue) / thisExpected) * 100) : 0,
     },
     overdueCarried,
     overdueCarriedKist,

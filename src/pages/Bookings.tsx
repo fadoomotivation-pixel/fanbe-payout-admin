@@ -11,7 +11,7 @@ import { formatINR, formatDate } from '@/lib/utils'
 import { printApplicationForm } from '@/lib/printTemplates'
 import { logClosure, getCurrentUserId } from '@/lib/closure'
 import { ClosureDialog } from '@/components/ClosureDialog'
-import { distributePaymentCommission, reverseBookingCommission } from '@/lib/payoutEngine'
+import { distributePaymentCommission, closeBookingMoney } from '@/lib/payoutEngine'
 import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
 import { bookingValue, balanceOf, isFullyPaid } from '@/lib/bookingMath'
 import { deleteBookingSafely } from '@/lib/deleteBooking'
@@ -677,7 +677,7 @@ export default function Bookings() {
         : mlmPct
       const { data: current } = await supabase
         .from('bp_bookings')
-        .select('plot_id, token_amount, booking_amount, full_payment_amount, payment_type')
+        .select('plot_id, token_amount, booking_amount, full_payment_amount, payment_type, stage')
         .eq('id', id).single()
       const { data: currentPlotRows } = await supabase
         .from('bp_booking_plots').select('plot_id').eq('booking_id', id)
@@ -802,6 +802,27 @@ export default function Bookings() {
           if (principal > 0) await generateEmiSchedule(id, data.customer_id, principal, num(data.emi_n) || 12, data.emi_freq || 'monthly', data.emi_start || today())
         }
       }
+      // Commission and EMI follow the booking's state.  Cancelling from this form used to
+      // leave the brokers' commission credited and the EMI plan running, so a cancelled sale
+      // still paid out and its unpaid kist showed up as overdue everywhere.
+      const wasCancelled = current?.stage === 'cancelled'
+      const isCancelled  = stageAfterPayment === 'cancelled'
+      if (isCancelled && !wasCancelled) {
+        await closeBookingMoney(id)
+      } else {
+        if (wasCancelled && !isCancelled) {
+          const { error: reErr } = await supabase.from('emi_schedules')
+            .update({ status: 'active' }).eq('booking_id', id).eq('status', 'closed')
+          if (reErr) throw reErr
+        }
+        // Price, commission mode, traditional % and the split brokers may all have changed
+        // above; the database only recomputes by itself when the broker changes.  Rebuild
+        // this booking's commission from its payments so it matches what was just saved.
+        if (!isCancelled) {
+          const { error: rcErr } = await supabase.rpc('recompute_booking_payouts', { p_booking: id })
+          if (rcErr) throw rcErr
+        }
+      }
       return { ...d2, distributed, addedPayment: addsPayment }
     },
     onSuccess: (res: any) => {
@@ -830,7 +851,7 @@ export default function Bookings() {
       await syncPlotStatus(plotIdsOf(current), stage)
       // Per-payment MLM model: commission is distributed when payments are recorded.
       // Stage advance does not redistribute. Cancelling rolls back all commissions for this booking.
-      if (stage === 'cancelled') await reverseBookingCommission(id)
+      if (stage === 'cancelled') await closeBookingMoney(id)
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['bookings'] })

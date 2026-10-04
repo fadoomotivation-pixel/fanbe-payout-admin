@@ -131,7 +131,10 @@ export default function CustomerPipeline() {
         supabase.from('bp_customers').select('id, customer_code, previous_customer_code, name, phone, email, address, father_or_husband_name, pan, dob, nominee_name, nominee_relation').eq('id', customerFocusId!).maybeSingle(),
         supabase.from('bp_bookings').select('id, booking_no, total_amount, plot_total_price, total_collected, stage').eq('customer_id', customerFocusId!),
       ])
-      const bookingIds = (bks || []).map((b: any) => b.id)
+      // A cancelled booking is not owed: counting its price in "total cost" showed the
+      // customer owing the whole value of a deal that no longer exists.
+      const live = (bks || []).filter((b: any) => b.stage !== 'cancelled')
+      const bookingIds = live.map((b: any) => b.id)
       // EMI comes from the shared rule.  This used to select booking_id off
       // emi_installments — a column that table does not have — so the query failed and
       // "Overdue EMI" in this header always read ₹0.
@@ -141,14 +144,14 @@ export default function CustomerPipeline() {
           : Promise.resolve({ data: [] as any[] }),
         fetchEmiStatus(bookingIds),
       ])
-      const totalCost   = (bks || []).reduce((s, b: any) => s + bookingValue(b), 0)
+      const totalCost   = live.reduce((s: number, b: any) => s + bookingValue(b), 0)
       const paid        = sumVerified(pays as any[])
       const emiList     = Object.values(emiByBooking)
       const overdueAmt  = emiList.reduce((s, e) => s + e.amount_overdue, 0)
       const overdueCnt  = emiList.reduce((s, e) => s + e.overdue, 0)
       return {
         customer: c,
-        bookingCount: (bks || []).length,
+        bookingCount: live.length,
         totalCost,
         paid,
         outstanding: balanceOf(totalCost, paid),
@@ -499,6 +502,8 @@ export default function CustomerPipeline() {
   const recordPay = useMutation({
     mutationFn: async (p: { booking: any; type: 'token' | 'booking'; amount: number; mode: string; date: string; utr: string; drawn_on: string; branch: string; expected_booking_amount?: number }) => {
       if (!p.amount || p.amount <= 0) throw new Error('Amount required')
+      // Money on a cancelled booking would also flip its stage back to token_received below.
+      if (p.booking.stage === 'cancelled') throw new Error('This booking is cancelled — record a refund instead of a payment.')
       // UTR uniqueness — bail before inserting the row so the commission trigger doesn't
       // fire on a payment that will need to be reversed.
       const trimmedUtr = (p.utr || '').trim()
@@ -991,7 +996,7 @@ export default function CustomerPipeline() {
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mt-4">
-            <CustomerStat label="Bookings"        value={String(customerFocus.bookingCount)} sub="lifetime"/>
+            <CustomerStat label="Bookings"        value={String(customerFocus.bookingCount)} sub="active (excl. cancelled)"/>
             <CustomerStat label="Total cost"      value={formatINR(customerFocus.totalCost)} sub="all bookings"/>
             <CustomerStat label="Paid"            value={formatINR(customerFocus.paid)} sub={`${customerFocus.collectionPct}% collected`} tone="emerald"/>
             <CustomerStat label="Outstanding"     value={formatINR(customerFocus.outstanding)} sub="still due" tone={customerFocus.outstanding > 0 ? 'amber' : 'gray'}/>

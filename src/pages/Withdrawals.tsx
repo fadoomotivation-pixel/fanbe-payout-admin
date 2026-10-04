@@ -135,9 +135,11 @@ export default function Withdrawals() {
     if (!bank.bank_name || !bank.account_no) return toast.error('Bank details are missing — fill them or pick another broker')
 
     setCreating(true)
+    // TDS and admin charge were deducted when each commission was credited; the wallet is
+    // already net, so the broker receives exactly what is withdrawn (see computeWithdrawal).
     const net = computeForCreate ? computeForCreate.net : amount
-    const adminPct = cfg?.admin_charge_pct || 0
-    const tdsPct = selectedBroker.tds_applicable ? (cfg?.tds_pct || 0) : 0
+    const adminPct = 0
+    const tdsPct = 0
     const userId = await getCurrentUserId()
     const { error } = await supabase.from('withdrawal_requests').insert({
       broker_id: selectedBroker.id,
@@ -216,7 +218,7 @@ export default function Withdrawals() {
         <div>
           <h1 className="text-2xl font-semibold">Withdrawals</h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Money out to brokers in 3 steps · {cfg ? `Admin ${cfg.admin_charge_pct}% · TDS ${cfg.tds_pct}% · Min ₹${cfg.min_withdrawal}` : ''}
+            Money out to brokers in 3 steps · {cfg ? `Admin ${cfg.admin_charge_pct}% + TDS ${cfg.tds_pct}% already deducted at commission · Min ₹${cfg.min_withdrawal}` : ''}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -298,7 +300,6 @@ export default function Withdrawals() {
           </thead>
           <tbody>
             {filtered.map(r => {
-              const calc = cfg ? computeWithdrawal(Number(r.amount), cfg) : null
               const locked = !!r.closed_at
               const b = brokerLookup[r.broker_id]
               return (
@@ -309,7 +310,7 @@ export default function Withdrawals() {
                     <div className="text-[10px] text-gray-400 font-mono">[{b?.broker_id || r.broker_id.slice(0,8)}]</div>
                   </td>
                   <td className="p-3">{r.bank_name || '-'}<div className="text-xs text-slate-500">{r.account_no}</div></td>
-                  <td className="p-3">₹{Number(r.amount).toLocaleString()}{calc && <div className="text-xs text-slate-500">−{calc.admin}+{calc.tds}</div>}</td>
+                  <td className="p-3">₹{Number(r.amount).toLocaleString()}</td>
                   <td className="p-3 font-medium">₹{Number(r.net_amount).toLocaleString()}</td>
                   <td className="p-3">
                     <div className="flex flex-col gap-1">
@@ -475,10 +476,8 @@ export default function Withdrawals() {
                     className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300"/>
                   {computeForCreate && (
                     <div className="mt-2 text-xs space-y-1 text-gray-600 bg-gray-50 rounded-lg p-3">
-                      <div className="flex justify-between"><span>Gross</span><b>₹{computeForCreate.gross.toLocaleString()}</b></div>
-                      <div className="flex justify-between"><span>Admin charge ({cfg?.admin_charge_pct}%)</span><b className="text-amber-700">−₹{computeForCreate.admin.toLocaleString()}</b></div>
-                      <div className="flex justify-between"><span>TDS ({selectedBroker.tds_applicable ? cfg?.tds_pct : 0}%)</span><b className="text-rose-700">−₹{(selectedBroker.tds_applicable ? computeForCreate.tds : 0).toLocaleString()}</b></div>
-                      <div className="flex justify-between pt-1 border-t border-gray-200"><span>Broker will receive</span><b className="text-emerald-700">₹{computeForCreate.net.toLocaleString()}</b></div>
+                      <div className="flex justify-between"><span>Broker will receive</span><b className="text-emerald-700">₹{computeForCreate.net.toLocaleString()}</b></div>
+                      <div className="text-[11px] text-gray-500">TDS and admin charge were already deducted when the commission was credited — nothing more is taken here.</div>
                     </div>
                   )}
                 </div>

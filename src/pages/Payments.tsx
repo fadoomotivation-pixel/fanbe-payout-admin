@@ -8,7 +8,8 @@ import { Input, Select, Textarea } from '@/components/ui/Input.tsx'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import { printPaymentReceipt } from '@/lib/printTemplates'
-import { distributePaymentCommission, reversePaymentCommission } from '@/lib/payoutEngine'
+import { fetchAllRows } from '@/lib/fetchAll'
+import { distributePaymentCommission, reversePaymentCommission, assertPaymentNotCycled } from '@/lib/payoutEngine'
 import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
 import { Plus, CheckCircle, XCircle, Printer, Clock, Search, X } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -88,12 +89,14 @@ export default function Payments() {
   const { data: payments = [], isLoading } = useQuery({
     queryKey: ['payments'],
     queryFn: async () => {
-      const { data, error } = await supabase
+      // fetchAllRows: past 1,000 receipts the API silently returns only the first page, and
+      // the oldest payments would vanish from the ledger, its totals and its search.
+      return await fetchAllRows((from, to) => supabase
         .from('bp_payments')
         .select('*,bp_bookings(booking_no,bp_customers(*),bp_plots(*),bp_projects(*))')
         .order('payment_date', { ascending: false })
-      if (error) throw error
-      return data
+        .order('id')
+        .range(from, to))
     },
   })
 
@@ -135,6 +138,9 @@ export default function Payments() {
 
   const updateStatus = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      // Check BEFORE changing the status: the old order rejected the payment first and only
+      // then found its commission was already paid out, leaving the two out of step.
+      if (status !== 'verified') await assertPaymentNotCycled(id)
       const payload: any = { verification_status: status }
       if (status === 'verified') payload.verified_at = new Date().toISOString()
       if (status === 'rejected') payload.verified_at = null
