@@ -21,6 +21,7 @@ import EmiPanel from '@/components/EmiPanel'
 import BookingImportModal from '@/components/BookingImportModal'
 import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info, Banknote, IndianRupee, Lock, Unlock, Search, Download, X, Filter, ChevronDown, Users, ScrollText, ClipboardPaste, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { downloadCsv } from '@/lib/download'
 
 const STAGES = ['token_received','booking_done','cancelled'] as const
 type Stage = typeof STAGES[number]
@@ -1321,15 +1322,7 @@ export default function Bookings() {
         b.closed_at ? new Date(b.closed_at).toISOString().slice(0,10) : '',
       ]
     })
-    const csv = [headers, ...data].map(r => r.map(cell => {
-      const s = String(cell ?? '')
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
-    }).join(',')).join('\r\n')
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = `bookings-${new Date().toISOString().slice(0,10)}.csv`; a.click()
-    URL.revokeObjectURL(url)
+    downloadCsv(`bookings-${new Date().toISOString().slice(0,10)}.csv`, [headers, ...data])
     toast.success(`${rows.length} rows exported`)
   }
 

@@ -38,6 +38,7 @@ import { Select } from '@/components/ui/Input.tsx'
 import { formatINR } from '@/lib/utils'
 import { ClipboardPaste, AlertTriangle, CheckCircle2, Download, Info } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { saveBlob } from '@/lib/download'
 
 const COLUMNS = [
   'booking_no', 'booking_date', 'project', 'plot_no', 'size_sqyd', 'rate_per_sqyd',
@@ -383,10 +384,7 @@ export default function BookingImportModal({ open, onClose, onImported }: {
       '# Date           : dd/mm/yyyy, dd-mm-yyyy or yyyy-mm-dd.',
       '',
     ].join('\n')
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
-    const a = document.createElement('a')
-    a.href = url; a.download = 'booking-import-template.csv'; a.click()
-    URL.revokeObjectURL(url)
+    saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'booking-import-template.csv')
   }
 
   return (

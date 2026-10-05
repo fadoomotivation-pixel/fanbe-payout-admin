@@ -976,3 +976,38 @@ export function printCustomerStatement(s: StatementData) {
   `
   openPrintWindow(`Statement — ${esc(c.name || '')}`, css, body, 'Print statement')
 }
+
+// A plain titled table — for reports that are a list of rows with a total line.
+export function printSimpleTable(meta: { title: string; filters: string[]; note?: string }, headers: string[], rows: (string | number)[][], totals?: (string | number)[], numericFrom = 1) {
+  if (rows.length === 0) return
+  const cellHtml = (v: string | number, i: number, tag: 'td' | 'th') =>
+    `<${tag} class="${i >= numericFrom ? 'r' : ''}">${esc(v)}</${tag}>`
+  const css = `
+  @page{size:A4 landscape;margin:9mm}
+  *{box-sizing:border-box}
+  body{font-family:'Helvetica Neue',Arial,sans-serif;color:#0f172a;font-size:10px;margin:0;padding:0 4mm}
+  h1{font-size:15px;margin:0}
+  .meta{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #0f172a;padding-bottom:4px;margin-bottom:6px}
+  .meta small{color:#64748b;font-size:9px}
+  .f{color:#475569;font-size:9px;margin:2px 0 6px}
+  table{width:100%;border-collapse:collapse}
+  thead{display:table-header-group}
+  th{background:#f1f5f9;color:#475569;font-size:8.5px;text-transform:uppercase;letter-spacing:.3px;text-align:left;padding:4px 5px;border-bottom:1px solid #cbd5e1}
+  td{padding:4px 5px;border-bottom:1px solid #eef2f7;vertical-align:top}
+  tr{page-break-inside:avoid}
+  .r{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  tfoot td{font-weight:700;border-top:2px solid #0f172a;background:#f8fafc}
+  `
+  const html = `
+  <div class="meta">
+    <div><h1>FANBE DEVELOPERS — ${esc(meta.title)}</h1>
+      <div class="f">${meta.filters.length ? esc(meta.filters.join('  ·  ')) : 'All records'}${meta.note ? ` — ${esc(meta.note)}` : ''}</div></div>
+    <small>Printed ${d(new Date().toISOString())} · ${rows.length} row${rows.length === 1 ? '' : 's'}</small>
+  </div>
+  <table>
+    <thead><tr>${headers.map((h, i) => cellHtml(h, i, 'th')).join('')}</tr></thead>
+    <tbody>${rows.map(r => `<tr>${r.map((v, i) => cellHtml(v, i, 'td')).join('')}</tr>`).join('')}</tbody>
+    ${totals ? `<tfoot><tr>${totals.map((v, i) => cellHtml(v, i, 'td')).join('')}</tr></tfoot>` : ''}
+  </table>`
+  openPrintWindow(`${meta.title} — ${rows.length}`, css, html, `Print ${rows.length} rows`)
+}

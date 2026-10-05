@@ -10,6 +10,7 @@ import { formatINR, formatDate, PAYOUT_STATUS_COLORS } from '@/lib/utils'
 import { ArrowUpRight, ArrowDownRight, ChevronRight, Search, ExternalLink, AlertCircle, Download } from 'lucide-react'
 import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
 import toast from 'react-hot-toast'
+import { downloadCsv } from '@/lib/download'
 
 /**
  * Admin Broker Payouts dashboard.
@@ -372,15 +373,7 @@ export default function Payouts() {
       r.at.slice(0,10), r.broker_name, r.broker_code, LEDGER_KIND_META[r.kind]?.label || r.kind,
       r.direction, r.amount, r.balance, r.ref, r.detail || '',
     ])
-    const csv = [headers, ...lines].map(r => r.map(c => {
-      const s = String(c ?? '')
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s
-    }).join(',')).join('\r\n')
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = `broker-ledger-${new Date().toISOString().slice(0,10)}.csv`; a.click()
-    URL.revokeObjectURL(url)
+    downloadCsv(`broker-ledger-${new Date().toISOString().slice(0,10)}.csv`, [headers, ...lines])
   }
 
   const clearLedgerFilters = () => { setSearch(''); setLedgerKind(''); setLedgerFrom(''); setLedgerTo('') }

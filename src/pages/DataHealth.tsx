@@ -22,6 +22,7 @@ import { formatINR } from '@/lib/utils'
 import { bookingValue } from '@/lib/bookingMath'
 import { fetchAllRows } from '@/lib/fetchAll'
 import { ShieldCheck, Search, AlertTriangle, ArrowRight, Download } from 'lucide-react'
+import { downloadCsv } from '@/lib/download'
 
 type Issue = 'no_payment' | 'no_broker' | 'no_plot' | 'no_value' | 'no_project' | 'bad_phone'
 
@@ -149,13 +150,7 @@ export default function DataHealth() {
       meta.label, r.booking_no, r.legacy_no || '', r.customer_name, r.phone || '', r.project_name,
       r.size ?? '', r.value, r.issues.map(i => ISSUES.find(x => x.key === i)?.label).join('; '),
     ])
-    const csv = [header, ...body].map(line => line.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `record-health-${active}-${new Date().toISOString().slice(0, 10)}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    downloadCsv(`record-health-${active}-${new Date().toISOString().slice(0, 10)}.csv`, [header, ...body])
   }
 
   return (

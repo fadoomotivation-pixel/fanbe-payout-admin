@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button.tsx'
 import { Input, Select } from '@/components/ui/Input.tsx'
 import { assertPaymentNotCycled } from '@/lib/payoutEngine'
 import toast from 'react-hot-toast'
+import { downloadCsv } from '@/lib/download'
 
 type Tab = 'payments' | 'commissions' | 'emi_due' | 'broker_summary'
 
@@ -172,11 +173,7 @@ export default function Reports() {
       return { broker: r.name, broker_id: r.broker_id, rank: r.rank, bookings: r.bookings, volume: r.volume, commission: r.commission }
     })
     const headers = Object.keys(flat[0])
-    const csv = [headers.join(','), ...flat.map(r => headers.map(h => JSON.stringify((r as any)[h] ?? '')).join(','))].join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a'); a.href = url; a.download = `${tab}-${range.from}-to-${range.to}.csv`; a.click()
-    URL.revokeObjectURL(url)
+    downloadCsv(`${tab}-${range.from}-to-${range.to}.csv`, [headers, ...flat.map(r => headers.map(h => (r as any)[h] ?? ''))])
   }
 
   const tabs: { key: Tab; label: string }[] = [

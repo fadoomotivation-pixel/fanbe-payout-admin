@@ -14,6 +14,7 @@ import { formatINR, formatDate } from '@/lib/utils'
 import { fetchOverdueEmi, type OverdueEmiRow } from '@/lib/emiStatus'
 import { waLink } from '@/lib/whatsapp'
 import { AlertTriangle, Phone, MessageCircle, Search, Download, Clock } from 'lucide-react'
+import { downloadCsv } from '@/lib/download'
 
 type Band = 'all' | '0_30' | '31_90' | '90_plus'
 
@@ -71,15 +72,7 @@ export default function EmiOverdue() {
       r.broker_name, r.broker_code, r.commission_mode === 'traditional' ? 'Traditional' : 'MLM',
       r.instalments_overdue, r.amount_overdue, r.oldest_due, r.days_late,
     ])
-    const csv = [header, ...body]
-      .map(line => line.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(','))
-      .join('\n')
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `emi-overdue-${new Date().toISOString().slice(0, 10)}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    downloadCsv(`emi-overdue-${new Date().toISOString().slice(0, 10)}.csv`, [header, ...body])
   }
 
   const chaseMessage = (r: OverdueEmiRow) =>

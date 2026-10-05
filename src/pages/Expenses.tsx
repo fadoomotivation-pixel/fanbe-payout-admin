@@ -19,6 +19,7 @@ import {
 import { printExpenseVoucher, printExpenseVouchers } from '@/lib/printTemplates'
 import { isCashMode } from '@/lib/paymentMode'
 import toast from 'react-hot-toast'
+import { downloadCsv } from '@/lib/download'
 
 type Head = { id: string; name: string; active?: boolean }
 type Broker = { id: string; name: string | null; broker_id: string | null }
@@ -301,11 +302,7 @@ export default function Expenses() {
       r.expense_date, headNameOf(r.head_id), r.item_name, r.amount,
       brokerLabel(r.broker_id) || '', r.responsible_person || '', r.paid_to || '', r.paid_by || '', r.payment_mode || '', r.reference_no || '', r.description || '',
     ])
-    const csv = [headers, ...body].map(l => l.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
-    const a = document.createElement('a')
-    a.href = url; a.download = `expenses-${range.from}-to-${range.to}.csv`; a.click()
-    URL.revokeObjectURL(url)
+    downloadCsv(`expenses-${range.from}-to-${range.to}.csv`, [headers, ...body])
   }
 
   const filtersOn = !!(filterHead || filterBroker || search)

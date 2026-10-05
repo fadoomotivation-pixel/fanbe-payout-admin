@@ -32,6 +32,7 @@ import { Button } from '@/components/ui/Button.tsx'
 import { Select } from '@/components/ui/Input.tsx'
 import { ClipboardPaste, AlertTriangle, CheckCircle2, Download } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { saveBlob } from '@/lib/download'
 
 // Column order the paste is read in.  Matches the order admin already keeps in the
 // sheet.  Every one of them is optional.
@@ -234,12 +235,7 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
       '# Date       : dd/mm/yyyy, dd-mm-yyyy or yyyy-mm-dd.',
       '',
     ].join('\n')
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'broker-import-template.csv'
-    a.click()
-    URL.revokeObjectURL(url)
+    saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'broker-import-template.csv')
   }
 
   return (

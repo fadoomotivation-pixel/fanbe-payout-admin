@@ -5,7 +5,7 @@ import {
   UserCheck, Layers, MessageSquare, Megaphone, ShieldCheck, Receipt,
   Wallet, Calculator, TrendingUp, Landmark, Trophy, Star, Gift,
   ScrollText, CalendarRange, Inbox, UserPlus, History, Network,
-  Bell, Menu, X, Phone, ChevronRight as Chevron, AlertTriangle, UserSearch, BookMarked
+  Bell, Menu, X, Phone, ChevronRight as Chevron, AlertTriangle, UserSearch, BookMarked, DatabaseBackup
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
@@ -53,7 +53,7 @@ const NAV = [
   { group: 'Broker Network', items: [
     { to: '/brokers',          icon: Users,    label: 'Brokers' },
     // One agent's whole book — what they sold, what came in, who stopped paying.
-    { to: '/agent-report',     icon: UserSearch, label: 'Agent Report' },
+    { to: '/agent-report',     icon: UserSearch, label: 'Broker Sales' },
     { to: '/team-tree',        icon: Network,  label: 'Team Tree' },
     { to: '/kyc',              icon: UserCheck,label: 'KYC Review' },
     { to: '/commission-ranks', icon: Trophy,   label: 'Rank Slabs' },
@@ -80,6 +80,8 @@ const NAV = [
     { to: '/roles',         icon: ShieldCheck, label: 'Roles & Perms' },
     { to: '/bank-accounts', icon: Landmark,    label: 'Bank Accounts' },
     { to: '/payout-terms',  icon: ScrollText,  label: 'Payout Settings' },
+    // A copy of every record on this computer — taken before any big change.
+    { to: '/backup',        icon: DatabaseBackup, label: 'Backup & Export' },
   ]},
 ]
 
