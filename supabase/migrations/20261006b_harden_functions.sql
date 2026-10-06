@@ -1,60 +1,59 @@
--- ============================================================================
--- Follow-up to 20261006, from Supabase's own security linter run against the live
--- database after that migration landed.  Three real things, one of them mine.
+-- Follow-up to 20261006, from Supabase's security linter run against the live database.
 --
---   1. public.guard_paid_commission() — the trigger that stops paid commission being
---      deleted — was written WITHOUT `SET search_path`.  My mistake in 20261006.  It is
---      SECURITY INVOKER so it is not an escalation, but a function whose whole job is to
---      refuse a write should not resolve its own table names through whatever search_path
---      the caller happens to have set.
+-- 1. guard_paid_commission() -- the trigger that stops paid commission being deleted -- was
+--    written WITHOUT `SET search_path`. My mistake in 20261006. It is SECURITY INVOKER so it
+--    is not an escalation, but a function whose whole job is to refuse a write should not
+--    resolve its own table names through whatever search_path the caller happens to set.
 --
---   2. public.next_receipt_no() is SECURITY DEFINER *and* has a mutable search_path.
---      That pair is the actual privilege-escalation shape: the function runs as its owner,
---      and the caller chooses which schema its unqualified names resolve in.
+-- 2. next_receipt_no() is SECURITY DEFINER *and* has a mutable search_path. That pair is the
+--    actual privilege-escalation shape: it runs as its owner, and the caller chooses which
+--    schema its unqualified names resolve in.
 --
---   3. Every trigger function in `public` is exposed as a REST endpoint
---      (/rest/v1/rpc/<name>) to `anon` and `authenticated`, 24 of them — including the
---      guards added in 20261006.  Calling one directly fails ("can only be called as a
---      trigger"), so nothing is exploitable, but none of them should be reachable at all.
---      Revoking is safe: Postgres checks EXECUTE on a trigger function when the TRIGGER is
---      created, not each time it fires.
+-- 3. Every trigger function in `public` is exposed as a REST endpoint (/rest/v1/rpc/<name>)
+--    to anon and authenticated, 28 of them, including the guards added in 20261006. Calling
+--    one directly always fails ("can only be called as a trigger"), so nothing is
+--    exploitable, but none of them should be reachable at all. Revoking is safe: Postgres
+--    checks EXECUTE on a trigger function when the TRIGGER is created, not when it fires.
 --
---   4. public.recompute_broker_ranks() is SECURITY DEFINER, callable by any signed-in user,
---      and it PROMOTES brokers — promote-only, never reversing.  It cannot invent a
---      promotion (it just applies the slab rules), but rank decides commission %, so it is
---      the office's button, not a broker's.
+-- 4. recompute_broker_ranks() is SECURITY DEFINER, callable by any signed-in user, and it
+--    PROMOTES brokers -- promote-only, never reversing. It cannot invent a promotion (it
+--    just applies the slab rules), but rank decides commission %, so it is the office's
+--    button, not a broker's.
 --
--- Safe to run more than once.  Deletes nothing.  Changes no behaviour for staff.
+-- Safe to run more than once. Deletes nothing. No behaviour change for staff.
+--
 -- Deliberately NOT touched, because they belong to the call-centre CRM that shares this
--- database: the views v_ghost_leads and v_tele_caller_scorecard (SECURITY DEFINER), and
--- the functions link_call_to_lead, norm_phone, notify_due_followups,
--- missed_followups_for_employee and the shared set_updated_at.  They are reported in the
--- guide instead so whoever owns that app can decide.
--- ============================================================================
+-- database: the views v_ghost_leads and v_tele_caller_scorecard (SECURITY DEFINER), and the
+-- functions link_call_to_lead, norm_phone, notify_due_followups, missed_followups_for_employee
+-- and the shared set_updated_at. They are written into the guide instead, so whoever owns
+-- that app can decide.
+
 BEGIN;
 
--- ── 1 + 2.  Pin search_path on the functions of ours that lack it ───────────
--- ALTER FUNCTION ... SET is used rather than CREATE OR REPLACE so the bodies are not
--- restated here: there is nothing to get wrong, and the next person reading this file sees
--- that only the setting changed.
-ALTER FUNCTION public.guard_paid_commission()            SET search_path = public;
-ALTER FUNCTION public.next_receipt_no()                  SET search_path = public;
-ALTER FUNCTION public.bp_customers_set_code()            SET search_path = public;
-ALTER FUNCTION public.bp_payments_set_receipt_no()       SET search_path = public;
-ALTER FUNCTION public.brokers_set_default_referral_code() SET search_path = public;
-ALTER FUNCTION public.trg_recompute_broker_ranks()       SET search_path = public;
 
--- ── 3.  Trigger functions stop being REST endpoints ─────────────────────────
--- Every function in `public` that returns `trigger` — 28 of them, all owned by postgres.
--- Written as a loop over the catalog rather than a list so a trigger function added later
--- is covered the next time this runs.
+-- 1 + 2. Pin search_path on the functions of ours that lack it.
+-- ALTER FUNCTION ... SET is used rather than CREATE OR REPLACE so the bodies are not restated
+-- here: there is nothing to get wrong, and the next reader sees that only the setting changed.
+
+ALTER FUNCTION public.guard_paid_commission()             SET search_path = public;
+ALTER FUNCTION public.next_receipt_no()                   SET search_path = public;
+ALTER FUNCTION public.bp_customers_set_code()             SET search_path = public;
+ALTER FUNCTION public.bp_payments_set_receipt_no()        SET search_path = public;
+ALTER FUNCTION public.brokers_set_default_referral_code() SET search_path = public;
+ALTER FUNCTION public.trg_recompute_broker_ranks()        SET search_path = public;
+
+
+-- 3. Trigger functions stop being REST endpoints.
+-- Every function in `public` that returns `trigger` -- 28 of them, all owned by postgres.
+-- Written as a loop over the catalog rather than a list, so a trigger function added later is
+-- covered the next time this runs.
 --
--- This does reach the call-centre CRM's trigger functions as well, and that is deliberate
--- and safe: a trigger keeps firing after its function's EXECUTE is revoked (the privilege
--- is checked once, at CREATE TRIGGER), and the only thing lost is an RPC endpoint that
--- could never have worked — calling a trigger function directly always errors.  No table,
--- policy or row of theirs is touched.
-DO $$
+-- This does reach the call-centre CRM's trigger functions too, and that is deliberate and
+-- safe: a trigger keeps firing after its function's EXECUTE is revoked (the privilege is
+-- checked once, at CREATE TRIGGER), and the only thing lost is an RPC endpoint that could
+-- never have worked. No table, policy or row of theirs is touched.
+
+DO $do$
 DECLARE f record;
 BEGIN
   FOR f IN
@@ -66,21 +65,24 @@ BEGIN
   LOOP
     EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC, anon, authenticated', f.sig);
   END LOOP;
-END $$;
+END
+$do$;
 
--- ── 4.  Rank promotion is the office's button ───────────────────────────────
--- Same shape as the guards in 20261006: the check is inside, because `authenticated` is
--- also the role the office signs in as.  A NULL auth.uid() is the service role, a migration
--- or a trigger fired by one, and passes.
+
+-- 4. Rank promotion is the office's button.
+-- Same shape as the guards in 20261006: the check is inside, because `authenticated` is also
+-- the role the office signs in as. A NULL auth.uid() is the service role, a migration, or a
+-- trigger fired by one, and passes.
 --
--- Body is otherwise byte-for-byte what is live: promote-only, skips rank_locked brokers,
+-- The body is otherwise byte-for-byte what is live: promote-only, skips rank_locked brokers,
 -- three passes so a promotion can cascade up the tree.
+
 CREATE OR REPLACE FUNCTION public.recompute_broker_ranks()
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path TO 'public'
-AS $function$
+AS $fn$
 DECLARE
   brk record; slab record;
   v_team_sqyd numeric; v_sub_count integer;
@@ -94,7 +96,7 @@ BEGIN
     FOR brk IN
       SELECT id, rank FROM public.brokers
        WHERE status = 'active' AND broker_type = 'mlm'
-         AND rank_locked = false          -- (1) manual jumps are left untouched
+         AND rank_locked = false          -- manual jumps are left untouched
     LOOP
       WITH RECURSIVE subtree AS (
         SELECT brk.id AS id UNION ALL
@@ -118,12 +120,12 @@ BEGIN
         END IF;
       END LOOP;
 
-      -- Current rank's level (0 if the name isn't in the slab table).
+      -- Current rank's level (0 if the name is not in the slab table).
       SELECT COALESCE(cr.level, 0) INTO v_cur_level
         FROM public.commission_ranks cr WHERE cr.rank_name = brk.rank;
       v_cur_level := COALESCE(v_cur_level, 0);
 
-      -- (2) PROMOTE-ONLY: only ever raise the rank, never lower it.
+      -- PROMOTE-ONLY: only ever raise the rank, never lower it.
       IF v_new_rank IS NOT NULL
          AND v_new_level > v_cur_level
          AND v_new_rank IS DISTINCT FROM brk.rank THEN
@@ -132,31 +134,31 @@ BEGIN
     END LOOP;
   END LOOP;
 END;
-$function$;
+$fn$;
 
 REVOKE EXECUTE ON FUNCTION public.recompute_broker_ranks() FROM PUBLIC, anon;
 GRANT  EXECUTE ON FUNCTION public.recompute_broker_ranks() TO authenticated;
 
+
 COMMIT;
 
--- ============================================================================
--- After running:
+
+-- After running, to check:
 --
 --   SELECT p.proname, p.proconfig
 --     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
---    WHERE n.nspname='public'
+--    WHERE n.nspname = 'public'
 --      AND p.proname IN ('guard_paid_commission','next_receipt_no','recompute_broker_ranks');
 --   -- expect: every row shows {search_path=public}
 --
---   SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
---    WHERE n.nspname='public' AND p.prorettype='pg_catalog.trigger'::regtype
+--   SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+--    WHERE n.nspname = 'public' AND p.prorettype = 'pg_catalog.trigger'::regtype
 --      AND has_function_privilege('authenticated', p.oid, 'execute');
 --   -- expect: 0
 --
--- Then re-run the linter: Dashboard > Advisors > Security.  What should still be listed,
--- and is not ours to fix here:
---   - v_ghost_leads / v_tele_caller_scorecard  (call-centre views, SECURITY DEFINER)
---   - link_call_to_lead, norm_phone, notify_due_followups, missed_followups_for_employee,
---     set_updated_at                           (call-centre / shared, mutable search_path)
---   - Leaked Password Protection Disabled      (a switch in Auth settings, not SQL)
--- ============================================================================
+-- Then re-run the linter at Dashboard > Advisors > Security. What should still be listed, and
+-- is not ours to fix here:
+--   v_ghost_leads, v_tele_caller_scorecard          (call-centre views, SECURITY DEFINER)
+--   link_call_to_lead, norm_phone, notify_due_followups,
+--   missed_followups_for_employee, set_updated_at   (call-centre / shared, mutable search_path)
+--   Leaked Password Protection Disabled             (a switch in Auth settings, not SQL)
