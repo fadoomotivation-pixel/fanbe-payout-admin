@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { formatINR, formatDate } from '@/lib/utils'
+import { todayLocalISO } from '@/lib/fetchAll'
 import { fetchEmiStatusAll } from '@/lib/emiStatus'
 // `Map` is imported under a different name on purpose.  lucide-react exports an icon
 // called Map, and importing it plainly shadows the global Map constructor for this whole
@@ -85,17 +86,28 @@ export default function Dashboard() {
       }
       setSignedOut(!session)
 
+      // Two different kinds of boundary, and they are not interchangeable.
+      //
+      // `monthStartISO` is a full instant, compared against created_at (a timestamptz), so
+      // local midnight written in UTC is exactly right.
+      //
+      // The rest are calendar DAYS, compared against date columns (payment_date,
+      // expense_date, application_date).  Those were built by slicing the UTC form of local
+      // midnight — which in IST lands on the PREVIOUS day, because 1 Oct 00:00 IST is
+      // 30 Sep 18:30 UTC.  So "this month" quietly began on the last day of last month and
+      // counted that day's collection in both months.  todayLocalISO reads the date off the
+      // browser's own calendar.
       const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0,0,0,0)
       const monthStartISO = monthStart.toISOString()
-      const monthStartDay = monthStartISO.slice(0, 10)
+      const monthStartDay = todayLocalISO(monthStart)
       const prevMonthStart = new Date(monthStart); prevMonthStart.setMonth(prevMonthStart.getMonth() - 1)
-      const prevMonthStartDay = prevMonthStart.toISOString().slice(0, 10)
+      const prevMonthStartDay = todayLocalISO(prevMonthStart)
 
       const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6); sevenDaysAgo.setHours(0,0,0,0)
-      const sevenDayStart = sevenDaysAgo.toISOString().slice(0, 10)
+      const sevenDayStart = todayLocalISO(sevenDaysAgo)
 
       const ninety = new Date(); ninety.setDate(ninety.getDate() - 90)
-      const ninetyDaysAgo = ninety.toISOString().slice(0, 10)
+      const ninetyDaysAgo = todayLocalISO(ninety)
 
       // allSettled, NOT all.  With Promise.all a single failing query rejects the whole
       // batch, the rest of load() is skipped, and every tile keeps its initial value —
@@ -252,7 +264,9 @@ export default function Dashboard() {
         const out: Record<string, { date: string; label: string; amount: number }> = {}
         for (let i = 6; i >= 0; i--) {
           const d = new Date(); d.setDate(d.getDate() - i)
-          const key = d.toISOString().slice(0, 10)
+          // Same reason: application_date is a calendar date, so the bucket key has to be
+          // one too, or every bar is a day out and "today" is empty until 05:30.
+          const key = todayLocalISO(d)
           out[key] = { date: key, label: d.toLocaleDateString('en-IN', { weekday: 'short' }), amount: 0 }
         }
         for (const b of (weekBookings.data || []) as any[]) {

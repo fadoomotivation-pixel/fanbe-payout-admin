@@ -237,10 +237,19 @@ Other programs: `AchieversClub.tsx`, `TeamRewards.tsx` (team reward tiers), `Com
 13. UI copy is plain simple English; the office reads Hindi/English, so keep sentences short.
 
 ### Security status (important)
-- `public.is_staff()` exists in the DB.
-- Migrations **`20261003_lock_money_tables_to_staff.sql`** and **`20261004_money_integrity_guards.sql`
-  are in the repo but NOT yet applied**. Until they are, any broker login can write to money tables
-  through the REST API. Applying them is the first critical fix.
+- `public.is_staff()` is live. So are the policies from **`20261003_lock_money_tables_to_staff.sql`** —
+  but NOT the `brokers` column-guard trigger that migration defines. **`20261004_money_integrity_guards.sql`
+  was never applied** (its triggers are not on the tables). Check with `pg_trigger` before assuming.
+- **`20261006_lock_down_writes_and_money_integrity.sql`** is the current fix and must be run in the
+  Supabase SQL editor. It is re-runnable and deletes nothing. It closes: ~35 tables writable by any
+  login, the missing `brokers` guard, broker-inserted brokers inflating rank, `pdc_clear_cheque` and
+  `recompute_booking_payouts` callable by a broker, paid commission being deletable, withdrawals
+  unchecked against the wallet, cancelled bookings earning again, double-sold plots, brokers reading
+  every customer and every other broker, and the public `documents` bucket.
+- Turn OFF public sign-up in Supabase Auth, and turn ON leaked-password protection. Neither can be
+  done from a migration, and without the first anyone can create a login at all.
+- After `20261006`, the `documents` bucket is private: read KYC files through `src/lib/storage.ts`
+  (`signedDocUrl`), never `getPublicUrl`.
 - A snapshot of the data deleted on 5 Oct 2026 is in DB schema `backup_20261005` (not exposed).
 
 ---

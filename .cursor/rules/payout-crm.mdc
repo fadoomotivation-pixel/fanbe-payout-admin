@@ -14,7 +14,10 @@ Never break these:
 - Rows with `cycle_id` are already paid out: never delete/alter them. Cancelled bookings earn nothing.
 - Old imported bookings with no payment have an unknown balance (`isPaidUnknown`).
 - IST dates via `todayLocalISO()`; large reads via `fetchAllRows` / `inChunks`; downloads via `src/lib/download.ts`.
-- Security is Supabase RLS (`public.is_staff()`), not the UI. Do not touch call-centre tables
+- Security is Supabase RLS (`public.is_staff()`), not the UI. Staff write; a broker reads only their
+  own subtree and may only ask for a withdrawal. Do not touch call-centre tables
   (`leads`, `calls`, `hr_*`, `attendance`, `profiles`, `crm_*`).
+- KYC files live in the PRIVATE `documents` bucket: use `src/lib/storage.ts` (`signedDocUrl`), never
+  `getPublicUrl`. Store the storage path in `file_url`, not a URL.
 - Dead code: `src/pages/<subfolder>/*`, `src/pages/EMI.tsx`, client distribution functions in payoutEngine.
 - DB changes: new file in `supabase/migrations/`. Verify with `npx tsc --noEmit -p .`, `npm run check:globals`, `npm run build`.
