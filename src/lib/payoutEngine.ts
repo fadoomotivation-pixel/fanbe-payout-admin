@@ -559,6 +559,11 @@ export function computeAchieversClub(
 //   - bp_payout_transactions     (admin-initiated via Payout Cycle close)
 // Without this, /payouts and /withdrawals showed different 'available' numbers and
 // a broker paid via a cycle batch could still request a withdrawal for the same money.
+/** The one test for "this expense is an advance paid to a broker". */
+export function isAdvanceHead(headName: string | null | undefined): boolean {
+  return String(headName || '').trim().toLowerCase() === 'advance'
+}
+
 export type BrokerWallet = {
   earned: number          // sum of payout_distributions.net_payout
   paid: number            // withdrawal_requests in paid|closed + bp_payout_transactions in paid
@@ -606,8 +611,7 @@ export async function loadBrokerWallets(): Promise<Record<string, BrokerWallet>>
   for (const e of (advances || []) as any[]) {
     if (!e.broker_id) continue
     // expense_heads is the joined row; only the "Advance" head counts here.
-    const headName = (e.expense_heads?.name || '').toLowerCase()
-    if (headName !== 'advance') continue
+    if (!isAdvanceHead(e.expense_heads?.name)) continue
     ensure(e.broker_id).advance += Number(e.amount || 0)
   }
   for (const id in out) out[id].available = Math.max(0, out[id].earned - out[id].paid - out[id].pending - out[id].advance)
