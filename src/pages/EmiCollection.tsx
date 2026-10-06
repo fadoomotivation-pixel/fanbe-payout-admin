@@ -16,6 +16,7 @@ import { fetchEmiForecast, type EmiForecast } from '@/lib/emiForecast'
 import {
   Calculator, TrendingUp, AlertTriangle, Wallet, CalendarRange, ArrowRight, Download, CheckCircle2,
 } from 'lucide-react'
+import { downloadCsv } from '@/lib/download'
 
 export default function EmiCollection() {
   const { data, isLoading } = useQuery<EmiForecast>({
@@ -31,10 +32,7 @@ export default function EmiCollection() {
     const header = ['Month', 'Expected', 'Expected kist', 'Collected', 'Collected kist', 'Type']
     const body = data.months.map(m => [m.label, m.expected, m.expectedKist, m.collected, m.collectedKist,
       m.isCurrent ? 'current' : m.isFuture ? 'forecast' : 'past'])
-    const csv = [header, ...body].map(l => l.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
-    const a = document.createElement('a'); a.href = url; a.download = `emi-forecast-${new Date().toISOString().slice(0, 10)}.csv`; a.click()
-    URL.revokeObjectURL(url)
+    downloadCsv(`emi-forecast-${new Date().toISOString().slice(0, 10)}.csv`, [header, ...body])
   }
 
   return (

@@ -21,6 +21,7 @@ import DeleteBookingModal from '@/components/DeleteBookingModal'
 import EmiPanel from '@/components/EmiPanel'
 import { Users, Search, Filter, ChevronRight, Banknote, Calculator, ArrowUpRight, CheckCircle2, AlertTriangle, Coins, Phone, MessageCircle, IndianRupee, X, ExternalLink, FileText, Printer, Pencil, Landmark, ScrollText, CalendarClock, Trash2, SlidersHorizontal, Download, ListOrdered, Hourglass, Tag } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { downloadCsv } from '@/lib/download'
 
 // 'today' and 'all' plus one tab per bucket from lib/pipelineIndex — every booking sits in
 // exactly one bucket, so the bucket tiles add up to "All".
@@ -977,13 +978,7 @@ export default function CustomerPipeline() {
         TAB_LABEL[ix.bucket],
       ]
     })
-    const csv = [header, ...body].map(line => line.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `customers-${tab}-${today()}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    downloadCsv(`customers-${tab}-${today()}.csv`, [header, ...body])
   }
 
   // Kist cards: the full instalment table for each booking, one sheet each.

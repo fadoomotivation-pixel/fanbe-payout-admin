@@ -44,6 +44,7 @@ import EmiOverdue from '@/pages/EmiOverdue'
 import EmiCollection from '@/pages/EmiCollection'
 import DayBook from '@/pages/DayBook'
 import DataHealth from '@/pages/DataHealth'
+import Backup from '@/pages/Backup'
 
 // Preserve search params when redirecting (so old links like
 // /customer-history?customer=X still land on the right customer view).
@@ -145,6 +146,7 @@ export default function App(){
         <Route path="/agent-report" element={<AgentReport/>}/>
         <Route path="/day-book" element={<DayBook/>}/>
         <Route path="/record-health" element={<DataHealth/>}/>
+        <Route path="/backup" element={<Backup/>}/>
         <Route path="/activity" element={<ActivityLog/>}/>
         <Route path="/emi" element={<Navigate to="/customer-pipeline" replace/>}/>
         <Route path="/brokers" element={<Brokers/>}/>

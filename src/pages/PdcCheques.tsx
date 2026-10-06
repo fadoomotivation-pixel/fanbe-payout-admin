@@ -23,6 +23,7 @@ import { formatINR, formatDate } from '@/lib/utils'
 import { Plus, Search, Download, X, AlertTriangle, CheckCircle2, Landmark, Phone, MessageCircle } from 'lucide-react'
 import { waLink } from '@/lib/whatsapp'
 import toast from 'react-hot-toast'
+import { downloadCsv } from '@/lib/download'
 
 type Status = 'pending' | 'deposited' | 'cleared' | 'bounced' | 'cancelled'
 
@@ -281,11 +282,7 @@ export default function PdcCheques() {
       c.bp_bookings?.booking_no || '', c.bp_bookings?.bp_customers?.name || '',
       c.payment_type, c.status, c.deposited_on || '', c.cleared_on || '', c.bounce_reason || '',
     ])
-    const csv = [headers, ...body].map(r => r.map((v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
-    const a = document.createElement('a')
-    a.href = url; a.download = `pdc-cheques-${t}.csv`; a.click()
-    URL.revokeObjectURL(url)
+    downloadCsv(`pdc-cheques-${t}.csv`, [headers, ...body])
   }
 
   const columns = [

@@ -27,6 +27,7 @@ import { bookingValue, balanceOf, isRegistryReady, isRegistryDone } from '@/lib/
 import { waLink } from '@/lib/whatsapp'
 import { ScrollText, Search, Download, X, CheckCircle2, Clock, AlertTriangle, MessageCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { downloadCsv } from '@/lib/download'
 
 type Tab = 'ready' | 'waiting' | 'done' | 'all'
 
@@ -245,11 +246,7 @@ export default function Registry() {
       r.done ? 'Done' : r.ready ? 'Ready' : 'Payment pending',
       r.registry_date || '', r.registry_doc_no || '', r.registry_office || '',
     ])
-    const csv = [headers, ...body].map(l => l.map((v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
-    const a = document.createElement('a')
-    a.href = url; a.download = `registry-${today()}.csv`; a.click()
-    URL.revokeObjectURL(url)
+    downloadCsv(`registry-${today()}.csv`, [headers, ...body])
   }
 
   return (

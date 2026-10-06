@@ -50,6 +50,8 @@ export type IndexRow = {
   broker_name: string
   broker_code: string
   plot_no: string
+  /** area sold, from the booking, falling back to the plot */
+  size_sqyd: number
   /** came from the old records sheet, not booked in this system */
   imported: boolean
   value: number
@@ -88,9 +90,9 @@ export async function fetchPipelineIndex(): Promise<IndexRow[]> {
       supabase.from('bp_bookings')
         .select(`id, booking_no, legacy_booking_no, notes, stage, created_at, application_date,
                  total_amount, plot_total_price, customer_id, broker_id, project_id, plot_id,
-                 commission_mode, registry_date, registry_completed_at,
+                 commission_mode, registry_date, registry_completed_at, size_sqyd,
                  bp_customers(name, phone, customer_code, previous_customer_code),
-                 bp_plots(plot_no), brokers(name, broker_id)`)
+                 bp_plots(plot_no, size_sqyd), brokers(name, broker_id)`)
         .not('stage', 'eq', 'cancelled')
         .order('created_at', { ascending: false })
         .order('id')
@@ -145,6 +147,7 @@ export async function fetchPipelineIndex(): Promise<IndexRow[]> {
       broker_name: b.brokers?.name || '',
       broker_code: b.brokers?.broker_id || '',
       plot_no: b.bp_plots?.plot_no || '',
+      size_sqyd: Number(b.size_sqyd || b.bp_plots?.size_sqyd || 0),
       imported,
       value, paid, balance,
       paidPct: collectionPct(value, paid),
