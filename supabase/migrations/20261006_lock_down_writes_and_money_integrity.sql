@@ -113,7 +113,7 @@ GRANT  EXECUTE ON FUNCTION public.my_broker_ids() TO authenticated;
 -- it keeps the call-centre CRM (leads, calls, crm_*, hr_*, attendance, profiles,
 -- site_visits, tasks, employee_leads) out of reach by construction.
 DO $$
-DECLARE t text; pol text;
+DECLARE t text; pol text; pols text[];
 BEGIN
   FOREACH t IN ARRAY ARRAY[
     'achievers_club_config','achievers_club_months','achievers_club_payouts',
@@ -126,9 +126,11 @@ BEGIN
     'payout_terms_config','pending_payments','registry_members','sponsor_tree',
     'team_reward_tiers'
   ] LOOP
-    FOR pol IN
-      SELECT policyname FROM pg_policies WHERE schemaname = 'public' AND tablename = t
-    LOOP
+    -- Names are collected first: dropping policies while still reading pg_policies would
+    -- be changing the catalog this loop is walking.
+    SELECT COALESCE(array_agg(policyname), ARRAY[]::text[]) INTO pols
+      FROM pg_policies WHERE schemaname = 'public' AND tablename = t;
+    FOREACH pol IN ARRAY pols LOOP
       EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', pol, t);
     END LOOP;
     EXECUTE format(
@@ -980,37 +982,68 @@ $function$;
 --
 -- `project-images` stays public on purpose: those are marketing images for the site.
 -- `hr-documents` belongs to the call-centre CRM and is deliberately left alone.
-UPDATE storage.buckets SET public = false WHERE id = 'documents';
+-- `storage.objects` and `storage.buckets` are owned by `supabase_storage_admin`, and the
+-- SQL editor runs as `postgres`, which is not a member of that role.  CREATE POLICY needs
+-- ownership, not just privileges — so these statements raise insufficient_privilege, and
+-- because this file is one transaction, they would roll back the ENTIRE migration.  (That
+-- is exactly what happened on the first run: nothing applied.)
+--
+-- So the storage half runs inside its own guarded block.  If it is allowed, it applies; if
+-- not, it says so and the other eleven sections still commit.  Turning the bucket private
+-- is the part that actually matters — a private bucket stops serving /object/public/ at
+-- all, whatever the policies say.
+-- Its own block, so that making the bucket private sticks even if the policy half below
+-- is refused.  An EXCEPTION handler rolls back everything done inside ITS block, so these
+-- two must not share one.
+DO $$
+BEGIN
+  UPDATE storage.buckets SET public = false WHERE id = 'documents';
+  RAISE NOTICE 'Storage: documents bucket is now private.';
+EXCEPTION
+  WHEN insufficient_privilege THEN
+    RAISE NOTICE 'Storage: could NOT make the documents bucket private. Do it in Dashboard > Storage > documents > Settings.';
+END $$;
 
-DROP POLICY IF EXISTS "Public can view documents"               ON storage.objects;
-DROP POLICY IF EXISTS "Authenticated users can update documents" ON storage.objects;
-DROP POLICY IF EXISTS "Authenticated users can delete documents" ON storage.objects;
-DROP POLICY IF EXISTS "Authenticated users can upload documents" ON storage.objects;
-DROP POLICY IF EXISTS documents_staff_all   ON storage.objects;
-DROP POLICY IF EXISTS documents_broker_read ON storage.objects;
-DROP POLICY IF EXISTS documents_broker_add  ON storage.objects;
+DO $$
+BEGIN
+  EXECUTE $q$DROP POLICY IF EXISTS "Public can view documents"                ON storage.objects$q$;
+  EXECUTE $q$DROP POLICY IF EXISTS "Authenticated users can update documents" ON storage.objects$q$;
+  EXECUTE $q$DROP POLICY IF EXISTS "Authenticated users can delete documents" ON storage.objects$q$;
+  EXECUTE $q$DROP POLICY IF EXISTS "Authenticated users can upload documents" ON storage.objects$q$;
+  EXECUTE $q$DROP POLICY IF EXISTS documents_staff_all   ON storage.objects$q$;
+  EXECUTE $q$DROP POLICY IF EXISTS documents_broker_read ON storage.objects$q$;
+  EXECUTE $q$DROP POLICY IF EXISTS documents_broker_add  ON storage.objects$q$;
 
-CREATE POLICY documents_staff_all ON storage.objects
-  FOR ALL TO authenticated
-  USING      (bucket_id = 'documents' AND public.is_staff())
-  WITH CHECK (bucket_id = 'documents' AND public.is_staff());
+  EXECUTE $q$
+    CREATE POLICY documents_staff_all ON storage.objects
+      FOR ALL TO authenticated
+      USING      (bucket_id = 'documents' AND public.is_staff())
+      WITH CHECK (bucket_id = 'documents' AND public.is_staff())
+  $q$;
 
--- A broker reaches only their own folder: documents/kyc/<their broker id>/...
-CREATE POLICY documents_broker_read ON storage.objects
-  FOR SELECT TO authenticated
-  USING (
-    bucket_id = 'documents'
-    AND (storage.foldername(name))[1] = 'kyc'
-    AND (storage.foldername(name))[2] = ANY (public.my_broker_ids()::text[])
-  );
+  -- A broker reaches only their own folder: documents/kyc/<their broker id>/...
+  EXECUTE $q$
+    CREATE POLICY documents_broker_read ON storage.objects
+      FOR SELECT TO authenticated
+      USING (bucket_id = 'documents'
+             AND (storage.foldername(name))[1] = 'kyc'
+             AND (storage.foldername(name))[2] = ANY (public.my_broker_ids()::text[]))
+  $q$;
 
-CREATE POLICY documents_broker_add ON storage.objects
-  FOR INSERT TO authenticated
-  WITH CHECK (
-    bucket_id = 'documents'
-    AND (storage.foldername(name))[1] = 'kyc'
-    AND (storage.foldername(name))[2] = ANY (public.my_broker_ids()::text[])
-  );
+  EXECUTE $q$
+    CREATE POLICY documents_broker_add ON storage.objects
+      FOR INSERT TO authenticated
+      WITH CHECK (bucket_id = 'documents'
+                  AND (storage.foldername(name))[1] = 'kyc'
+                  AND (storage.foldername(name))[2] = ANY (public.my_broker_ids()::text[]))
+  $q$;
+
+  RAISE NOTICE 'Storage: documents policies are in place.';
+EXCEPTION
+  WHEN insufficient_privilege THEN
+    RAISE NOTICE 'Storage policies NOT changed: this login does not own storage.objects. %',
+      'Finish in Dashboard > Storage > documents > make Private, then Policies: delete the public read policy and add staff-only + kyc/<broker id> rules.';
+END $$;
 
 COMMIT;
 
@@ -1034,5 +1067,16 @@ COMMIT;
 --   SELECT tgname FROM pg_trigger WHERE tgrelid='public.brokers'::regclass
 --     AND tgname='trg_brokers_guard_non_staff';            -- expect: 1 row
 --   SELECT public.is_staff();                               -- expect: true for an office login
+--
+--   SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+--    WHERE n.nspname='public' AND p.proname IN ('my_broker_subtree','my_broker_ids',
+--      'guard_paid_commission','guard_withdrawal_within_wallet','plot_ids_of_booking',
+--      'guard_plot_not_double_sold');                      -- expect: 6
+--
 --   SELECT id, public FROM storage.buckets WHERE id='documents';  -- expect: public = false
+--   SELECT policyname FROM pg_policies
+--    WHERE schemaname='storage' AND tablename='objects' AND policyname LIKE 'documents_%';
+--   -- expect: 3 rows.  0 rows means the NOTICE fired and the storage half has to be
+--   -- finished in Dashboard > Storage > documents > Policies (the SQL editor runs as
+--   -- `postgres`, which does not own storage.objects).  Everything else still applied.
 -- ============================================================================

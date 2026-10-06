@@ -248,6 +248,10 @@ Other programs: `AchieversClub.tsx`, `TeamRewards.tsx` (team reward tiers), `Com
   every customer and every other broker, and the public `documents` bucket.
 - Turn OFF public sign-up in Supabase Auth, and turn ON leaked-password protection. Neither can be
   done from a migration, and without the first anyone can create a login at all.
+- `storage.objects` is owned by `supabase_storage_admin`; the SQL editor runs as `postgres`, which
+  does not own it, and CREATE POLICY needs ownership. So storage policies can only be set from
+  Dashboard → Storage → Policies. `20261006` tries them in a guarded block and prints a NOTICE if
+  refused — never put a bare storage policy statement in a migration, it rolls the whole file back.
 - After `20261006`, the `documents` bucket is private: read KYC files through `src/lib/storage.ts`
   (`signedDocUrl`), never `getPublicUrl`.
 - A snapshot of the data deleted on 5 Oct 2026 is in DB schema `backup_20261005` (not exposed).
