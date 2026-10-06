@@ -9,6 +9,7 @@ import { Input, Select, Textarea } from '@/components/ui/Input.tsx'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
+import { sortByPlotNo } from '@/lib/plotNo'
 import { printApplicationForm } from '@/lib/printTemplates'
 import { logClosure, getCurrentUserId } from '@/lib/closure'
 import { ClosureDialog } from '@/components/ClosureDialog'
@@ -161,6 +162,9 @@ export default function Bookings() {
     setSearchParams(next, { replace: true })
   }
   const [modal, setModal]     = useState(false)
+  // Typed into the plot picker.  A scheme can hold 1,451 plots, so the list is searched,
+  // not scrolled.
+  const [plotSearch, setPlotSearch] = useState('')
   const [editing, setEditing] = useState<any>(null)
   const [form, setForm]       = useState<any>(EMPTY)
   // Additional brokers for traditional multi-broker splits.  Array of { broker_id, commission_pct, position }.
@@ -268,7 +272,7 @@ export default function Bookings() {
       for (let from = 0; ; from += PAGE) {
         const { data, error } = await supabase
           .from('bp_plots')
-          .select('id, plot_no, size_sqyd, price_per_sqyd, plc_charges, total_price, status, project_id, bp_projects(id, name)')
+          .select('id, plot_no, block, sector, size_sqyd, price_per_sqyd, plc_charges, total_price, status, project_id, bp_projects(id, name)')
           .eq('project_id', form.project_id)
           .eq('status', 'available')
           .order('plot_no')
@@ -277,7 +281,10 @@ export default function Bookings() {
         out.push(...(data || []))
         if (!data || data.length < PAGE) break
       }
-      return out
+      // plot_no is text, so the database hands back A-1, A-10, A-11 … A-19, A-2: every
+      // plot with the same first digit bunched together.  On a 1,451-plot scheme that
+      // means scrolling past P-120…P-129 to reach P-13.  See lib/plotNo.ts.
+      return sortByPlotNo(out)
     },
   })
 
@@ -293,7 +300,7 @@ export default function Bookings() {
       seen.add(p.id)
       own.push(p)
     }
-    return own.length > 0 ? [...own, ...list] : list
+    return own.length > 0 ? sortByPlotNo([...own, ...list]) : list
   }, [plots, editing, form.project_id])
 
   // Every plot on a booking row — the join table when present, else the legacy single
@@ -1150,9 +1157,22 @@ export default function Bookings() {
     [plotOptions, form.plot_ids],
   )
 
+  // What the picker actually shows: the plots still on offer, narrowed by what admin has
+  // typed.  Matching on plot number, block and sector, because "P-12" and "12" and "B
+  // block" are all things people type looking for the same row.
+  const plotMatches = useMemo(() => {
+    const q = plotSearch.trim().toLowerCase()
+    if (!q) return addablePlots
+    return addablePlots.filter((p: any) =>
+      String(p.plot_no || '').toLowerCase().includes(q) ||
+      String(p.block   || '').toLowerCase().includes(q) ||
+      String(p.sector  || '').toLowerCase().includes(q))
+  }, [addablePlots, plotSearch])
+
   const addPlot    = (plotId: string) => {
     if (!plotId || (form.plot_ids || []).includes(plotId)) return
     applyPlotIds([...(form.plot_ids || []), plotId])
+    setPlotSearch('')
   }
   const removePlot = (plotId: string) => applyPlotIds(((form.plot_ids || []) as string[]).filter(id => id !== plotId))
 
@@ -1656,22 +1676,67 @@ export default function Bookings() {
           {/* Plot list is scoped to the scheme selected above — picking Brij Vatika shows
               Brij Vatika's available plots only.  The select adds a plot to the booking
               rather than replacing it, so a customer buying two plots gets one booking. */}
-          <Select
-            label="Plot (Available) — प्लॉट नं. (एक से ज़्यादा भी चुन सकते हैं)"
-            value=""
-            onChange={(e: any) => addPlot(e.target.value)}
-            className="col-span-2"
-            disabled={!form.project_id || addablePlots.length === 0}
-          >
-            <option value="">
-              {!form.project_id
-                ? 'Select a scheme / project first'
-                : addablePlots.length === 0
-                  ? (selectedPlots.length > 0 ? 'No more available plots in this scheme' : 'No available plots in this scheme')
-                  : selectedPlots.length > 0 ? '+ Add another plot' : 'Select Plot'}
-            </option>
-            {addablePlots.map((p: any) => <option key={p.id} value={p.id}>{p.plot_no} — {p.size_sqyd} sqyd @ {formatINR(p.price_per_sqyd)}/gaj</option>)}
-          </Select>
+          {/* Searched, not scrolled.  A dropdown of 1,451 plots is no way to find P-12, and
+              clicking a row adds it to the booking instead of replacing what is there — so
+              a customer who bought P-12 and P-13 gets ONE booking with both on it. */}
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              प्लॉट नं. / Plot number <span className="text-gray-400 font-normal">— pick one, or several for one customer</span>
+            </label>
+            {!form.project_id ? (
+              <div className="border border-gray-200 rounded-lg px-3 py-2.5 text-sm text-gray-400 bg-gray-50">
+                Select a scheme / project first
+              </div>
+            ) : (
+              <>
+                <div className="relative">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
+                  <input
+                    value={plotSearch}
+                    onChange={e => setPlotSearch(e.target.value)}
+                    placeholder="Type a plot number to find it, e.g. 12"
+                    className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div className="mt-1.5 border border-gray-200 rounded-lg divide-y divide-gray-50 max-h-56 overflow-y-auto">
+                  {addablePlots.length === 0 ? (
+                    <div className="px-3 py-3 text-xs text-gray-400">
+                      {selectedPlots.length > 0 ? 'No more available plots in this scheme.' : 'No available plots in this scheme.'}
+                    </div>
+                  ) : plotMatches.length === 0 ? (
+                    <div className="px-3 py-3 text-xs text-gray-400">
+                      No available plot matches “{plotSearch}”. It may already be sold, or be in another scheme.
+                    </div>
+                  ) : plotMatches.slice(0, 200).map((p: any) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => addPlot(p.id)}
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 flex items-center justify-between gap-2"
+                    >
+                      <span className="font-medium text-gray-900">
+                        {p.plot_no}
+                        {(p.block || p.sector) && (
+                          <span className="ml-1.5 text-[11px] font-normal text-gray-400">
+                            {[p.block, p.sector].filter(Boolean).join(' · ')}
+                          </span>
+                        )}
+                      </span>
+                      <span className="text-xs text-gray-500 shrink-0">
+                        {p.size_sqyd} sqyd @ {formatINR(p.price_per_sqyd)}/gaj
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-1 text-[11px] text-gray-500">
+                  {plotSearch.trim()
+                    ? `${plotMatches.length} of ${addablePlots.length} available plots match.`
+                    : `${addablePlots.length} plots available in this scheme.`}
+                  {plotMatches.length > 200 && ' Showing the first 200 — type more to narrow it down.'}
+                </div>
+              </>
+            )}
+          </div>
 
           {/* Selected plots — chips with the running total, so admin can see (and undo)
               exactly which plots this one booking covers. */}

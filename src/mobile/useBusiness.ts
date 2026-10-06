@@ -1,6 +1,9 @@
+import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { bookingValue, balanceOf, paidByBooking, isRegistryDone, isPaidUnknown } from '@/lib/bookingMath'
+import { fetchAllRows } from '@/lib/fetchAll'
+import { sortByPlotNo } from '@/lib/plotNo'
 
 // Data for the business screens (bookings, customers, projects, plots).
 //
@@ -211,24 +214,43 @@ export function useProjects() {
   })
 }
 
-/** Plots inside one project, filtered by status and plot number. */
+/** Plots inside one project, filtered by status and plot number.
+ *
+ *  The one place the "nothing unbounded" rule above is relaxed, and only as far as ONE
+ *  scheme: plot_no is text, so the database can only give A-1, A-10, A-11 … A-19, A-2 —
+ *  every plot with the same first digit bunched together.  Paging that server-side means
+ *  page 1 is not the first thirty plots, it is the first thirty alphabetically, and no
+ *  amount of client-side tidying of a 30-row page can fix it.
+ *
+ *  So one scheme's plots are read once (the biggest is 1,451 rows of seven small columns),
+ *  sorted the way a person reads them, and paged in the browser.  React Query caches it,
+ *  so paging and typing cost nothing after the first load. */
 export function usePlots(projectId: string | null, opts: { search: string; status: string; page: number }) {
   const { search, status, page } = opts
-  return useQuery({
-    queryKey: ['m_plots', projectId, search, status, page],
+  const query = useQuery({
+    queryKey: ['m_plots', projectId, status],
     enabled: !!projectId,
     queryFn: async () => {
-      let q = supabase.from('bp_plots')
-        .select('id, plot_no, size_sqyd, price_per_sqyd, total_price, status, block, sector', { count: 'exact' })
-        .eq('project_id', projectId!)
-        .order('plot_no')
-      if (status) q = q.eq('status', status)
-      if (search.trim()) q = q.ilike('plot_no', `%${search.trim()}%`)
-      const { data, error, count } = await q.range(page * PAGE, page * PAGE + PAGE - 1)
-      if (error) throw error
-      return { rows: data || [], total: count || 0 }
+      const rows = await fetchAllRows((from, to) => {
+        let q = supabase.from('bp_plots')
+          .select('id, plot_no, size_sqyd, price_per_sqyd, total_price, status, block, sector')
+          .eq('project_id', projectId!)
+          .order('plot_no')
+        if (status) q = q.eq('status', status)
+        return q.range(from, to)
+      })
+      return sortByPlotNo(rows as any[])
     },
   })
+
+  const all = query.data || []
+  const data = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    const matched = q ? all.filter((p: any) => String(p.plot_no || '').toLowerCase().includes(q)) : all
+    return { rows: matched.slice(page * PAGE, page * PAGE + PAGE), total: matched.length }
+  }, [all, search, page])
+
+  return { ...query, data: query.data ? data : undefined }
 }
 
 /** Who holds a plot, so a plot card can name its buyer instead of just saying "booked". */

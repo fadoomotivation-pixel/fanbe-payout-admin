@@ -7,6 +7,8 @@ import { Input, Select, Textarea } from '@/components/ui/Input.tsx'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR } from '@/lib/utils'
+import { fetchAllRows } from '@/lib/fetchAll'
+import { sortByProjectThenPlotNo } from '@/lib/plotNo'
 import { LayoutGrid, Plus, Layers, Search, Trash2, Edit3, AlertTriangle, ClipboardPaste } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -74,15 +76,21 @@ export default function Plots() {
   const { data: plots = [], isLoading } = useQuery({
     queryKey: ['plots', projectFilter, statusFilter],
     queryFn: async () => {
-      let q = supabase
-        .from('bp_plots')
-        .select('*, bp_projects(name, location)')
-        .order('plot_no', { ascending: true })
-      if (projectFilter) q = q.eq('project_id', projectFilter)
-      if (statusFilter)  q = q.eq('status', statusFilter)
-      const { data, error } = await q
-      if (error) throw error
-      return data
+      // Paged in full.  This asked for every plot in one request and PostgREST stops at
+      // 1,000 without an error — Brij Vatika alone holds 1,451, so the last 451 simply
+      // were not on the page and nothing said so.
+      const rows = await fetchAllRows((from, to) => {
+        let q = supabase
+          .from('bp_plots')
+          .select('*, bp_projects(name, location)')
+          .order('plot_no', { ascending: true })
+        if (projectFilter) q = q.eq('project_id', projectFilter)
+        if (statusFilter)  q = q.eq('status', statusFilter)
+        return q.range(from, to)
+      })
+      // Re-sorted here because plot_no is text: the database gives A-1, A-10, A-11 … A-19,
+      // A-2 — every plot with the same first digit bunched together.  See lib/plotNo.ts.
+      return sortByProjectThenPlotNo(rows as any[], (r: any) => r?.bp_projects?.name)
     },
   })
 
