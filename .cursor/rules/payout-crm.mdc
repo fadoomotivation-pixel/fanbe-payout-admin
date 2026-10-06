@@ -1,0 +1,20 @@
+---
+description: Fanbe Payout CRM — business model, money rules and file map
+alwaysApply: true
+---
+
+This repo is the Fanbe Group payout CRM: plots sold on EMI through MLM and traditional brokers,
+with commission paid per verified payment. Read `docs/PAYOUT_CRM_GUIDE.md` before changing code.
+
+Never break these:
+- Commission is written only by the Postgres function `recompute_booking_payouts` (fired by triggers);
+  the client never inserts or edits `payout_distributions`. TDS + admin are deducted once, at credit.
+- Only `verification_status = 'verified'` payments are money. Use `src/lib/bookingMath.ts`,
+  `src/lib/emiStatus.ts`, `src/lib/pipelineIndex.ts`, `src/lib/payoutEngine.ts` — never re-derive.
+- Rows with `cycle_id` are already paid out: never delete/alter them. Cancelled bookings earn nothing.
+- Old imported bookings with no payment have an unknown balance (`isPaidUnknown`).
+- IST dates via `todayLocalISO()`; large reads via `fetchAllRows` / `inChunks`; downloads via `src/lib/download.ts`.
+- Security is Supabase RLS (`public.is_staff()`), not the UI. Do not touch call-centre tables
+  (`leads`, `calls`, `hr_*`, `attendance`, `profiles`, `crm_*`).
+- Dead code: `src/pages/<subfolder>/*`, `src/pages/EMI.tsx`, client distribution functions in payoutEngine.
+- DB changes: new file in `supabase/migrations/`. Verify with `npx tsc --noEmit -p .`, `npm run check:globals`, `npm run build`.
