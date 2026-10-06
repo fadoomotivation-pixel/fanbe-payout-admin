@@ -254,6 +254,15 @@ Other programs: `AchieversClub.tsx`, `TeamRewards.tsx` (team reward tiers), `Com
   refused — never put a bare storage policy statement in a migration, it rolls the whole file back.
 - After `20261006`, the `documents` bucket is private: read KYC files through `src/lib/storage.ts`
   (`signedDocUrl`), never `getPublicUrl`.
+- **`20261006b_harden_functions.sql`** is the linter follow-up: pins `search_path` on our
+  functions that lacked it (including `guard_paid_commission`, written without it in `20261006`),
+  revokes EXECUTE on every `returns trigger` function so they stop being `/rest/v1/rpc/` endpoints,
+  and makes `recompute_broker_ranks()` staff-only (rank decides commission %, and promotion never
+  reverses). Also run this one.
+- Known and left alone because they belong to the call-centre CRM: the SECURITY DEFINER views
+  `v_ghost_leads` and `v_tele_caller_scorecard`, and the mutable-`search_path` functions
+  `link_call_to_lead`, `norm_phone`, `notify_due_followups`, `missed_followups_for_employee`
+  and the shared `set_updated_at`. Report them to whoever owns that app; do not change them here.
 - A snapshot of the data deleted on 5 Oct 2026 is in DB schema `backup_20261005` (not exposed).
 
 ---
