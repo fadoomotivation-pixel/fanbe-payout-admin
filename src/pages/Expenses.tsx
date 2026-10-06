@@ -20,6 +20,7 @@ import { printExpenseVoucher, printExpenseVouchers } from '@/lib/printTemplates'
 import { isCashMode } from '@/lib/paymentMode'
 import toast from 'react-hot-toast'
 import { downloadCsv } from '@/lib/download'
+import { todayLocalISO, inChunks } from '@/lib/fetchAll'
 
 type Head = { id: string; name: string; active?: boolean }
 type Broker = { id: string; name: string | null; broker_id: string | null }
@@ -37,8 +38,11 @@ type Row = {
 // debited from that broker's withdrawable balance (see payoutEngine.loadBrokerWallets).
 const BROKER_HEADS = ['advance', 'payout', 'discount']
 
-const today = () => new Date().toISOString().slice(0, 10)
-const monthStart = (d = new Date()) => new Date(d.getFullYear(), d.getMonth(), 1).toISOString().slice(0, 10)
+// Local (IST) calendar dates.  toISOString() is UTC, which turned the 1st of the month
+// into the last day of the previous one and "today" into yesterday before 05:30.
+const iso = (d: Date) => todayLocalISO(d)
+const today = () => todayLocalISO()
+const monthStart = (d = new Date()) => iso(new Date(d.getFullYear(), d.getMonth(), 1))
 const monthsAgo = (n: number) => { const d = new Date(); d.setMonth(d.getMonth() - n); return d }
 
 type Period = 'this_month' | 'last_month' | 'last_3' | 'year' | 'all' | 'custom'
@@ -58,7 +62,7 @@ function rangeFor(p: Period, from: string, to: string): { from: string; to: stri
     case 'last_month': {
       const s = new Date(now.getFullYear(), now.getMonth() - 1, 1)
       const e = new Date(now.getFullYear(), now.getMonth(), 0)
-      return { from: s.toISOString().slice(0, 10), to: e.toISOString().slice(0, 10) }
+      return { from: iso(s), to: iso(e) }
     }
     case 'last_3': return { from: monthStart(monthsAgo(2)), to: today() }
     case 'year':   return { from: `${now.getFullYear()}-01-01`, to: today() }
@@ -86,6 +90,11 @@ export default function Expenses() {
   const [filterBroker, setFilterBroker] = useState('')
   const [search, setSearch] = useState('')
   const [deleteFor, setDeleteFor] = useState<Row | null>(null)
+  // Bulk delete: ticked rows, the confirm modal, and the typed DELETE that guards it.
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const [confirmText, setConfirmText] = useState('')
+  const [busy, setBusy] = useState(false)
   const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }))
 
   const { data: heads = [] } = useQuery<Head[]>({
@@ -155,6 +164,18 @@ export default function Expenses() {
   const sum = (list: Row[]) => list.reduce((s, r) => s + Number(r.amount || 0), 0)
   const total = sum(rows)
 
+  // Only ticked rows that are still on screen count.  A row ticked and then hidden by a
+  // filter or period change is never deleted unseen: what you see is what goes.
+  const pickedRows = rows.filter(r => picked.has(r.id))
+  const pickedTotal = sum(pickedRows)
+  const allShownPicked = rows.length > 0 && pickedRows.length === rows.length
+  const togglePick = (id: string) => setPicked(prev => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    return next
+  })
+  const toggleAllShown = () => setPicked(allShownPicked ? new Set() : new Set(rows.map(r => r.id)))
+
   // Same window, one period back — gives the "up or down on last time" read that makes
   // a spend number mean something.
   const prevTotal = useMemo(() => {
@@ -162,13 +183,13 @@ export default function Expenses() {
     const now = new Date()
     let f: string, t: string
     if (period === 'this_month') {
-      f = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 10)
-      t = new Date(now.getFullYear(), now.getMonth(), 0).toISOString().slice(0, 10)
+      f = iso(new Date(now.getFullYear(), now.getMonth() - 1, 1))
+      t = iso(new Date(now.getFullYear(), now.getMonth(), 0))
     } else if (period === 'last_month') {
-      f = new Date(now.getFullYear(), now.getMonth() - 2, 1).toISOString().slice(0, 10)
-      t = new Date(now.getFullYear(), now.getMonth() - 1, 0).toISOString().slice(0, 10)
+      f = iso(new Date(now.getFullYear(), now.getMonth() - 2, 1))
+      t = iso(new Date(now.getFullYear(), now.getMonth() - 1, 0))
     } else if (period === 'last_3') {
-      f = monthStart(monthsAgo(5)); t = new Date(now.getFullYear(), now.getMonth() - 2, 0).toISOString().slice(0, 10)
+      f = monthStart(monthsAgo(5)); t = iso(new Date(now.getFullYear(), now.getMonth() - 2, 0))
     } else {
       f = `${now.getFullYear() - 1}-01-01`; t = `${now.getFullYear() - 1}-12-31`
     }
@@ -281,11 +302,47 @@ export default function Expenses() {
 
   const remove = async () => {
     if (!deleteFor) return
-    const { error } = await supabase.from('expenses').delete().eq('id', deleteFor.id)
+    // .select() returns the rows actually removed.  Without it a delete the database
+    // refuses (no permission) looks exactly like a successful one.
+    const { data, error } = await supabase.from('expenses').delete().eq('id', deleteFor.id).select('id')
     if (error) return toast.error(error.message)
+    if (!data?.length) return toast.error('Not deleted — your login is not allowed to delete expenses.')
     toast.success('Expense deleted')
     setDeleteFor(null)
     refresh()
+  }
+
+  // Advances in the selection, by broker — deleting one hands that broker the amount
+  // back as withdrawable balance, so the confirm screen names who and how much.
+  const pickedAdvances = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const r of pickedRows) {
+      if (!r.broker_id || !r.head_id || !advanceHeadIds.includes(r.head_id)) continue
+      m.set(r.broker_id, (m.get(r.broker_id) || 0) + Number(r.amount || 0))
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1])
+  }, [pickedRows, heads])
+
+  const openBulk = () => { setConfirmText(''); setBulkOpen(true) }
+
+  const removeMany = async () => {
+    if (busy || pickedRows.length === 0 || confirmText.trim().toUpperCase() !== 'DELETE') return
+    const want = pickedRows.map(r => r.id)
+    setBusy(true)
+    try {
+      const gone = await inChunks<{ id: string }>(want, chunk =>
+        supabase.from('expenses').delete().in('id', chunk).select('id'))
+      if (gone.length === 0) toast.error('Nothing deleted — your login is not allowed to delete expenses.')
+      else if (gone.length < want.length) toast.error(`Only ${gone.length} of ${want.length} deleted. Refresh and check the rest.`)
+      else toast.success(`${gone.length} expense${gone.length === 1 ? '' : 's'} deleted`)
+      setPicked(new Set())
+      setBulkOpen(false)
+    } catch (e: any) {
+      toast.error(e?.message || 'Delete failed')
+    } finally {
+      setBusy(false)
+      refresh()
+    }
   }
 
   const addHead = async () => {
@@ -296,14 +353,15 @@ export default function Expenses() {
     qc.invalidateQueries({ queryKey: ['expense_heads'] })
   }
 
-  const exportCsv = () => {
+  const csvOf = (list: Row[], name: string) => {
     const headers = ['Date', 'Head', 'Item', 'Amount', 'Broker', 'Responsible', 'Paid to', 'Paid by', 'Mode', 'Reference', 'Description']
-    const body = rows.map(r => [
+    const body = list.map(r => [
       r.expense_date, headNameOf(r.head_id), r.item_name, r.amount,
       brokerLabel(r.broker_id) || '', r.responsible_person || '', r.paid_to || '', r.paid_by || '', r.payment_mode || '', r.reference_no || '', r.description || '',
     ])
-    downloadCsv(`expenses-${range.from}-to-${range.to}.csv`, [headers, ...body])
+    downloadCsv(name, [headers, ...body])
   }
+  const exportCsv = () => csvOf(rows, `expenses-${range.from}-to-${range.to}.csv`)
 
   const filtersOn = !!(filterHead || filterBroker || search)
 
@@ -509,10 +567,34 @@ export default function Expenses() {
           <span className="text-sm text-gray-500 ml-auto">Total <b className="text-gray-900">{formatINR(total)}</b></span>
         </div>
 
+        {pickedRows.length > 0 && (
+          <div className="px-3 py-2 bg-red-50 border-b border-red-100 flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-red-900">
+              <b>{pickedRows.length}</b> selected · <b className="tabular-nums">{formatINR(pickedTotal)}</b>
+            </span>
+            {!allShownPicked && (
+              <button onClick={toggleAllShown} className="text-xs text-red-700 underline hover:text-red-900">
+                Select all {rows.length} shown
+              </button>
+            )}
+            <button onClick={() => setPicked(new Set())} className="text-xs text-gray-500 hover:text-gray-800 inline-flex items-center gap-1">
+              <X size={12}/>Clear selection
+            </button>
+            <Button variant="danger" size="sm" className="ml-auto" onClick={openBulk}>
+              <Trash2 size={13}/>Delete selected ({pickedRows.length})
+            </Button>
+          </div>
+        )}
+
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-y border-gray-100">
               <tr>
+                <th className="pl-4 pr-1 py-3 w-8">
+                  <input type="checkbox" aria-label="Select all shown" checked={allShownPicked} disabled={rows.length === 0}
+                    ref={el => { if (el) el.indeterminate = pickedRows.length > 0 && !allShownPicked }}
+                    onChange={toggleAllShown} className="h-4 w-4 rounded border-gray-300 accent-red-600 cursor-pointer"/>
+                </th>
                 {['Date', 'Head', 'Item', 'Amount', 'Broker', 'Responsible', 'Paid to', ''].map(h => (
                   <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                 ))}
@@ -520,14 +602,18 @@ export default function Expenses() {
             </thead>
             <tbody className="divide-y divide-gray-50">
               {isLoading ? (
-                <tr><td colSpan={7} className="py-12 text-center text-gray-400">Loading…</td></tr>
+                <tr><td colSpan={9} className="py-12 text-center text-gray-400">Loading…</td></tr>
               ) : rows.length === 0 ? (
-                <tr><td colSpan={7} className="py-12 text-center text-gray-400">No expenses in this period.</td></tr>
+                <tr><td colSpan={9} className="py-12 text-center text-gray-400">No expenses in this period.</td></tr>
               ) : rows.map(r => {
                 const headName = headNameOf(r.head_id)
                 const isAdvance = headName.toLowerCase() === 'advance'
                 return (
-                  <tr key={r.id} className="hover:bg-blue-50/30">
+                  <tr key={r.id} className={picked.has(r.id) ? 'bg-red-50/60' : 'hover:bg-blue-50/30'}>
+                    <td className="pl-4 pr-1 py-3">
+                      <input type="checkbox" aria-label={`Select ${r.item_name}`} checked={picked.has(r.id)} onChange={() => togglePick(r.id)}
+                        className="h-4 w-4 rounded border-gray-300 accent-red-600 cursor-pointer"/>
+                    </td>
                     <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{formatDate(r.expense_date)}</td>
                     <td className="px-4 py-3">
                       <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium ${
@@ -693,6 +779,54 @@ export default function Expenses() {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* ── Bulk delete ────────────────────────────────────────────────────── */}
+      <Modal open={bulkOpen} onClose={() => !busy && setBulkOpen(false)} title={`Delete ${pickedRows.length} expense${pickedRows.length === 1 ? '' : 's'}?`} size="sm">
+        {(() => {
+          const dates = pickedRows.map(r => r.expense_date).filter(Boolean).sort()
+          return (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+                <div className="text-xl font-bold text-red-900 tabular-nums">{formatINR(pickedTotal)}</div>
+                <div className="text-[11px] text-red-800">
+                  {pickedRows.length} entr{pickedRows.length === 1 ? 'y' : 'ies'}
+                  {dates.length > 0 && ` · ${formatDate(dates[0])}${dates[0] !== dates[dates.length - 1] ? ` to ${formatDate(dates[dates.length - 1])}` : ''}`}
+                </div>
+              </div>
+              <ul className="max-h-40 overflow-y-auto divide-y divide-gray-100 border border-gray-100 rounded-lg text-xs">
+                {pickedRows.map(r => (
+                  <li key={r.id} className="px-2.5 py-1.5 flex justify-between gap-2">
+                    <span className="min-w-0 truncate text-gray-700">{formatDate(r.expense_date)} · {r.item_name}</span>
+                    <span className="font-semibold text-gray-900 tabular-nums shrink-0">{formatINR(r.amount)}</span>
+                  </li>
+                ))}
+              </ul>
+              {pickedAdvances.length > 0 && (
+                <div className="text-xs bg-amber-50 border border-amber-200 text-amber-900 rounded-lg px-2.5 py-2 space-y-1">
+                  <div className="flex items-start gap-1.5 font-semibold"><AlertTriangle size={12} className="mt-0.5 shrink-0"/>Includes agent advances</div>
+                  <div>Deleting these gives each agent that much back in withdrawable balance:</div>
+                  <ul className="pl-4 list-disc">
+                    {pickedAdvances.map(([bid, amt]) => <li key={bid}>{brokerLabel(bid)} — <b>{formatINR(amt)}</b></li>)}
+                  </ul>
+                </div>
+              )}
+              <p className="text-xs text-gray-500">
+                This cannot be undone.{' '}
+                <button onClick={() => csvOf(pickedRows, `expenses-deleted-${todayLocalISO()}.csv`)} className="text-blue-700 underline hover:text-blue-900">
+                  Download these as CSV first
+                </button>
+              </p>
+              <Input label="Type DELETE to confirm" value={confirmText} onChange={(e: any) => setConfirmText(e.target.value)} placeholder="DELETE" autoFocus />
+              <div className="flex justify-end gap-2">
+                <Button variant="secondary" onClick={() => setBulkOpen(false)} disabled={busy}>Cancel</Button>
+                <Button variant="danger" onClick={removeMany} loading={busy} disabled={busy || confirmText.trim().toUpperCase() !== 'DELETE'}>
+                  Delete {pickedRows.length}
+                </Button>
+              </div>
+            </div>
+          )
+        })()}
       </Modal>
     </div>
   )
