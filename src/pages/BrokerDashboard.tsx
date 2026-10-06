@@ -9,6 +9,8 @@ import {
   UserPlus, Loader2, Upload, FileCheck2, Clock, MapPin, Calendar, Hash,
 } from 'lucide-react'
 import { printPaymentReceipt } from '@/lib/printTemplates'
+import { fetchAllRows } from '@/lib/fetchAll'
+import { signedDocUrl } from '@/lib/storage'
 import toast from 'react-hot-toast'
 
 function formatINR(n: number) {
@@ -99,8 +101,12 @@ export default function BrokerDashboard() {
     const [rk, dl, po, wd, bk, cycleTx, kyc, adv] = await Promise.all([
       supabase.from('commission_ranks').select('*').eq('active', true).order('level', { ascending: true }),
       supabase.from('brokers').select('id, name, broker_id, rank, phone, status').eq('sponsor_id', b.id),
-      supabase.from('payout_distributions').select('*, bp_bookings(booking_no, bp_customers(name), bp_plots(plot_no))').eq('beneficiary_broker_id', b.id).order('created_at', { ascending: false }).limit(200),
-      supabase.from('withdrawal_requests').select('*').eq('broker_id', b.id).order('created_at', { ascending: false }).limit(20),
+      // Both of these are paged through in full.  They were capped at 200 and 20 rows, and
+      // a capped list is wrong in the dangerous direction: "Available" here is earned minus
+      // paid minus pending, so once a broker passes 20 withdrawals the oldest ones drop out
+      // of "paid" and money they have already been given becomes withdrawable again.
+      fetchAllRows((from, to) => supabase.from('payout_distributions').select('*, bp_bookings(booking_no, bp_customers(name), bp_plots(plot_no))').eq('beneficiary_broker_id', b.id).order('created_at', { ascending: false }).range(from, to)),
+      fetchAllRows((from, to) => supabase.from('withdrawal_requests').select('*').eq('broker_id', b.id).order('created_at', { ascending: false }).range(from, to)),
       supabase
         .from('bp_bookings')
         .select('id, booking_no, customer_id, plot_total_price, total_amount, booking_amount, commission_amount, stage, scheme_name, application_date, closed_at, created_at, bp_customers(id,customer_code,name,phone,email,address,father_or_husband_name,pan,dob), bp_plots(plot_no,size_sqyd,sector,block), bp_projects(id,name,location)')
@@ -117,8 +123,8 @@ export default function BrokerDashboard() {
     ])
     setRanks(rk.data || [])
     setDownline(dl.data || [])
-    setPayouts(po.data || [])
-    setWithdrawals(wd.data || [])
+    setPayouts(po || [])
+    setWithdrawals(wd || [])
     setCycleTxns(cycleTx.data || [])
     setBookings(bk.data || [])
     setMyKycDocs(kyc.data || [])
@@ -149,9 +155,14 @@ export default function BrokerDashboard() {
         // or exact phone match.  Without this the team mini-tree on the broker dashboard
         // shows the same person twice (once as a broker card, once as a "Make broker"
         // customer leaf) -- "uneducated people think they have two bookings."
+        //
+        // Scoped to this broker and their downline.  It used to ask for every broker row in
+        // the company; the customers being deduped can only come from those same bookings,
+        // so the wider read bought nothing and handed one broker everyone else's details.
         supabase
           .from('brokers')
-          .select('customer_id, broker_id, phone'),
+          .select('customer_id, broker_id, phone')
+          .in('id', customerLookupIds),
       ])
       const earnedMap: Record<string, number> = {}
       for (const d of (dlDist || []) as any[]) {
@@ -249,12 +260,12 @@ export default function BrokerDashboard() {
       if (bb.created_at) events.push({ at: bb.created_at, kind: 'booking_created', title: `Booking ${bb.booking_no} created`, sub: `${bb.bp_customers?.name || '—'} · Plot ${bb.bp_plots?.plot_no || '—'}`, icon: 'booking', amount: bb.total_amount || bb.plot_total_price })
       if (bb.closed_at) events.push({ at: bb.closed_at, kind: 'booking_closed', title: `Booking ${bb.booking_no} closed`, sub: `${bb.bp_customers?.name || '—'} · Plot ${bb.bp_plots?.plot_no || '—'}`, icon: 'lock', amount: bb.total_amount || bb.plot_total_price })
     }
-    for (const w of (wd.data || []) as any[]) {
+    for (const w of (wd || []) as any[]) {
       if (w.created_at) events.push({ at: w.created_at, kind: 'withdrawal_requested', title: 'Withdrawal requested', sub: w.bank_name || '—', icon: 'send', amount: w.amount, status: w.status })
       if (w.paid_at)    events.push({ at: w.paid_at,    kind: 'withdrawal_paid',      title: 'Withdrawal paid',     sub: `UTR ${w.utr || '—'}`, icon: 'check', amount: w.net_amount || w.amount })
       if (w.closed_at)  events.push({ at: w.closed_at,  kind: 'withdrawal_closed',    title: 'Withdrawal closed',   sub: w.bank_name || '—',    icon: 'lock', amount: w.net_amount || w.amount })
     }
-    for (const p of (po.data || []) as any[]) {
+    for (const p of (po || []) as any[]) {
       if (!p.created_at) continue
       // Earlier this title was `Payout L${p.level || '?'}` — when level is 0 (direct/self),
       // 0 is falsy so it rendered "L?".  And "L1 / differential" still told the admin
@@ -595,12 +606,14 @@ export default function BrokerDashboard() {
       const path = `kyc/${broker.id}/${docType}-${Date.now()}.${ext}`
       const { error: upErr } = await supabase.storage.from('documents').upload(path, file, { cacheControl: '3600', upsert: false })
       if (upErr) throw upErr
-      const { data: pub } = supabase.storage.from('documents').getPublicUrl(path)
+      // The storage PATH, not a public URL.  The bucket is private from migration 20261006
+      // (an ID scan readable by anyone with the link is not a thing we hand out), so viewing
+      // one goes through a short-lived signed link instead -- see lib/storage.ts.
       const { error: insErr } = await supabase.from('bp_broker_kyc').insert({
         broker_id: broker.id,
         doc_type:  docType,
         doc_label: docLabel,
-        file_url:  pub.publicUrl,
+        file_url:  path,
         file_name: file.name,
         verified:  false,
       })
@@ -646,7 +659,7 @@ export default function BrokerDashboard() {
     if (error) { toast.error(error.message); return }
     toast.success('Withdrawal request submitted')
     setWdModal(false); setWdAmount('')
-    const { data: wd } = await supabase.from('withdrawal_requests').select('*').eq('broker_id', broker.id).order('created_at', { ascending: false }).limit(20)
+    const wd = await fetchAllRows((from, to) => supabase.from('withdrawal_requests').select('*').eq('broker_id', broker.id).order('created_at', { ascending: false }).range(from, to))
     setWithdrawals(wd || [])
   }
 
@@ -1842,6 +1855,16 @@ const REQUIRED_DOCS: { type: string; label: string; hint: string }[] = [
   { type: 'address_proof', label: 'Address proof', hint: 'Utility bill, rent agreement, or passport' },
 ]
 
+// Open a KYC file the broker uploaded.  The bucket is private, so the stored value is a
+// path, not a link: it has to be signed for at the moment of opening, and the link that
+// comes back expires in minutes.  Signed on the click rather than up front, so a broker
+// with ten documents does not mint ten links they never open.
+async function openDoc(fileUrl: string) {
+  const url = await signedDocUrl(fileUrl)
+  if (!url) { toast.error('Could not open this file'); return }
+  window.open(url, '_blank', 'noopener')
+}
+
 function KycDocsModal({ docs, status, uploading, onClose, onUpload }: {
   docs: any[]
   status: string
@@ -1905,7 +1928,10 @@ function KycDocsModal({ docs, status, uploading, onClose, onUpload }: {
                       ) : (
                         <span className="inline-flex items-center gap-0.5 text-amber-700"><Clock size={11}/>Awaiting verification</span>
                       )}
-                      {existing.file_url && <a href={existing.file_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline truncate max-w-[180px]">{existing.file_name || 'View'}</a>}
+                      {existing.file_url && (
+                        <button type="button" onClick={() => openDoc(existing.file_url)}
+                          className="text-blue-600 hover:underline truncate max-w-[180px]">{existing.file_name || 'View'}</button>
+                      )}
                       {existing.notes && <span className="text-rose-700">· {existing.notes}</span>}
                     </div>
                   )}

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { Button } from '@/components/ui/Button.tsx'
@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/Badge.tsx'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { Textarea } from '@/components/ui/Input.tsx'
 import { formatDate } from '@/lib/utils'
+import { signedDocUrl, isImagePath } from '@/lib/storage'
 import { Link } from 'react-router-dom'
 import { CheckCircle2, XCircle, User, FileText, Eye, Search, ShieldCheck, Clock, Ban, Folder, ChevronRight, ExternalLink } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -30,7 +31,23 @@ const docName = (d: any) => d.doc_label || DOC_LABEL[d.doc_type] || (d.doc_type 
 
 export default function KYC() {
   const qc = useQueryClient()
+
   const [preview, setPreview] = useState<any>(null)
+  // KYC scans live in a private bucket now, so the stored value does not open anything on
+  // its own — it has to be signed for, per view, and the link expires.  Signing fails when
+  // the caller may not read that file, which is what `previewErr` reports.
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [previewErr, setPreviewErr] = useState(false)
+  useEffect(() => {
+    let live = true
+    setPreviewUrl(null); setPreviewErr(false)
+    if (!preview?.file_url) return
+    signedDocUrl(preview.file_url).then(url => {
+      if (!live) return
+      if (url) setPreviewUrl(url); else setPreviewErr(true)
+    })
+    return () => { live = false }
+  }, [preview])
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<'all'|'pending'|'approved'|'rejected'>('all')
@@ -298,16 +315,20 @@ export default function KYC() {
             <div className="text-xs text-gray-500">
               {preview.file_name || preview.file_url} · uploaded {formatDate(preview.created_at)}
             </div>
-            {preview.file_url ? (
-              /\.(png|jpe?g|gif|webp)$/i.test(preview.file_url) ? (
-                <img src={preview.file_url} alt={docName(preview)} className="w-full max-h-[70vh] object-contain rounded-lg border border-gray-200"/>
-              ) : (
-                <a href={preview.file_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-blue-600 hover:underline">
-                  <ExternalLink size={14}/>Open file in new tab
-                </a>
-              )
-            ) : (
+            {!preview.file_url ? (
               <div className="text-sm text-gray-500">No file attached.</div>
+            ) : previewErr ? (
+              <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+                This file could not be opened. It may have been removed, or your login may not have access to it.
+              </div>
+            ) : !previewUrl ? (
+              <div className="text-sm text-gray-500">Opening…</div>
+            ) : isImagePath(preview.file_url) ? (
+              <img src={previewUrl} alt={docName(preview)} className="w-full max-h-[70vh] object-contain rounded-lg border border-gray-200"/>
+            ) : (
+              <a href={previewUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-blue-600 hover:underline">
+                <ExternalLink size={14}/>Open file in new tab
+              </a>
             )}
           </div>
         )}
