@@ -32,11 +32,14 @@ import { Button } from '@/components/ui/Button.tsx'
 import { Select } from '@/components/ui/Input.tsx'
 import { ClipboardPaste, AlertTriangle, CheckCircle2, Download } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { makeBrokerFinder } from '@/lib/brokerMatch'
 import { saveBlob } from '@/lib/download'
 
 // Column order the paste is read in.  Matches the order admin already keeps in the
 // sheet.  Every one of them is optional.
-const COLUMNS = ['broker_id', 'name', 'phone', 'email', 'pan_no', 'date_of_joining'] as const
+// `sponsor` is appended rather than slotted in, so a sheet written against the older
+// column order still pastes correctly -- it just leaves the upline blank.
+const COLUMNS = ['broker_id', 'name', 'phone', 'email', 'pan_no', 'date_of_joining', 'sponsor'] as const
 
 const digitsOnly = (s: string) => (s || '').replace(/\D/g, '')
 
@@ -58,6 +61,7 @@ type Row = {
   email: string
   pan_no: string
   date_of_joining: string | null
+  sponsor: string
   errors: string[]
 }
 
@@ -77,7 +81,11 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
     // '#' marks the sample rows in the downloadable template.  Skipping them means the
     // examples can be pasted back by mistake without creating three fake brokers —
     // and admin turns an example into a real row just by deleting the '#'.
-    const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+    // NOT .trim() on the line.  A leading blank cell is a tab at the start, and trimming
+    // it ate the empty Broker ID column — so "  ,MOHIT SAXENA,9811100013" (a new broker
+    // with no code yet, which is the normal case and what the sample itself shows) read
+    // the NAME as the broker id and shifted every column after it by one.
+    const lines = text.split('\n').map(l => l.replace(/\r$/, '')).filter(l => l.trim() && !l.trim().startsWith('#'))
     if (lines.length === 0) return []
 
     // Drop a header row if the sheet was copied with one.
@@ -151,7 +159,11 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
       const date_of_joining = parseDate(rawDate)
       if (rawDate && !date_of_joining) warnings.push(`Date "${rawDate}" not understood — left blank`)
 
-      return { line: i + 1, broker_id, name, phone, email, pan_no, date_of_joining, errors: warnings }
+      // Resolved AFTER the insert, not here: a sponsor is very often another row of the
+      // same sheet, so it only exists once the batch has landed.
+      const sponsor = get('sponsor')
+
+      return { line: i + 1, broker_id, name, phone, email, pan_no, date_of_joining, sponsor, errors: warnings }
     })
   }, [text, existing])
 
@@ -187,14 +199,52 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
     // that chunk one row at a time, so admin gets the exact rows that failed instead of
     // "something went wrong" for the whole batch.
     const CHUNK = 50
+    // Rows that actually landed, so the sponsor pass below can link to them by name.
+    const created: { id: string; name: string | null; broker_id: string | null }[] = []
     for (let i = 0; i < valid.length; i += CHUNK) {
       const slice = valid.slice(i, i + CHUNK)
-      const { error } = await supabase.from('brokers').insert(slice.map(payloadFor))
-      if (!error) { ok += slice.length; continue }
+      const { data, error } = await supabase.from('brokers').insert(slice.map(payloadFor)).select('id, name, broker_id')
+      if (!error) { ok += slice.length; created.push(...((data || []) as any[])); continue }
       for (const r of slice) {
-        const { error: rowErr } = await supabase.from('brokers').insert(payloadFor(r))
+        const { data: one, error: rowErr } = await supabase.from('brokers').insert(payloadFor(r)).select('id, name, broker_id')
         if (rowErr) failed.push({ line: r.line, name: r.name, reason: rowErr.message })
-        else ok++
+        else { ok++; created.push(...((one || []) as any[])) }
+      }
+    }
+
+    // ── Uplines, second pass ──────────────────────────────────────────────
+    // Only now, because a sponsor is usually another row of the same sheet and did not
+    // exist while the batch was being written.  Matching is the shared rule, so a
+    // sponsor name behaves exactly as an upline name does in the booking import.
+    //
+    // The database still has the last word: enforce_same_type_sponsor and
+    // enforce_no_sponsor_cycle reject a cross-type or looping tree, and that rejection is
+    // reported rather than swallowed — the broker is already saved, only the link failed.
+    const withSponsor = valid.filter(r => r.sponsor.trim())
+    if (withSponsor.length > 0) {
+      const pool = [...existing, ...created] as any[]
+      const findBroker = makeBrokerFinder(pool)
+      const createdByLine = new Map<number, any>()
+      // created[] comes back in insert order, which is valid[] order.
+      valid.forEach((r, idx) => { if (created[idx]) createdByLine.set(r.line, created[idx]) })
+
+      for (const r of withSponsor) {
+        const me = createdByLine.get(r.line)
+        if (!me) continue
+        const { broker: up, why } = findBroker(r.sponsor)
+        if (!up) {
+          failed.push({ line: r.line, name: r.name, reason: why === 'ambiguous'
+            ? `Saved, but upline "${r.sponsor}" matches more than one broker — set it by hand`
+            : `Saved, but upline "${r.sponsor}" was not found — set it by hand` })
+          continue
+        }
+        if (up.id === me.id) {
+          failed.push({ line: r.line, name: r.name, reason: 'Saved, but the upline is the broker themselves — left blank' })
+          continue
+        }
+        const { error: upErr } = await supabase.from('brokers')
+          .update({ sponsor_id: up.id, parent_id: up.id }).eq('id', me.id)
+        if (upErr) failed.push({ line: r.line, name: r.name, reason: `Saved, but the upline could not be set: ${upErr.message}` })
       }
     }
 
@@ -221,21 +271,29 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
   // admin adds get imported.  Opens straight in Excel / Google Sheets.
   const downloadTemplate = () => {
     const csv = [
-      'Broker ID,Name,Phone,Email,PAN,Date of Joining',
-      '# --- The lines starting with # are examples. Delete them, or just remove the # to import that row. ---',
-      '# TR814,RAJESH KUMAR,9811100011,rajesh@example.com,ABCPK1234A,01/04/2024',
-      '# TR815,SUNITA DEVI,9811100012,,,15/07/2023          <- email/PAN blank is fine',
-      '# ,MOHIT SAXENA,9811100013,,,                        <- Broker ID blank = a new code is generated',
+      'Broker ID,Name,Phone,Email,PAN,Date of Joining,Upline (sponsor)',
+      'TR814,RADHEY SHYAM,9811100011,,,01/04/2024,',
+      'TR815,SATISH KUMAR,9811100012,,ABCPK1234A,15/07/2023,RADHEY SHYAM',
+      ',NN PANDEY,9811100013,,,,TR815',
+      '',
+      '# ---- Notes. Delete these lines before importing, or just leave them: lines starting with # are ignored. ----',
+      '# Fill what you have. Nothing is compulsory - the rest can be corrected in the app afterwards.',
       '#',
-      '# Nothing is compulsory - fill in whatever you have and correct the rest in the app later.',
-      '# Keep the columns in this order and do not add new ones.',
-      '# Broker ID  : the code this broker already uses. Leave blank for a new one.',
-      '# Phone      : 10 digits. This is the broker login, so it must not repeat.',
-      '# Email      : optional. Left blank, one is built from the phone number.',
-      '# Date       : dd/mm/yyyy, dd-mm-yyyy or yyyy-mm-dd.',
+      '# Broker ID      : the code this broker already uses. Leave BLANK and a new one is generated',
+      '#                  (TR817... for traditional, FNB05144... for MLM - it carries on from your old register).',
+      '# Name           : as the office says it. This is also how the Upline column finds them.',
+      '# Phone          : 10 digits. This is the broker login, so it must not repeat.',
+      '# Email          : optional. Left blank, one is built from the phone number.',
+      '# PAN            : optional.',
+      '# Date of Joining: dd/mm/yyyy, dd-mm-yyyy or yyyy-mm-dd.',
+      '# Upline         : who sits above them in the tree. Write the NAME or the code - either works,',
+      '#                  and it may be someone further down this same sheet.',
+      '#                  Leave blank for a top-level broker. A name matching two brokers is reported,',
+      '#                  never guessed, so you can set it by hand.',
+      '#                  MLM and Traditional trees are kept separate - an upline of the other kind is refused.',
       '',
     ].join('\n')
-    saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'broker-import-template.csv')
+    saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'broker-import-sample.csv')
   }
 
   return (
@@ -245,7 +303,7 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
           Copy the rows straight out of Excel or Google Sheets and paste them below — one broker per line, in this column order:
         </div>
         <div className="font-mono text-[11px] bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-700 overflow-x-auto whitespace-nowrap">
-          Broker ID → Name → Phone → Email → PAN → Date of joining
+          Broker ID → Name → Phone → Email → PAN → Date of joining → Upline (sponsor)
         </div>
         <div className="flex items-center gap-2 text-xs bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-2">
           <span className="text-emerald-900 flex-1">
@@ -276,7 +334,7 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
           onChange={e => setText(e.target.value)}
           rows={8}
           spellCheck={false}
-          placeholder={'TR814\tRAJESH KUMAR\t9811100011\t\tABCPK1234A\t01/04/2024\nTR815\tSUNITA DEVI\t9811100012'}
+          placeholder={'TR814\tRADHEY SHYAM\t9811100011\t\t\t01/04/2024\nTR815\tSATISH KUMAR\t9811100012\t\tABCPK1234A\t15/07/2023\tRADHEY SHYAM'}
           className="w-full font-mono text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
 
@@ -291,7 +349,7 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
               <table className="w-full text-xs">
                 <thead className="bg-gray-50 sticky top-0">
                   <tr>
-                    {['#', 'Broker ID', 'Name', 'Phone', 'Email', 'PAN', 'Joined', 'Status'].map(h => (
+                    {['#', 'Broker ID', 'Name', 'Phone', 'Email', 'PAN', 'Joined', 'Upline', 'Status'].map(h => (
                       <th key={h} className="text-left px-2 py-1.5 font-semibold text-gray-500 whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
@@ -306,6 +364,7 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
                       <td className="px-2 py-1 text-gray-500 max-w-[180px] truncate" title={r.email}>{r.email || '—'}</td>
                       <td className="px-2 py-1 font-mono">{r.pan_no || '—'}</td>
                       <td className="px-2 py-1">{r.date_of_joining || '—'}</td>
+                      <td className="px-2 py-1">{r.sponsor || <span className="text-gray-400">—</span>}</td>
                       <td className="px-2 py-1">
                         {r.errors.length === 0
                           ? <span className="text-emerald-700">OK</span>

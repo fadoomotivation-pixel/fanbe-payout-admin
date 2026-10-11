@@ -54,6 +54,7 @@ import { formatINR } from '@/lib/utils'
 import { ClipboardPaste, AlertTriangle, CheckCircle2, Download, Info } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { saveBlob } from '@/lib/download'
+import { makeBrokerFinder } from '@/lib/brokerMatch'
 
 // Admin's sheet, in admin's order, plus the two optional columns on the end.
 const COLUMNS = [
@@ -220,49 +221,12 @@ export default function BookingImportModal({ open, onClose, onImported }: {
         .map((c: any) => [digitsOnly(c.phone || ''), c] as [string, any])
         .filter(([k]: [string, any]) => isRealPhone(k)),
     )
-    const brokerByCode = new Map(ref.brokers.map((b: any) => [norm(b.broker_id), b]))
     const plotsByKey = new Map<string, any>()
     for (const p of ref.plots) plotsByKey.set(`${p.project_id}|${norm(p.plot_no)}`, p)
 
-    // Broker lookup by the name the office actually says.
-    //
-    // Order matters.  Code first, then the whole name ignoring spacing — that is what
-    // resolves "radheyshyam" to "Radhey Shyam", and "shyam" to "Shyam" rather than to the
-    // longer name that happens to end in it.
-    //
-    // Only then word-by-word, where every word written must be the START of a different
-    // word in the broker's name.  That accepts "satish" for "Satish Kumar" and
-    // "radhe shyam" for "Radhey Shyam", while refusing "radhe shyam" for plain "Shyam" —
-    // a plain substring test matched that one, which would have paid the wrong person.
-    //
-    // TWO OR MORE hits is never resolved by guessing.
-    const tokensOf = (s: string) => String(s || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
-    const wordsMatch = (qTok: string[], bTok: string[]) => {
-      if (qTok.length === 0 || qTok.length > bTok.length) return false
-      const used = new Set<number>()
-      return qTok.every(q => {
-        const i = bTok.findIndex((b, idx) => !used.has(idx) && b.startsWith(q))
-        if (i < 0) return false
-        used.add(i)
-        return true
-      })
-    }
-    const findBroker = (raw: string): { broker: any | null; why: string } => {
-      const q = String(raw || '').trim()
-      if (!q) return { broker: null, why: '' }
-      const byCode = brokerByCode.get(norm(q))
-      if (byCode) return { broker: byCode, why: 'code' }
-      const key = nameKey(q)
-      if (!key) return { broker: null, why: 'blank' }
-      const exact = ref.brokers.filter((b: any) => nameKey(b.name) === key)
-      if (exact.length === 1) return { broker: exact[0], why: 'name' }
-      if (exact.length > 1) return { broker: null, why: 'ambiguous' }
-      const qTok = tokensOf(q)
-      const loose = ref.brokers.filter((b: any) => wordsMatch(qTok, tokensOf(b.name)))
-      if (loose.length === 1) return { broker: loose[0], why: 'partial' }
-      if (loose.length > 1) return { broker: null, why: 'ambiguous' }
-      return { broker: null, why: 'missing' }
-    }
+    // Broker lookup by the name the office actually says -- same rule as the broker
+    // import's sponsor column, so the two can never disagree.  See lib/brokerMatch.ts.
+    const findBroker = makeBrokerFinder(ref.brokers as any[])
 
     const takenPlots = new Set(ref.bookings.map((b: any) => b.plot_id).filter(Boolean))
     const takenNos = new Set(ref.bookings.map((b: any) => norm(b.legacy_booking_no)).filter(Boolean))
