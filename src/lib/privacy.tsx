@@ -1,20 +1,43 @@
-// Privacy lock — blur the broker numbers when the laptop has been sitting idle.
+// Privacy lock — the broker numbers start hidden, and a PIN shows them.
 //
 // Admin: "agar 15 min se system nahi use hua ... broker ne kya kamaya or broker ka number
 // blur ho jae ... ek pin dalne ka option aye to blur hat jae ... normal employee galti se
 // data na chura le laptop se."
 //
+// And then: "pehli baar automatically pin dalne k option aaye or vo hide bhi kr sake jo
+// blur wala kaam krna chahe vo kr sake or jo unblur wala krna chahe".
+//
+// SO IT STARTS HIDDEN.  Every time the app opens, the numbers are blurred and the PIN box
+// is already on screen.  Two honest choices, and both are one click:
+//
+//   * type the PIN  -> numbers show, until fifteen minutes of stillness hides them again
+//   * close the bar -> carry on working with them hidden, nothing is blocked
+//
+// This is the opposite of what I built first, which opened unlocked and only hid things
+// after fifteen idle minutes.  That was the wrong default: it meant a laptop that was
+// logged in and then left alone for ten minutes showed every broker's earnings to anyone
+// walking past, and the protection only arrived after the damage could already be done.
+// Hidden-by-default costs one click when you want the numbers and nothing at all when you
+// do not.
+//
+// AND THERE IS NO OFF SWITCH, ON PURPOSE.  I had put a "Hide numbers when idle" checkbox
+// in the sidebar.  Any employee could untick it and never see a blur again, which made the
+// whole thing look like protection while being a preference.  The choice admin asked for —
+// work blurred, or type the PIN — is kept; the choice to switch the lock off is not one an
+// employee should have.
+//
 // WHAT IT IS, HONESTLY.  This blurs pixels.  It is not encryption and it does not stop
 // anyone who opens the browser's dev tools or calls the API directly — the data is still
 // in the page.  What it stops is the thing that actually happens: a laptop left open at
 // lunch, somebody walking past, a phone photo of the broker list and what each one earns.
-// For an affiliate network that list is the business, so a screen that goes blank on its
-// own is worth having, as long as nobody mistakes it for a vault.
+// For an affiliate network that list is the business, so a screen that hides itself is
+// worth having, as long as nobody mistakes it for a vault.
 //
 // WHAT IS NOT LOCKED.  Everyday work carries on while the screen is blurred — adding a
-// booking, a broker, a plot, an expense.  The lock covers what is worth stealing (what a
-// broker earned, and the phone numbers you would poach them with), not what the office
-// has to get done.  Locking the whole app would just teach everyone to share the PIN.
+// booking, a broker, a plot, an expense, picking a broker for a withdrawal.  The lock
+// covers what is worth stealing (what a broker earned, and the phone numbers you would
+// poach them with), not what the office has to get done.  Locking the whole app would just
+// teach everyone to share the PIN.
 //
 // THE PIN lives in the database and is checked by verify_privacy_pin() — see migration
 // 20261011b.  It is deliberately NOT in this file: a PIN written into the JavaScript is
@@ -31,63 +54,72 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import toast from 'react-hot-toast'
 import { supabase } from '@/lib/supabase'
 
-/** How long the laptop may sit untouched before the numbers go blurry. */
+/** How long the laptop may sit untouched before the numbers hide themselves again. */
 const IDLE_MS = 15 * 60 * 1000
-
-/** Remembered per browser, so one office machine can be set up once and left alone. */
-const ENABLED_KEY = 'fanbe.privacyLock.enabled'
 
 type Ctx = {
   /** Numbers are blurred right now. */
   locked: boolean
-  /** The lock is switched on at all for this machine. */
-  enabled: boolean
-  setEnabled: (on: boolean) => void
-  /** Blur immediately, without waiting out the 15 minutes. */
+  /** The PIN bar is on screen.  Closing it keeps the blur; it returns on the next lock. */
+  barOpen: boolean
+  /** Close the bar and carry on working with the numbers hidden. */
+  keepHidden: () => void
+  /** Bring the PIN bar back, for someone who closed it and now wants the numbers. */
+  askForPin: () => void
+  /** Hide immediately, without waiting out the fifteen minutes. */
   lockNow: () => void
   /** Returns an error message, or null when the PIN was right. */
   unlock: (pin: string) => Promise<string | null>
-  /** Milliseconds of stillness before locking — surfaced so the UI can say it. */
+  /**
+   * Whether the PIN box should take the caret.  False on the first load — the person has
+   * just arrived and may want to search a broker, not type a PIN — and true when the
+   * screen locks later, because then they were mid-task and want back in.
+   */
+  focusPin: boolean
+  /** Milliseconds of stillness before hiding — surfaced so the UI can say it. */
   idleMs: number
 }
 
 const PrivacyCtx = createContext<Ctx | null>(null)
 
-const readEnabled = () => {
-  try { return localStorage.getItem(ENABLED_KEY) !== 'off' } catch { return true }
-}
-
 export function PrivacyProvider({ children }: { children: any }) {
-  const [enabled, setEnabledState] = useState(readEnabled)
-  // Starts unlocked: the person has just signed in, and demanding the PIN on every page
-  // load is how a PIN ends up on a sticky note under the keyboard.
-  const [locked, setLocked] = useState(false)
-  const lastActive = useRef(Date.now())
+  // Starts hidden, with the PIN box showing.  See the note at the top of the file.
+  const [locked, setLocked] = useState(true)
+  const [barOpen, setBarOpen] = useState(true)
+  const [focusPin, setFocusPin] = useState(false)
 
-  const setEnabled = useCallback((on: boolean) => {
-    setEnabledState(on)
-    try { localStorage.setItem(ENABLED_KEY, on ? 'on' : 'off') } catch { /* private window */ }
-    if (!on) setLocked(false)
-    else lastActive.current = Date.now()
+  const lastActive = useRef(Date.now())
+  // Read inside the idle timer, so the timer never has to be torn down and rebuilt.
+  const lockedRef = useRef(true)
+  lockedRef.current = locked
+
+  const lock = useCallback((focus: boolean) => {
+    setLocked(true)
+    setBarOpen(true)
+    setFocusPin(focus)
   }, [])
 
-  const lockNow = useCallback(() => { if (enabled) setLocked(true) }, [enabled])
+  const lockNow = useCallback(() => lock(true), [lock])
+  const keepHidden = useCallback(() => setBarOpen(false), [])
+  const askForPin = useCallback(() => { setBarOpen(true); setFocusPin(true) }, [])
 
   useEffect(() => {
-    if (!enabled) return
     const touch = () => { lastActive.current = Date.now() }
     const events = ['mousemove', 'mousedown', 'keydown', 'wheel', 'touchstart', 'scroll']
     events.forEach(e => window.addEventListener(e, touch, { passive: true }))
 
     // A timer alone is not enough: a backgrounded tab is throttled, and a laptop that was
     // asleep comes back with the clock far ahead.  So the elapsed time is measured, never
-    // counted down — coming back after an hour locks immediately.
-    const tick = setInterval(() => {
-      if (Date.now() - lastActive.current >= IDLE_MS) setLocked(true)
-    }, 15_000)
-    const onVisible = () => {
-      if (document.visibilityState === 'visible' && Date.now() - lastActive.current >= IDLE_MS) setLocked(true)
+    // counted down — coming back after an hour hides the numbers immediately.
+    //
+    // Only fires when the screen is currently showing.  Someone who closed the bar to work
+    // blurred has already made their choice; re-opening it at them every fifteen minutes
+    // would be nagging, and nothing needs hiding that is not already hidden.
+    const maybeLock = () => {
+      if (!lockedRef.current && Date.now() - lastActive.current >= IDLE_MS) lock(true)
     }
+    const tick = setInterval(maybeLock, 15_000)
+    const onVisible = () => { if (document.visibilityState === 'visible') maybeLock() }
     document.addEventListener('visibilitychange', onVisible)
 
     return () => {
@@ -95,31 +127,31 @@ export function PrivacyProvider({ children }: { children: any }) {
       clearInterval(tick)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [enabled])
+  }, [lock])
 
   const unlock = useCallback(async (pin: string): Promise<string | null> => {
     const { data, error } = await supabase.rpc('verify_privacy_pin', { p_pin: pin })
     if (error) {
-      // The function is missing until its migration runs.  Refusing to unlock would lock
-      // the office out of its own screens over a deployment ordering detail, so let them
+      // The function is missing until its migration runs.  Refusing to unlock would leave
+      // the office stuck behind a blur over a deployment ordering detail, so let them
       // through — but SAY SO, loudly.  Unlocking quietly on any typed PIN would leave the
       // office believing a PIN is guarding the screen when nothing is.
       if (/function|does not exist|schema cache/i.test(error.message || '')) {
         toast.error('PIN is not set up on the server yet, so any PIN opens the screen. Tell the admin to run the privacy PIN setup.', { duration: 8000 })
-        setLocked(false)
+        setLocked(false); setBarOpen(false); setFocusPin(false)
         return null
       }
       return error.message || 'Could not check the PIN.'
     }
     if (data !== true) return 'Wrong PIN.'
     lastActive.current = Date.now()
-    setLocked(false)
+    setLocked(false); setBarOpen(false); setFocusPin(false)
     return null
   }, [])
 
   const value = useMemo<Ctx>(
-    () => ({ locked: enabled && locked, enabled, setEnabled, lockNow, unlock, idleMs: IDLE_MS }),
-    [enabled, locked, setEnabled, lockNow, unlock],
+    () => ({ locked, barOpen, keepHidden, askForPin, lockNow, unlock, focusPin, idleMs: IDLE_MS }),
+    [locked, barOpen, keepHidden, askForPin, lockNow, unlock, focusPin],
   )
   return <PrivacyCtx.Provider value={value}>{children}</PrivacyCtx.Provider>
 }
@@ -127,10 +159,10 @@ export function PrivacyProvider({ children }: { children: any }) {
 export function usePrivacy(): Ctx {
   const c = useContext(PrivacyCtx)
   // The broker portal and the login screens render outside the provider; they should not
-  // crash, they just never lock.
+  // crash, they just never hide anything.
   return c ?? {
-    locked: false, enabled: false, setEnabled: () => {}, lockNow: () => {},
-    unlock: async () => null, idleMs: IDLE_MS,
+    locked: false, barOpen: false, keepHidden: () => {}, askForPin: () => {},
+    lockNow: () => {}, unlock: async () => null, focusPin: false, idleMs: IDLE_MS,
   }
 }
 
