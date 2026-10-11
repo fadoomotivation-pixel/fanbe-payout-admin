@@ -418,7 +418,7 @@ export async function closeBookingMoney(bookingId: string): Promise<void> {
 }
 
 /**
- * Per-payment MLM distribution.
+ * Per-payment Affiliate Network distribution.
  *
  * Distribution is now performed by a DATABASE TRIGGER (payment_recompute_payouts on bp_payments)
  * that auto-recomputes the whole booking's commissions whenever any payment is inserted, has its
@@ -426,7 +426,7 @@ export async function closeBookingMoney(bookingId: string): Promise<void> {
  * That makes commissions ALWAYS correct, for EVERY payment path, with zero manual recompute.
  *
  * This function therefore no longer inserts anything — it simply reads back how many distribution
- * rows the trigger created for the given payment so callers can show a "MLM × N" toast.
+ * rows the trigger created for the given payment so callers can show a "Affiliate Network × N" toast.
  */
 export async function distributePaymentCommission(opts: {
   bookingId: string

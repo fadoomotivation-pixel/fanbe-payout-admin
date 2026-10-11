@@ -51,7 +51,7 @@ export default function AchieversClub() {
       // Pull every broker + their booking sqyd + their distributed income in four queries.
       // Aggregating in JS keeps SQL simple and avoids a custom RPC.
       const [{ data: brokers }, { data: bookings }, { data: distributions }, { data: ranks }] = await Promise.all([
-        // Only MLM brokers are eligible -- the Achievers Club rewards team-building, and
+        // Only Affiliate Network brokers are eligible -- the Achievers Club rewards team-building, and
         // traditional brokers don't sit in the sponsor tree.
         supabase.from('brokers').select('id, name, broker_id, phone, rank, status, created_at, sponsor_id').eq('broker_type', 'mlm'),
         supabase.from('bp_bookings').select('broker_id, bp_plots(size_sqyd)').eq('stage', 'booking_done'),

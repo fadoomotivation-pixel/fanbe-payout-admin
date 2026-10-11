@@ -69,7 +69,7 @@ export default function EmiOverdue() {
     const header = ['Customer', 'Code', 'Phone', 'Booking', 'Plot', 'Project', 'Agent', 'Agent code', 'Sale type', 'Instalments late', 'Amount overdue', 'Oldest due', 'Days late']
     const body = filtered.map(r => [
       r.customer_name, r.customer_code, r.phone || '', r.booking_no, r.plot_no, r.project_name,
-      r.broker_name, r.broker_code, r.commission_mode === 'traditional' ? 'Traditional' : 'MLM',
+      r.broker_name, r.broker_code, r.commission_mode === 'traditional' ? 'Traditional' : 'Affiliate',
       r.instalments_overdue, r.amount_overdue, r.oldest_due, r.days_late,
     ])
     downloadCsv(`emi-overdue-${new Date().toISOString().slice(0, 10)}.csv`, [header, ...body])
@@ -127,7 +127,7 @@ export default function EmiOverdue() {
             <button onClick={() => setMode('')}
               className={`px-3 py-2 ${mode === '' ? 'bg-gray-900 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}>All sales</button>
             <button onClick={() => setMode('mlm')}
-              className={`px-3 py-2 border-l border-gray-200 ${mode === 'mlm' ? 'bg-blue-600 text-white' : 'bg-white text-blue-700 hover:bg-blue-50'}`}>MLM</button>
+              className={`px-3 py-2 border-l border-gray-200 ${mode === 'mlm' ? 'bg-blue-600 text-white' : 'bg-white text-blue-700 hover:bg-blue-50'}`}>Affiliate</button>
             <button onClick={() => setMode('traditional')}
               className={`px-3 py-2 border-l border-gray-200 ${mode === 'traditional' ? 'bg-amber-600 text-white' : 'bg-white text-amber-700 hover:bg-amber-50'}`}>Traditional</button>
           </div>

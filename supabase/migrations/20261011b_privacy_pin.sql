@@ -8,8 +8,8 @@
 -- security: anyone who opens the browser's dev tools, or calls the REST API
 -- with the anon key, still sees the numbers. What it does stop is the thing
 -- that actually happens in an office - a laptop left open, someone walking
--- past, a photo of the broker list and what each one earns. For an MLM
--- business that list IS the business, so it is worth locking the screen even
+-- past, a photo of the broker list and what each one earns. For an affiliate
+-- network that list IS the business, so it is worth locking the screen even
 -- though it is not worth calling it encryption.
 --
 -- WHY THE PIN LIVES HERE AND NOT IN THE APP. A PIN written into the

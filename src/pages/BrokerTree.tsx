@@ -54,8 +54,8 @@ export default function BrokerTree() {
   }
   const [search, setSearch] = useState('')
   // Tree type tab.  Admin: "their both tree are different, no relationship with each other."
-  // MLM and Traditional brokers each have their own sponsor chains; never mix the two
-  // on the same page.  Default to MLM since that's where the differential cascade lives.
+  // Affiliate Network and Traditional brokers each have their own sponsor chains; never mix the two
+  // on the same page.  Default to Affiliate Network since that's where the differential cascade lives.
   const [treeType, setTreeType] = useState<'mlm' | 'traditional'>(
     (searchParams.get('type') === 'traditional' ? 'traditional' : 'mlm')
   )
@@ -110,7 +110,7 @@ export default function BrokerTree() {
   const { data: brokers = [], isLoading } = useQuery({
     // Key includes treeType so switching tabs refetches the right slice and the
     // tree memo recomputes from a clean dataset (no leftover Traditional rows in
-    // the MLM tree map and vice versa).
+    // the Affiliate Network tree map and vice versa).
     queryKey: ['team_tree_brokers', treeType],
     queryFn: async () => {
       const { data, error } = await supabase
@@ -151,7 +151,7 @@ export default function BrokerTree() {
       // broker" customer leaf).  Three signals catch this -- they overlap and any one
       // is enough:
       //   (a) brokers.customer_id linked to this customer (the strongest signal,
-      //       set by the auto-promote flow on every new MLM booking),
+      //       set by the auto-promote flow on every new Affiliate Network booking),
       //   (b) brokers.broker_id == customer.customer_code (PR #119 keeps these in
       //       sync, so for existing data it's effectively the same as (a)),
       //   (c) brokers.phone exact-matches customer.phone (catches legacy rows where
@@ -366,21 +366,21 @@ export default function BrokerTree() {
         <h1 className="text-2xl md:text-3xl font-bold text-gray-900 tracking-tight">Team Network</h1>
         <p className="text-sm text-gray-500 mt-1">
           {treeType === 'mlm'
-            ? `MLM downline · ${brokers.length} brokers · differential cascade pays uplines.`
+            ? `Affiliate Network downline · ${brokers.length} brokers · differential cascade pays uplines.`
             : `Traditional brokers · ${brokers.length} brokers · standalone, no upline cascade.`}
         </p>
       </div>
 
-      {/* MLM and Traditional brokers are strictly separate trees -- no sponsor link
+      {/* Affiliate Network and Traditional brokers are strictly separate trees -- no sponsor link
           can cross the boundary and the differential cascade stops at it.  Default
-          to MLM since that's the bigger network. */}
+          to Affiliate Network since that's the bigger network. */}
       <div className="inline-flex rounded-full bg-gray-100 p-1 text-sm">
         <button
           onClick={() => setTreeTypeAndUrl('mlm')}
           className={`px-4 py-1.5 rounded-full font-medium transition ${
             treeType === 'mlm' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
           }`}
-        >MLM Tree</button>
+        >Affiliate Tree</button>
         <button
           onClick={() => setTreeTypeAndUrl('traditional')}
           className={`px-4 py-1.5 rounded-full font-medium transition ${

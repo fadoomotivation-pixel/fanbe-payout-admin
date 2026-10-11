@@ -659,7 +659,7 @@ export function printPipelineRegister(rows: RegisterRow[], meta: { title: string
       <td class="n">${i + 1}</td>
       <td><b>${esc(r.customer_name || '—')}</b><div class="s">${esc(r.customer_code)}${r.customer_phone ? ' · ' + esc(r.customer_phone) : ''}</div></td>
       <td><span class="m">${esc(r.booking_no)}</span>${r.legacy_booking_no ? `<div class="s">old ${esc(r.legacy_booking_no)}</div>` : ''}<div class="s">Plot ${esc(r.plot_no || '—')}</div></td>
-      <td>${esc(r.project_name || '—')}<div class="s">${r.commission_mode === 'traditional' ? 'Traditional' : 'MLM'}</div></td>
+      <td>${esc(r.project_name || '—')}<div class="s">${r.commission_mode === 'traditional' ? 'Traditional' : 'Affiliate'}</div></td>
       <td>${esc(r.broker_name || '—')}${r.broker_code ? `<div class="s">${esc(r.broker_code)}</div>` : ''}</td>
       <td class="r">${r.value > 0 ? formatINR(r.value) : '<span class="warn">not set</span>'}</td>
       <td class="r">${r.paid_unknown ? '<span class="warn">not entered</span>' : formatINR(r.paid)}</td>

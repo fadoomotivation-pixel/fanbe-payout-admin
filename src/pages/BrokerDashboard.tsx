@@ -302,7 +302,7 @@ export default function BrokerDashboard() {
   })() }, [navigate, shadowBrokerId])
 
   // ── Derived stats ─────────────────────────────────────────────────
-  // Earnings use the deferred-commission model: only money actually distributed via per-payment MLM
+  // Earnings use the deferred-commission model: only money actually distributed via per-payment Affiliate Network
   // counts as "earned" — NOT the full booking.commission_amount (which is just the promised total).
   // This makes "Available" reflect what the broker can really withdraw today.
   const stats = useMemo(() => {

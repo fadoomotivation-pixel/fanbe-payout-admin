@@ -8,7 +8,7 @@
 // anyone who opens the browser's dev tools or calls the API directly — the data is still
 // in the page.  What it stops is the thing that actually happens: a laptop left open at
 // lunch, somebody walking past, a phone photo of the broker list and what each one earns.
-// For an MLM business that list is the business, so a screen that goes blank on its own
+// For an Affiliate Network business that list is the business, so a screen that goes blank on its own
 // is worth having, as long as nobody mistakes it for a vault.
 //
 // WHAT IS NOT LOCKED.  Everyday work carries on while the screen is blurred — adding a

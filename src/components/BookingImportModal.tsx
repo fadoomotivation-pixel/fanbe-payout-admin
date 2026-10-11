@@ -392,7 +392,7 @@ export default function BookingImportModal({ open, onClose, onImported }: {
           plot_total_price: r.total || null, total_amount: r.total || null,
           application_date: r.booking_date,
           // Always traditional: the sheet gives an explicit rate and an explicit split, which
-          // is exactly what traditional mode means.  MLM would re-derive the rate from the
+          // is exactly what traditional mode means.  Affiliate Network would re-derive the rate from the
           // broker's rank and ignore both.
           commission_mode: 'traditional',
           traditional_commission_pct: hits[0] ? rateFor(hits[0]) : 0,

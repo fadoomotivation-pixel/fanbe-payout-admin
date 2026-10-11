@@ -142,7 +142,7 @@ export default function BrokerProfile() {
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatTile icon={<Wallet size={16}/>}     label="Earned (Distributed)" value={formatINR(earnedTotal)} sub={`${distributions.length} MLM credits · ${confirmed.length} confirmed bookings`} color="text-green-700"/>
+        <StatTile icon={<Wallet size={16}/>}     label="Earned (Distributed)" value={formatINR(earnedTotal)} sub={`${distributions.length} Affiliate Network credits · ${confirmed.length} confirmed bookings`} color="text-green-700"/>
         <StatTile icon={<TrendingUp size={16}/>} label="Earned YTD"           value={formatINR(earnedYTD)}                                                                                       color="text-blue-700"/>
         <StatTile icon={<Award size={16}/>}      label="Sales Volume"    value={formatINR(totalVolume)} sub="confirmed booking value"                  color="text-gray-900"/>
         <StatTile icon={<Users size={16}/>}      label="Direct Downline" value={String(downline.length)} sub={`rank ${broker.rank || '—'}`}             color="text-purple-700"/>

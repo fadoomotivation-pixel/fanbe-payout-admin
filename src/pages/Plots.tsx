@@ -51,7 +51,7 @@ export default function Plots() {
   const qc = useQueryClient()
   const [projectFilter, setProjectFilter] = useState('')
   const [statusFilter, setStatusFilter]   = useState('')
-  // Sale-mode filter — narrow the list to plots sold MLM vs traditionally.  Applied
+  // Sale-mode filter — narrow the list to plots sold Affiliate Network vs traditionally.  Applied
   // client-side via bookingByPlot since commission_mode lives on bp_bookings, not bp_plots.
   const [saleModeFilter, setSaleModeFilter] = useState<'' | 'mlm' | 'traditional'>('')
   const [search, setSearch]               = useState('')
@@ -96,7 +96,7 @@ export default function Plots() {
 
   // Compute "in-use" plot IDs so Delete can be guarded.  Same query also exposes the
   // commission_mode + booking_no for each plot so the Status cell can show admins which
-  // plot was sold the traditional way vs through the MLM engine.  When a plot has more
+  // plot was sold the traditional way vs through the Affiliate Network engine.  When a plot has more
   // than one booking we surface the most recent one (DESC sort + first-write-wins on the
   // Map key) — that's the booking the trigger is currently distributing for.
   const { data: bookingByPlot = new Map<string, any>() } = useQuery<Map<string, any>>({
@@ -592,7 +592,7 @@ export default function Plots() {
     { header: 'Total Price', render: (r: any) => r.total_price ? <span className="font-semibold">{formatINR(r.total_price)}</span> : '—' },
     { header: 'Status', render: (r: any) => {
       // Sale mode badge appears alongside plot status whenever a booking exists.  Bold
-      // amber "Traditional" pill makes the non-MLM sales jump out at a glance — admin
+      // amber "Traditional" pill makes the sales outside the Affiliate Network jump out at a glance — admin
       // doesn't have to click into each booking to remember which way it was sold.
       const bk = bookingByPlot.get(r.id)
       const traditional = bk?.commission_mode === 'traditional'
@@ -601,7 +601,7 @@ export default function Plots() {
           <Badge label={statusLabel(r.status || 'available')} className={STATUS_COLORS[r.status] || 'bg-gray-100 text-gray-600'}/>
           {bk && (
             <Badge
-              label={traditional ? 'Sold · Traditional' : 'Sold · MLM'}
+              label={traditional ? 'Sold · Traditional' : 'Sold · Affiliate'}
               className={traditional ? 'bg-amber-100 text-amber-800 border border-amber-200' : 'bg-blue-50 text-blue-700 border border-blue-100'}
             />
           )}
@@ -677,7 +677,7 @@ export default function Plots() {
           </select>
           <select value={saleModeFilter} onChange={e => setSaleModeFilter(e.target.value as any)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" title="Filter by sale mode">
             <option value="">All sale modes</option>
-            <option value="mlm">Sold · MLM</option>
+            <option value="mlm">Sold · Affiliate</option>
             <option value="traditional">Sold · Traditional</option>
           </select>
           <div className="flex items-center gap-1 text-sm" title="Plot size in square yards (gaj)">
