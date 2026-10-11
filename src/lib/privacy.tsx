@@ -53,6 +53,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { supabase } from '@/lib/supabase'
+import { setPrivacyLockedFlag } from '@/lib/privacyState'
 
 /** How long the laptop may sit untouched before the numbers hide themselves again. */
 const IDLE_MS = 15 * 60 * 1000
@@ -149,6 +150,11 @@ export function PrivacyProvider({ children }: { children: any }) {
     return null
   }, [])
 
+  // Publish the state for the two places that cannot read React context: the CSV
+  // downloader and the bulk print templates. Without this the blur would hide the list
+  // while the Download button beside it handed the same list over.
+  useEffect(() => { setPrivacyLockedFlag(locked) }, [locked])
+
   const value = useMemo<Ctx>(
     () => ({ locked, barOpen, keepHidden, askForPin, lockNow, unlock, focusPin, idleMs: IDLE_MS }),
     [locked, barOpen, keepHidden, askForPin, lockNow, unlock, focusPin],
@@ -185,6 +191,21 @@ const HIDDEN_STYLE = {
   WebkitUserSelect: 'none',
   pointerEvents: 'none',
 } as const
+
+/**
+ * For the KPI and stat tiles, which all render a formatted figure and an optional
+ * sub-line.  Hides it when it is money and leaves it alone when it is not, so "46
+ * bookings" stays readable while the rupees beside it do not.
+ *
+ * Keying off the rupee sign rather than a prop is deliberate: a tile added next month is
+ * covered without anyone remembering to wrap it, and the one failure mode - a money
+ * figure formatted without a rupee sign - shows up the moment you look at the screen,
+ * which is the right way round for a privacy feature to break.
+ */
+export function SecretMoney({ children, className = '' }: { children: any; className?: string }) {
+  if (typeof children !== 'string' || !children.includes('₹')) return <>{children}</>
+  return <Secret className={className}>{children}</Secret>
+}
 
 export function Secret({ children, className = '' }: { children: any; className?: string }) {
   const { locked } = usePrivacy()

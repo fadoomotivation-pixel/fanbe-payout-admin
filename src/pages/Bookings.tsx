@@ -23,6 +23,7 @@ import BookingImportModal from '@/components/BookingImportModal'
 import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, Info, Banknote, IndianRupee, Lock, Unlock, Search, Download, X, Filter, ChevronDown, Users, ScrollText, ClipboardPaste, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { downloadCsv } from '@/lib/download'
+import { Secret } from '@/lib/privacy'
 
 const STAGES = ['token_received','booking_done','cancelled'] as const
 type Stage = typeof STAGES[number]
@@ -1472,8 +1473,8 @@ export default function Bookings() {
       header: 'Net / Base',
       render: (r: any) => (
         <div>
-          <div className="font-semibold text-green-700">{formatINR(bookingValue(r))}</div>
-          <div className="text-[10px] text-gray-400">Base {formatINR(r.base_price || (r.size_sqyd && r.rate_per_sqyd ? r.size_sqyd * r.rate_per_sqyd : 0))}</div>
+          <div className="font-semibold text-green-700"><Secret>{formatINR(bookingValue(r))}</Secret></div>
+          <div className="text-[10px] text-gray-400">Base <Secret>{formatINR(r.base_price || (r.size_sqyd && r.rate_per_sqyd ? r.size_sqyd * r.rate_per_sqyd : 0))}</Secret></div>
         </div>
       ),
     },
@@ -1485,8 +1486,8 @@ export default function Bookings() {
         const bal = Math.max(0, total - paid)
         return (
           <div>
-            <div className="font-semibold text-emerald-700 text-sm">{formatINR(paid)}</div>
-            <div className={`text-[11px] font-medium ${bal > 0 ? 'text-orange-600' : 'text-gray-400'}`}>Bal {formatINR(bal)}</div>
+            <div className="font-semibold text-emerald-700 text-sm"><Secret>{formatINR(paid)}</Secret></div>
+            <div className={`text-[11px] font-medium ${bal > 0 ? 'text-orange-600' : 'text-gray-400'}`}>Bal <Secret>{formatINR(bal)}</Secret></div>
           </div>
         )
       },
@@ -1670,7 +1671,7 @@ export default function Bookings() {
               <div className="text-right shrink-0">
                 {/* "₹0" read as a free plot; it means the price was never entered. */}
                 {bookingValue(r) > 0
-                  ? <div className="text-sm font-semibold text-gray-900 tabular-nums">{formatINR(bookingValue(r))}</div>
+                  ? <div className="text-sm font-semibold text-gray-900 tabular-nums"><Secret>{formatINR(bookingValue(r))}</Secret></div>
                   : <div className="text-[12px] font-semibold text-amber-700">Price not set</div>}
                 <div className="text-[11px] text-gray-400">{formatDate(r.application_date || r.created_at)}</div>
               </div>

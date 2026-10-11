@@ -1,3 +1,6 @@
+import toast from 'react-hot-toast'
+import { isPrivacyLocked } from '@/lib/privacyState'
+
 // One way to hand the user a file.  Every CSV button in the app goes through here.
 //
 // Each page used to build its own <a download>, click it, and revoke the blob URL on the
@@ -6,8 +9,18 @@
 // link was also never attached to the page, which Firefox needs.  And with no byte-order
 // mark, Excel opened the UTF-8 file as ANSI, so "₹" and Hindi names came out garbled.
 
-/** Hand a Blob to the browser as a download. */
+/**
+ * Hand a Blob to the browser as a download.
+ *
+ * Refuses while the privacy lock is on. Every CSV button in the app arrives here, so
+ * this one check is what stops a hidden screen being downloaded as a spreadsheet
+ * instead - which would have made the blur decorative.
+ */
 export function saveBlob(blob: Blob, filename: string): void {
+  if (isPrivacyLocked()) {
+    toast.error('Numbers are hidden. Enter the PIN to download this.')
+    return
+  }
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url

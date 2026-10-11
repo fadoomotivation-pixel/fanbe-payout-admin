@@ -17,6 +17,7 @@ import {
   Calculator, TrendingUp, AlertTriangle, Wallet, CalendarRange, ArrowRight, Download, CheckCircle2,
 } from 'lucide-react'
 import { downloadCsv } from '@/lib/download'
+import { SecretMoney } from '@/lib/privacy'
 
 export default function EmiCollection() {
   const { data, isLoading } = useQuery<EmiForecast>({
@@ -145,8 +146,8 @@ function Tile({ icon, label, value, sub, tone }: { icon: any; label: string; val
   return (
     <div className={`border rounded-xl p-4 ${TONES[tone] || TONES.gray}`}>
       <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide opacity-70">{icon}{label}</div>
-      <div className="text-xl font-bold mt-1 tabular-nums">{value}</div>
-      <div className="text-[11px] opacity-60 mt-0.5">{sub}</div>
+      <div className="text-xl font-bold mt-1 tabular-nums"><SecretMoney>{value}</SecretMoney></div>
+      <div className="text-[11px] opacity-60 mt-0.5"><SecretMoney>{sub}</SecretMoney></div>
     </div>
   )
 }

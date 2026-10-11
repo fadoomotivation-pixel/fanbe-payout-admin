@@ -23,6 +23,7 @@ import { bookingValue } from '@/lib/bookingMath'
 import { fetchAllRows } from '@/lib/fetchAll'
 import { ShieldCheck, Search, AlertTriangle, ArrowRight, Download } from 'lucide-react'
 import { downloadCsv } from '@/lib/download'
+import { Secret } from '@/lib/privacy'
 
 type Issue = 'no_payment' | 'no_broker' | 'no_plot' | 'no_value' | 'no_project' | 'bad_phone'
 
@@ -236,11 +237,11 @@ export default function DataHealth() {
                       </td>
                       <td className="px-4 py-2.5">
                         <div className="text-gray-900">{r.customer_name}</div>
-                        <div className="text-[11px] text-gray-400">{r.phone || 'no phone'}</div>
+                        <div className="text-[11px] text-gray-400"><Secret>{r.phone || 'no phone'}</Secret></div>
                       </td>
                       <td className="px-4 py-2.5 text-xs text-gray-600">{r.project_name}</td>
                       <td className="px-4 py-2.5 text-xs tabular-nums">{r.size != null ? `${r.size} sq yd` : '—'}</td>
-                      <td className="px-4 py-2.5 text-xs tabular-nums">{r.value > 0 ? formatINR(r.value) : <span className="text-red-600">₹0</span>}</td>
+                      <td className="px-4 py-2.5 text-xs tabular-nums">{r.value > 0 ? <Secret>{formatINR(r.value)}</Secret> : <span className="text-red-600">₹0</span>}</td>
                       <td className="px-4 py-2.5">
                         <div className="flex flex-wrap gap-1">
                           {r.issues.filter(i => i !== active).map(i => (

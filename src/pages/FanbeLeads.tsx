@@ -32,6 +32,7 @@ import { fetchAllRows, todayLocalISO } from '@/lib/fetchAll'
 import { downloadCsv } from '@/lib/download'
 import { waLink } from '@/lib/whatsapp'
 import { Button } from '@/components/ui/Button.tsx'
+import { Secret } from '@/lib/privacy'
 import {
   Inbox, Search, Download, X, MessageCircle, Phone, Globe, Calendar, Info,
 } from 'lucide-react'
@@ -274,7 +275,7 @@ export default function FanbeLeads() {
 
                       <div className="mt-0.5 text-[12px] text-gray-500 flex flex-wrap items-center gap-x-3 gap-y-0.5">
                         <span className="inline-flex items-center gap-1"><Calendar size={11}/>{fmtDateTime(l.created_at)}</span>
-                        {l.phone && <span className="font-mono">{l.phone}</span>}
+                        {l.phone && <span className="font-mono"><Secret>{l.phone}</Secret></span>}
                         {n.visitorSource && <span className="truncate max-w-[260px]" title={n.visitorSource}>{n.visitorSource}</span>}
                         {n.page && <span className="text-gray-400">page {n.page}</span>}
                         {l.assigned_to_name && <span className="text-blue-700">with {l.assigned_to_name}</span>}

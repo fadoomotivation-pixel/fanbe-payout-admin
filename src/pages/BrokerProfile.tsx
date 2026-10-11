@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/Badge.tsx'
 import { Table } from '@/components/ui/Table.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import { ArrowLeft, Users, TrendingUp, Wallet, Award, AlertCircle } from 'lucide-react'
+import { Secret, SecretMoney } from '@/lib/privacy'
 
 export default function BrokerProfile() {
   const { id } = useParams()
@@ -123,7 +124,7 @@ export default function BrokerProfile() {
             <h1 className="text-2xl font-bold text-gray-900">{broker.name}</h1>
             <div className="text-sm text-gray-500 mt-1">
               <span className="font-mono bg-gray-100 px-2 py-0.5 rounded text-xs">{broker.broker_id}</span>
-              {broker.phone && ` · ${broker.phone}`}
+              {broker.phone && <> · <Secret>{broker.phone}</Secret></>}
               {broker.email && ` · ${broker.email}`}
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
@@ -193,8 +194,8 @@ function StatTile({ icon, label, value, sub, color = 'text-gray-900' }: any) {
   return (
     <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
       <div className="flex items-center gap-2 text-gray-400 mb-1">{icon}<span className="text-xs">{label}</span></div>
-      <div className={`text-xl font-bold ${color}`}>{value}</div>
-      {sub && <div className="text-[11px] text-gray-400 mt-0.5">{sub}</div>}
+      <div className={`text-xl font-bold ${color}`}><SecretMoney>{value}</SecretMoney></div>
+      {sub && <div className="text-[11px] text-gray-400 mt-0.5"><SecretMoney>{sub}</SecretMoney></div>}
     </div>
   )
 }
