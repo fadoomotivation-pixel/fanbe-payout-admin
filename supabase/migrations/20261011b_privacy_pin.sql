@@ -58,6 +58,26 @@
 
 BEGIN;
 
+-- Refuse to run anywhere but the payout database.
+--
+-- This script was once pasted into the wrong Supabase project - the account has
+-- two, Fanbe-CRM and SalesAutoCall - and it applied there perfectly, which is the
+-- worst way to fail: the office saw "Success" and the app saw nothing. So the
+-- script now identifies the database before touching it. public.is_staff() is a
+-- good fingerprint because every function below depends on it and the other
+-- project does not have it.
+DO $guard$
+BEGIN
+  IF to_regprocedure('public.is_staff()') IS NULL
+     OR to_regclass('public.app_users') IS NULL THEN
+    RAISE EXCEPTION '%',
+      'Wrong Supabase project: public.is_staff() or public.app_users is '
+      || 'missing here. Run this in Fanbe-CRM, project ref '
+      || 'mfgjzkaabyltscgrkhdz. Nothing was changed.';
+  END IF;
+END
+$guard$;
+
 CREATE TABLE IF NOT EXISTS public.app_security (
   key        text PRIMARY KEY,
   value      text NOT NULL,
