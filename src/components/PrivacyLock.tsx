@@ -1,28 +1,37 @@
-// The bar that appears when the screen has gone to sleep, and the small control that
-// lets the office lock it on purpose before walking away.
+// The bar that offers the PIN, and the small control that hides the numbers again.
 //
 // Deliberately a bar and not a full-screen blocker: the lock hides what is worth stealing,
 // it does not stop the work.  Someone can still add a booking, a broker, a plot or an
 // expense with the numbers blurred — so nobody has a reason to pass the PIN around.
+//
+// The bar is on screen the moment the app opens, and it closes two ways: the right PIN,
+// or "Keep hidden" for whoever is happy to work blurred.  Closing it leaves every number
+// blurred; only the PIN shows them.
 import { useEffect, useRef, useState } from 'react'
 import { usePrivacy } from '@/lib/privacy'
 import { supabase } from '@/lib/supabase'
-import { Lock, Unlock, ShieldCheck, X } from 'lucide-react'
+import { Lock, Unlock, Eye, ShieldCheck, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 export function PrivacyLockBar() {
-  const { locked, unlock } = usePrivacy()
+  const { locked, barOpen, keepHidden, unlock, focusPin } = usePrivacy()
   const [pin, setPin] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [changing, setChanging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => {
-    if (locked) { setPin(''); setErr(''); setTimeout(() => inputRef.current?.focus(), 50) }
-  }, [locked])
+  const showing = locked && barOpen
 
-  if (!locked) return null
+  useEffect(() => {
+    if (!showing) return
+    setPin(''); setErr('')
+    // Only takes the caret when the screen locked while the person was working.  On the
+    // first load it stays out of the way, so someone who wants to search a broker can.
+    if (focusPin) setTimeout(() => inputRef.current?.focus(), 50)
+  }, [showing, focusPin])
+
+  if (!showing) return null
 
   const submit = async (e?: any) => {
     e?.preventDefault?.()
@@ -35,11 +44,11 @@ export function PrivacyLockBar() {
 
   return (
     <>
-      <div className="sticky top-0 z-40 bg-amber-500 text-white shadow">
+      <div className="sticky top-0 z-40 bg-amber-500 text-white shadow" data-testid="pin-bar">
         <div className="max-w-6xl mx-auto px-4 py-2 flex flex-wrap items-center gap-x-3 gap-y-2">
           <span className="inline-flex items-center gap-2 text-sm font-medium">
             <Lock size={15}/>
-            Screen locked — broker earnings and phone numbers are hidden.
+            Broker earnings and phone numbers are hidden. Enter the PIN to show them.
           </span>
           <form onSubmit={submit} className="flex items-center gap-2 ml-auto">
             <input
@@ -59,6 +68,12 @@ export function PrivacyLockBar() {
             </button>
             <button type="button" onClick={() => setChanging(true)}
               className="text-xs underline/50 hover:underline opacity-90">Change PIN</button>
+            {/* Closes the bar, keeps the blur.  For whoever is happy to work hidden. */}
+            <button type="button" onClick={keepHidden} title="Keep them hidden and carry on"
+              aria-label="Keep hidden"
+              className="inline-flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg hover:bg-white/20">
+              Keep hidden <X size={13}/>
+            </button>
           </form>
           {err && <div className="w-full text-xs bg-white/15 rounded px-2 py-1">{err}</div>}
         </div>
@@ -68,24 +83,32 @@ export function PrivacyLockBar() {
   )
 }
 
-/** The switch in the sidebar: lock the screen now, or turn the whole thing off. */
+/** The switch in the sidebar: hide the numbers now, or ask for the PIN again. */
 export function PrivacyLockControl() {
-  const { enabled, setEnabled, lockNow, locked, idleMs } = usePrivacy()
+  const { locked, barOpen, lockNow, askForPin, idleMs } = usePrivacy()
   const mins = Math.round(idleMs / 60000)
   return (
     <div className="px-3 py-2 border-t border-white/10 text-[11px] text-white/70 space-y-1.5">
-      <label className="flex items-start gap-2 cursor-pointer">
-        <input type="checkbox" className="mt-0.5 rounded" checked={enabled} onChange={e => setEnabled(e.target.checked)}/>
-        <span>
-          <span className="font-medium text-white/90">Hide numbers when idle</span><br/>
-          Broker earnings and phone numbers blur after {mins} minutes untouched.
-        </span>
-      </label>
-      {enabled && !locked && (
-        <button type="button" onClick={lockNow}
-          className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white/90">
-          <Lock size={11}/>Hide now
-        </button>
+      {locked ? (
+        <>
+          <div className="inline-flex items-center gap-1.5 text-white/90">
+            <Lock size={11}/><span className="font-medium">Numbers are hidden</span>
+          </div>
+          {!barOpen && (
+            <button type="button" onClick={askForPin}
+              className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white/90">
+              <Eye size={11}/>Show numbers
+            </button>
+          )}
+        </>
+      ) : (
+        <>
+          <div>Numbers hide themselves after {mins} minutes untouched.</div>
+          <button type="button" onClick={lockNow}
+            className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white/90">
+            <Lock size={11}/>Hide now
+          </button>
+        </>
       )}
     </div>
   )
@@ -147,7 +170,8 @@ function ChangePinModal({ onClose }: { onClose: () => void }) {
         </div>
         <p className="text-[11px] text-gray-500">
           One PIN for the whole office. It is stored on the server, not in the app, and the current
-          one is required so an unattended screen cannot be used to change it.
+          one is required so an unattended screen cannot be used to change it. Every change is
+          recorded, so the admin can see who changed it and when.
         </p>
         <PinField label="Current PIN"  value={current} set={setCurrent} auto />
         <PinField label="New PIN (4-8 digits)" value={next} set={setNext} />
