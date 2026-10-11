@@ -70,12 +70,16 @@ function parseNote(notes: string | null | undefined) {
     const m = latest.match(new RegExp(`^\\s*${label}\\s*:\\s*(.+)$`, 'im'))
     return m ? m[1].trim().replace(/^"|"$/g, '') : ''
   }
+  // Where the visitor came from is dropped on the way in, not hidden on the way out, so
+  // it cannot reappear through the raw note, the search box or the export.  Admin: "isme
+  // lead kaha se aa rahi h mat dikhao".  The website still records it; this page is not
+  // where the office needs it.
+  const strip = (t: string) =>
+    t.split('\n').filter(l => !/^\s*(Source|Page|Referrer|UTM[^:]*)\s*:/i.test(l)).join('\n').trim()
   return {
     repeat: /^🔁/.test(latest.trim()),
     message: pick('Message'),
-    visitorSource: pick('Source'),
-    page: pick('Page'),
-    whole,
+    whole: strip(whole),
   }
 }
 
@@ -146,7 +150,7 @@ export default function FanbeLeads() {
     if (project && (l.project || '').trim() !== project) return false
     if (search.trim()) {
       const q = search.toLowerCase()
-      const hay = [l.name, l.full_name, l.phone, l.email, l.project, l.notes, l.source]
+      const hay = [l.name, l.full_name, l.phone, l.email, l.project, parseNote(l.notes).whole]
       if (!hay.some(v => String(v || '').toLowerCase().includes(q))) return false
     }
     return true
@@ -160,13 +164,12 @@ export default function FanbeLeads() {
   }), [leads, today, weekAgo])
 
   const exportCsv = () => {
-    const headers = ['Date & time (IST)', 'Name', 'Phone', 'Project', 'Interest', 'Source', 'Came from', 'Page', 'Message', 'Status', 'Assigned to']
+    const headers = ['Date & time (IST)', 'Name', 'Phone', 'Project', 'Interest', 'Message', 'Status', 'Assigned to']
     const body = rows.map(l => {
       const n = parseNote(l.notes)
       return [
         fmtDateTime(l.created_at), l.name || l.full_name || '', l.phone || '',
-        l.project || '', l.interest_level || '', l.source || '',
-        n.visitorSource, n.page, n.message, l.final_status || l.status || '',
+        l.project || '', l.interest_level || '', n.message, l.final_status || l.status || '',
         l.assigned_to_name || '',
       ]
     })
@@ -276,8 +279,6 @@ export default function FanbeLeads() {
                       <div className="mt-0.5 text-[12px] text-gray-500 flex flex-wrap items-center gap-x-3 gap-y-0.5">
                         <span className="inline-flex items-center gap-1"><Calendar size={11}/>{fmtDateTime(l.created_at)}</span>
                         {l.phone && <span className="font-mono"><Secret>{l.phone}</Secret></span>}
-                        {n.visitorSource && <span className="truncate max-w-[260px]" title={n.visitorSource}>{n.visitorSource}</span>}
-                        {n.page && <span className="text-gray-400">page {n.page}</span>}
                         {l.assigned_to_name && <span className="text-blue-700">with {l.assigned_to_name}</span>}
                       </div>
 
