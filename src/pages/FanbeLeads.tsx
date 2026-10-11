@@ -13,12 +13,18 @@
 // database.  This page shows what the website sent and offers a WhatsApp reply; it never
 // writes, assigns or deletes, so the two systems cannot fight over the same row.
 //
-// WHO SEES WHAT is the CRM's rule, not ours.  Its policy is
-// `is_super_admin() OR is_sales_manager() OR assigned_to = auth.uid()`, so an office login
-// that is a super_admin sees every website lead and everyone else sees only leads assigned
-// to them.  That is deliberately left alone: widening it here would hand the whole
-// call-centre lead book to every payout user.  The empty state says so rather than looking
-// broken.
+// WHO SEES WHAT.  The CRM's own policy on `leads` is
+// `is_super_admin() OR is_sales_manager() OR assigned_to = auth.uid()`, which left this
+// page empty for every office login except the one super-admin — including `payout`,
+// which has no CRM role at all.
+//
+// Relaxing that policy would have handed all ~6,000 Facebook, Instagram and manual leads
+// to every payout user, so it is untouched.  Instead the rows come through
+// `fanbe_website_leads()` (migration 20261011): a SECURITY DEFINER function that returns
+// ONLY the website enquiries, and only when public.is_staff() — so payout staff see the
+// 52 website leads and still cannot read the rest of the lead book, and a broker login
+// gets nothing at all.  The filter is inside the function; no argument comes from here,
+// so there is nothing a caller can pass to widen it.
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
@@ -105,16 +111,20 @@ export default function FanbeLeads() {
   const { data: leads = [], isLoading, error } = useQuery<Lead[]>({
     queryKey: ['fanbe_website_leads'],
     queryFn: async () => {
-      // Two ways in, because the RPC's default source is 'WhatsApp' and only later rows
-      // say 'Website': take either source, plus anything whose note says it came from the
-      // website, so a source renamed on the site does not silently empty this page.
-      const rows = await fetchAllRows<Lead>((from, to) =>
+      // The function does the filtering and the permission check in one place.
+      const { data, error } = await supabase.rpc('fanbe_website_leads')
+      if (!error) return (data || []) as Lead[]
+
+      // Falls back to reading the table directly when the function is not there yet —
+      // an app deployed ahead of its migration should degrade to "what this login may
+      // read", not to an error page.
+      if (!/function|does not exist|schema cache/i.test(error.message || '')) throw error
+      return await fetchAllRows<Lead>((from, to) =>
         supabase.from('leads')
           .select('id, name, full_name, phone, email, source, status, final_status, interest_level, project, notes, created_at, assigned_to_name')
           .or('source.eq.WhatsApp,source.eq.Website,notes.ilike.%from website%')
           .order('created_at', { ascending: false })
           .range(from, to))
-      return rows
     },
   })
 
@@ -226,16 +236,15 @@ export default function FanbeLeads() {
         ) : isLoading ? (
           <div className="py-12 text-center text-gray-400">Loading…</div>
         ) : leads.length === 0 ? (
-          // Almost always a permissions answer rather than an empty inbox, so say which.
           <div className="p-6 text-sm text-gray-600 space-y-2">
-            <div className="font-medium text-gray-900">No website leads are visible on this login.</div>
+            <div className="font-medium text-gray-900">No website enquiries yet.</div>
             <p>
-              Website enquiries are stored in the call-centre CRM's lead book, and that system decides who may read them:
-              a <b>super admin</b> or <b>sales manager</b> sees every lead, everyone else sees only the leads assigned to them.
+              Anything sent from the enquiry form on www.fanbegroup.com appears here within seconds, with the date,
+              the time and the visitor's message.
             </p>
-            <p>
-              If this page is empty but the website is getting enquiries, sign in with the office's super-admin login,
-              or ask the CRM to give this user the sales-manager role.
+            <p className="text-gray-500">
+              If the website <i>is</i> getting enquiries and this stays empty, the office login being used is not on the
+              staff list — add it under Roles and it will fill.
             </p>
           </div>
         ) : rows.length === 0 ? (
