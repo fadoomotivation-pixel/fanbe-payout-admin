@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
 import { computeWithdrawal, loadPayoutConfig, loadBrokerWallets, type PayoutConfig, type BrokerWallet } from '@/lib/payoutEngine'
 import { formatINR } from '@/lib/utils'
+import { Secret } from '@/lib/privacy'
 import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
 import { logClosure, getCurrentUserId } from '@/lib/closure'
 import { ClosureDialog } from '@/components/ClosureDialog'
@@ -433,10 +434,10 @@ export default function Withdrawals() {
                           <button key={b.id} onClick={() => setCreateBrokerId(b.id)} className="w-full px-3 py-2 text-left hover:bg-emerald-50/60 flex items-center justify-between">
                             <div>
                               <div className="text-sm font-medium text-gray-900">{b.name}</div>
-                              <div className="text-[10px] font-mono text-gray-500">[{b.broker_id}] · {b.phone || '—'}{b.kyc_status !== 'approved' ? ` · KYC ${b.kyc_status || 'pending'}` : ''}</div>
+                              <div className="text-[10px] font-mono text-gray-500">[{b.broker_id}] · <Secret>{b.phone || '—'}</Secret>{b.kyc_status !== 'approved' ? ` · KYC ${b.kyc_status || 'pending'}` : ''}</div>
                             </div>
                             <div className="text-right">
-                              <div className="text-xs font-semibold text-emerald-700">₹{avail.toLocaleString()}</div>
+                              <div className="text-xs font-semibold text-emerald-700"><Secret>{`₹${avail.toLocaleString()}`}</Secret></div>
                               <div className="text-[10px] text-gray-400">available</div>
                             </div>
                           </button>
@@ -448,7 +449,7 @@ export default function Withdrawals() {
                   <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-3 flex items-start justify-between">
                     <div>
                       <div className="text-sm font-semibold text-gray-900">{selectedBroker.name}</div>
-                      <div className="text-[10px] font-mono text-gray-500">[{selectedBroker.broker_id}] · {selectedBroker.phone || '—'}</div>
+                      <div className="text-[10px] font-mono text-gray-500">[{selectedBroker.broker_id}] · <Secret>{selectedBroker.phone || '—'}</Secret></div>
                       {selectedBroker.kyc_status !== 'approved' && (
                         <div className="text-[11px] text-amber-800 mt-1 inline-flex items-center gap-1"><AlertCircle size={11}/>KYC {selectedBroker.kyc_status || 'pending'} — payout will hold until approved</div>
                       )}
@@ -461,10 +462,10 @@ export default function Withdrawals() {
               {/* Wallet snapshot */}
               {selectedBroker && wallet && (
                 <div className={`grid gap-2 ${wallet.advance > 0 ? 'grid-cols-4' : 'grid-cols-3'}`}>
-                  <Mini label="Earned"   value={`₹${wallet.earned.toLocaleString()}`} accent="text-emerald-700"/>
-                  <Mini label="Paid out" value={`₹${wallet.paid.toLocaleString()}`}   accent="text-rose-700"/>
-                  {wallet.advance > 0 && <Mini label="Advance" value={`₹${wallet.advance.toLocaleString()}`} accent="text-amber-700"/>}
-                  <Mini label="Available" value={`₹${available.toLocaleString()}`}    accent="text-indigo-700" highlight/>
+                  <Mini label="Earned"   value={<Secret>{`₹${wallet.earned.toLocaleString()}`}</Secret>} accent="text-emerald-700"/>
+                  <Mini label="Paid out" value={<Secret>{`₹${wallet.paid.toLocaleString()}`}</Secret>}   accent="text-rose-700"/>
+                  {wallet.advance > 0 && <Mini label="Advance" value={<Secret>{`₹${wallet.advance.toLocaleString()}`}</Secret>} accent="text-amber-700"/>}
+                  <Mini label="Available" value={<Secret>{`₹${available.toLocaleString()}`}</Secret>}    accent="text-indigo-700" highlight/>
                 </div>
               )}
 

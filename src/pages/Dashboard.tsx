@@ -11,6 +11,7 @@ import { fetchEmiStatusAll } from '@/lib/emiStatus'
 // figure on this page read zero.  Any lucide icon whose name matches a JS global (Map,
 // Image, Text, Table, History, ...) must be aliased like this.
 import { Users, Briefcase, CalendarClock, ShieldAlert, ArrowRight, Building2, Map as MapIcon, FileText, TrendingUp, TrendingDown, Award, Plus, UserPlus, CreditCard, Banknote, Activity } from 'lucide-react'
+import { Secret } from '@/lib/privacy'
 
 // One Dashboard.  The old Dashboard.jsx that lived alongside this file was being picked
 // up by Vite's resolver and rendered instead — every monetary tile read ₹0 because its
@@ -597,7 +598,7 @@ export default function Dashboard() {
               </div>
               <div className="mt-2 pt-2 border-t border-amber-200">
                 <div className="text-[10px] uppercase tracking-wide text-amber-700 font-medium">Earned this month</div>
-                <div className="text-xl font-bold text-amber-900">{formatINR(topBroker.earned)}</div>
+                <div className="text-xl font-bold text-amber-900"><Secret>{formatINR(topBroker.earned)}</Secret></div>
               </div>
             </Link>
           ) : (

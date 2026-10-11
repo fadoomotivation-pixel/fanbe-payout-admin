@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { Gift, ChevronDown, ChevronRight, CheckCircle, Clock, XCircle, Info, ArrowUpRight } from 'lucide-react';
+import { Secret } from '@/lib/privacy'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -319,7 +320,7 @@ export default function TeamRewards() {
                       <td className="px-4 py-3">
                         <Link to={`/broker/dashboard?broker_id=${s.broker.id}`} className="hover:text-blue-700 inline-block">
                           <p className="font-medium text-gray-800 inline-flex items-center gap-1">{s.broker.name}<ArrowUpRight size={10} className="text-gray-400"/></p>
-                          <p className="text-xs text-gray-400">{s.broker.phone}{s.broker.direct_count > 0 ? ` · ${s.broker.direct_count} direct` : ''}</p>
+                          <p className="text-xs text-gray-400"><Secret>{s.broker.phone}</Secret>{s.broker.direct_count > 0 ? ` · ${s.broker.direct_count} direct` : ''}</p>
                         </Link>
                       </td>
                       {/* Raw business */}
