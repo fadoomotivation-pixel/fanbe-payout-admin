@@ -15,6 +15,7 @@ import { fetchOverdueEmi, type OverdueEmiRow } from '@/lib/emiStatus'
 import { waLink } from '@/lib/whatsapp'
 import { AlertTriangle, Phone, MessageCircle, Search, Download, Clock } from 'lucide-react'
 import { downloadCsv } from '@/lib/download'
+import { Secret } from '@/lib/privacy'
 
 type Band = 'all' | '0_30' | '31_90' | '90_plus'
 
@@ -175,7 +176,7 @@ export default function EmiOverdue() {
                     <div className="text-[11px] text-gray-400">since {formatDate(r.oldest_due)}</div>
                   </td>
                   <td className="px-4 py-2.5 tabular-nums">{r.instalments_overdue}</td>
-                  <td className="px-4 py-2.5 tabular-nums font-semibold text-red-700">{formatINR(r.amount_overdue)}</td>
+                  <td className="px-4 py-2.5 tabular-nums font-semibold text-red-700"><Secret>{formatINR(r.amount_overdue)}</Secret></td>
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-1.5">
                       {r.phone && (

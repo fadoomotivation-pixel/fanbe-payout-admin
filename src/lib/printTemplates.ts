@@ -1,3 +1,6 @@
+import toast from 'react-hot-toast'
+import { isPrivacyLocked } from '@/lib/privacyState'
+
 import { formatINR } from './utils'
 import { supabase } from './supabase'
 import { fetchEmiStatus } from './emiStatus'
@@ -416,6 +419,18 @@ ${FORM_CSS}
   if (w) { w.document.write(html); w.document.close() }
 }
 
+/**
+ * Printing a list is an export with extra steps: the paper walks out of the building
+ * just as easily as a spreadsheet. So the bulk templates ask for the PIN, while the
+ * single-record ones - one application form, one voucher, one customer's statement -
+ * keep working, because that is the job with the customer standing at the desk.
+ */
+function blockedWhileHidden(what: string): boolean {
+  if (!isPrivacyLocked()) return false
+  toast.error(`Numbers are hidden. Enter the PIN to print ${what}.`)
+  return true
+}
+
 export function printApplicationForm(b: any, ctx: { customer?: any; project?: any; plot?: any; broker?: any; payments?: any[] } = {}) {
   openApplicationForms([{ b, ctx }], `Application Form \u2014 ${b.booking_no || ''}`)
 }
@@ -423,6 +438,7 @@ export function printApplicationForm(b: any, ctx: { customer?: any; project?: an
 // Bulk: one window, one print dialog, one form per sheet.  Printing them one at a time
 // meant a popup and a dialog per booking, which the browser blocks after the first few.
 export function printApplicationForms(items: { b: any; ctx?: any }[]) {
+  if (items.length > 1 && blockedWhileHidden("a batch of forms")) return
   openApplicationForms(items, `Application Forms \u2014 ${items.length}`)
 }
 
@@ -641,6 +657,7 @@ export type RegisterRow = {
 }
 
 export function printPipelineRegister(rows: RegisterRow[], meta: { title: string; filters: string[] }) {
+  if (blockedWhileHidden("the register")) return
   if (rows.length === 0) return
   // An old record's balance is only its price — kept out of the Balance total and counted
   // on its own line, the same way the pipeline's "to collect" figure treats it.
@@ -745,6 +762,7 @@ const STATE_LABEL: Record<string, string> = { paid: 'Paid', overdue: 'Late', par
 const FREQ_LABEL: Record<string, string> = { monthly: 'Monthly', quarterly: 'Quarterly', half_yearly: 'Half-yearly', annual: 'Yearly', annually: 'Yearly' }
 
 export function printEmiCards(items: EmiCardItem[]) {
+  if (items.length > 1 && blockedWhileHidden("a batch of EMI cards")) return
   if (items.length === 0) return
   const sheets = items.map(it => {
     const { schedule: s, rows, status: st } = it.detail
@@ -979,6 +997,7 @@ export function printCustomerStatement(s: StatementData) {
 
 // A plain titled table — for reports that are a list of rows with a total line.
 export function printSimpleTable(meta: { title: string; filters: string[]; note?: string }, headers: string[], rows: (string | number)[][], totals?: (string | number)[], numericFrom = 1) {
+  if (blockedWhileHidden("this report")) return
   if (rows.length === 0) return
   const cellHtml = (v: string | number, i: number, tag: 'td' | 'th') =>
     `<${tag} class="${i >= numericFrom ? 'r' : ''}">${esc(v)}</${tag}>`

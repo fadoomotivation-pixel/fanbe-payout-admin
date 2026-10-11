@@ -22,6 +22,7 @@ import EmiPanel from '@/components/EmiPanel'
 import { Users, Search, Filter, ChevronRight, Banknote, Calculator, ArrowUpRight, CheckCircle2, AlertTriangle, Coins, Phone, MessageCircle, IndianRupee, X, ExternalLink, FileText, Printer, Pencil, Landmark, ScrollText, CalendarClock, Trash2, SlidersHorizontal, Download, ListOrdered, Hourglass, Tag } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { downloadCsv } from '@/lib/download'
+import { Secret, SecretMoney } from '@/lib/privacy'
 
 // 'today' and 'all' plus one tab per bucket from lib/pipelineIndex — every booking sits in
 // exactly one bucket, so the bucket tiles add up to "All".
@@ -1188,7 +1189,7 @@ export default function CustomerPipeline() {
                 <span className="text-[10px] uppercase tracking-wide font-semibold bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">Customer view</span>
               </div>
               <div className="text-xs text-gray-600 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
-                {customerFocus.customer.phone && <span>📞 {customerFocus.customer.phone}</span>}
+                {customerFocus.customer.phone && <span>📞 <Secret>{customerFocus.customer.phone}</Secret></span>}
                 {customerFocus.customer.email && <span>✉️ {customerFocus.customer.email}</span>}
                 {customerFocus.customer.pan && <span>PAN: <span className="font-mono">{customerFocus.customer.pan}</span></span>}
                 {customerFocus.customer.father_or_husband_name && <span>S/o {customerFocus.customer.father_or_husband_name}</span>}
@@ -1665,7 +1666,7 @@ export default function CustomerPipeline() {
                 {cust?.phone && (
                   <a href={`tel:${cust.phone}`} onClick={e => e.stopPropagation()}
                     className="inline-flex items-center gap-1 text-gray-600 hover:text-blue-700 font-medium">
-                    <Phone size={11}/>{cust.phone}
+                    <Phone size={11}/><Secret>{cust.phone}</Secret>
                   </a>
                 )}
                 {r.pm.last_utr && (
@@ -1860,7 +1861,7 @@ export default function CustomerPipeline() {
                     {cust?.phone && (
                       <>
                         <a href={`tel:${cust.phone}`} className="inline-flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-full border border-gray-200 text-gray-700 hover:bg-gray-50">
-                          <Phone size={12}/>{cust.phone}
+                          <Phone size={12}/><Secret>{cust.phone}</Secret>
                         </a>
                         <a href={`https://wa.me/${String(cust.phone).replace(/[^\d]/g,'')}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-full border border-gray-200 text-gray-700 hover:bg-gray-50">
                           <MessageCircle size={12}/>WhatsApp
@@ -2365,8 +2366,8 @@ function CustomerStat({ label, value, sub, tone = 'gray' }: { label: string; val
   return (
     <div className="bg-white/70 backdrop-blur-sm rounded-lg border border-blue-100 px-3 py-2">
       <div className="text-[10px] uppercase tracking-wide text-gray-500 font-medium">{label}</div>
-      <div className={`text-base font-bold tabular-nums ${tones[tone]}`}>{value}</div>
-      {sub && <div className="text-[10px] text-gray-400 mt-0.5">{sub}</div>}
+      <div className={`text-base font-bold tabular-nums ${tones[tone]}`}><SecretMoney>{value}</SecretMoney></div>
+      {sub && <div className="text-[10px] text-gray-400 mt-0.5"><SecretMoney>{sub}</SecretMoney></div>}
     </div>
   )
 }
@@ -2389,8 +2390,8 @@ function TabTile({ active, onClick, label, value, sub, tint }: any) {
         <span className={`w-1.5 h-1.5 rounded-full ${dotColor[tint] || 'bg-gray-400'}`}/>
         <span className="text-[11px] uppercase tracking-wider text-gray-500">{label}</span>
       </div>
-      <div className="text-2xl font-bold text-gray-900 tabular-nums">{value}</div>
-      {sub && <div className="text-[11px] text-gray-400 mt-0.5">{sub}</div>}
+      <div className="text-2xl font-bold text-gray-900 tabular-nums"><SecretMoney>{value}</SecretMoney></div>
+      {sub && <div className="text-[11px] text-gray-400 mt-0.5"><SecretMoney>{sub}</SecretMoney></div>}
     </button>
   )
 }
@@ -2424,8 +2425,8 @@ function DetailRow({ icon, label, value, sub, tone = 'gray', onClick }: any) {
       <span className="text-gray-500 shrink-0">{label}</span>
       <span className="mx-1 flex-1 border-b border-dotted border-gray-200 self-end mb-1"/>
       <div className="text-right shrink-0">
-        <div className={`font-medium ${TONE[tone] || 'text-gray-900'}`}>{value}</div>
-        {sub && <div className="text-[11px] text-gray-400">{sub}</div>}
+        <div className={`font-medium ${TONE[tone] || 'text-gray-900'}`}><SecretMoney>{value}</SecretMoney></div>
+        {sub && <div className="text-[11px] text-gray-400"><SecretMoney>{sub}</SecretMoney></div>}
       </div>
     </div>
   )
@@ -2565,7 +2566,7 @@ function Leader({ label, value, accent }: any) {
     <div className="flex items-baseline gap-2">
       <span className="text-gray-500">{label}</span>
       <span className="mx-1 flex-1 border-b border-dotted border-gray-200 self-end mb-1"/>
-      <span className={`font-semibold tabular-nums ${accent || 'text-gray-900'}`}>{value}</span>
+      <span className={`font-semibold tabular-nums ${accent || 'text-gray-900'}`}><SecretMoney>{value}</SecretMoney></span>
     </div>
   )
 }

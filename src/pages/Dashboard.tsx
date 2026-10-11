@@ -11,7 +11,7 @@ import { fetchEmiStatusAll } from '@/lib/emiStatus'
 // figure on this page read zero.  Any lucide icon whose name matches a JS global (Map,
 // Image, Text, Table, History, ...) must be aliased like this.
 import { Users, Briefcase, CalendarClock, ShieldAlert, ArrowRight, Building2, Map as MapIcon, FileText, TrendingUp, TrendingDown, Award, Plus, UserPlus, CreditCard, Banknote, Activity } from 'lucide-react'
-import { Secret } from '@/lib/privacy'
+import { Secret, SecretMoney } from '@/lib/privacy'
 
 // One Dashboard.  The old Dashboard.jsx that lived alongside this file was being picked
 // up by Vite's resolver and rendered instead — every monetary tile read ₹0 because its
@@ -660,7 +660,7 @@ export default function Dashboard() {
         <MiniTable title={`New Customers This Month (${newCustomers.length})`} rows={newCustomers} emptyMsg="No new customers this month"
           cols={[
             { label: 'Name', render: (r: any) => <span className="text-gray-800">{r.name}</span> },
-            { label: 'Phone', render: (r: any) => <span className="text-gray-600">{r.phone || '—'}</span> },
+            { label: 'Phone', render: (r: any) => <span className="text-gray-600"><Secret>{r.phone || '—'}</Secret></span> },
             { label: 'Added', render: (r: any) => <span className="text-gray-400 text-xs">{formatDate(r.created_at)}</span> },
           ]}/>
       </div>
@@ -750,8 +750,8 @@ function FollowUp({ icon, label, value, sub, href, active, tone }: any) {
       <div className={`flex items-center gap-1.5 text-[11px] uppercase tracking-wide font-medium ${active ? t.text : 'text-gray-500'}`}>
         {icon}{label}
       </div>
-      <div className={`text-xl font-bold mt-0.5 ${active ? t.text : 'text-gray-400'} tabular-nums`}>{value}</div>
-      {sub && <div className={`text-[11px] mt-0.5 ${active ? t.text + ' opacity-80' : 'text-gray-400'}`}>{sub}</div>}
+      <div className={`text-xl font-bold mt-0.5 ${active ? t.text : 'text-gray-400'} tabular-nums`}><SecretMoney>{value}</SecretMoney></div>
+      {sub && <div className={`text-[11px] mt-0.5 ${active ? t.text + ' opacity-80' : 'text-gray-400'}`}><SecretMoney>{sub}</SecretMoney></div>}
     </div>
   )
   return href ? <Link to={href}>{inner}</Link> : inner
@@ -761,8 +761,8 @@ function PayTile({ label, value, sub, color = 'text-gray-900' }: any) {
   return (
     <div className="rounded-lg bg-gray-50 border border-gray-100 p-3">
       <div className="text-[11px] text-gray-500 uppercase tracking-wide">{label}</div>
-      <div className={`font-bold text-lg ${color}`}>{value}</div>
-      {sub && <div className="text-[11px] text-gray-400 mt-0.5">{sub}</div>}
+      <div className={`font-bold text-lg ${color}`}><SecretMoney>{value}</SecretMoney></div>
+      {sub && <div className="text-[11px] text-gray-400 mt-0.5"><SecretMoney>{sub}</SecretMoney></div>}
     </div>
   )
 }

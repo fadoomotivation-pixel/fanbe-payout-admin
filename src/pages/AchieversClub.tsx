@@ -291,7 +291,7 @@ export default function AchieversClub() {
                           </div>
                           <div>
                             <p className="font-medium text-gray-800 inline-flex items-center gap-1">{a.broker_name}<ArrowUpRight size={10} className="text-gray-400"/></p>
-                            <p className="text-xs text-gray-400">[{a.broker_code}]{a.phone ? ` · ${a.phone}` : ''}</p>
+                            <p className="text-xs text-gray-400">[{a.broker_code}]{a.phone ? <> · <Secret>{a.phone}</Secret></> : ''}</p>
                           </div>
                         </Link>
                       </td>

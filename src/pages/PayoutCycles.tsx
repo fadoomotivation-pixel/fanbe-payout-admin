@@ -11,6 +11,7 @@ import { logClosure, getCurrentUserId } from '@/lib/closure'
 import { ClosureDialog } from '@/components/ClosureDialog'
 import { CalendarRange, Lock, Unlock, TrendingUp, Users, IndianRupee, Banknote, ChevronRight, ExternalLink } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { SecretMoney } from '@/lib/privacy'
 
 const round2 = (n: number) => Math.round(n * 100) / 100
 
@@ -570,7 +571,7 @@ function Leader({ label, value, accent = 'text-gray-900' }: { label: string; val
   return (
     <div>
       <div className="text-[10px] text-gray-500 uppercase tracking-wider">{label}</div>
-      <div className={`text-base font-bold tabular-nums ${accent}`}>{value}</div>
+      <div className={`text-base font-bold tabular-nums ${accent}`}><SecretMoney>{value}</SecretMoney></div>
     </div>
   )
 }
@@ -579,7 +580,7 @@ function Stat({ icon, label, value, accent = 'text-gray-900' }: any) {
   return (
     <div className="bg-white rounded-xl border border-indigo-100 px-3 py-2.5">
       <div className="flex items-center gap-1.5 text-gray-500 text-[11px] mb-0.5">{icon}<span className="truncate">{label}</span></div>
-      <div className={`font-bold text-sm ${accent}`}>{value}</div>
+      <div className={`font-bold text-sm ${accent}`}><SecretMoney>{value}</SecretMoney></div>
     </div>
   )
 }

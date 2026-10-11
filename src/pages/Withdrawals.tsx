@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
 import { computeWithdrawal, loadPayoutConfig, loadBrokerWallets, type PayoutConfig, type BrokerWallet } from '@/lib/payoutEngine'
 import { formatINR } from '@/lib/utils'
-import { Secret } from '@/lib/privacy'
+import { Secret, SecretMoney } from '@/lib/privacy'
 import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
 import { logClosure, getCurrentUserId } from '@/lib/closure'
 import { ClosureDialog } from '@/components/ClosureDialog'
@@ -546,7 +546,7 @@ function Mini({ label, value, accent, highlight }: any) {
   return (
     <div className={`rounded-lg border p-2 ${highlight ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-gray-200'}`}>
       <div className="text-[10px] text-gray-500">{label}</div>
-      <div className={`text-sm font-bold ${accent}`}>{value}</div>
+      <div className={`text-sm font-bold ${accent}`}><SecretMoney>{value}</SecretMoney></div>
     </div>
   )
 }

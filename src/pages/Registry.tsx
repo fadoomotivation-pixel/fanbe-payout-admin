@@ -28,6 +28,7 @@ import { waLink } from '@/lib/whatsapp'
 import { ScrollText, Search, Download, X, CheckCircle2, Clock, AlertTriangle, MessageCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { downloadCsv } from '@/lib/download'
+import { Secret } from '@/lib/privacy'
 
 type Tab = 'ready' | 'waiting' | 'done' | 'all'
 
@@ -325,16 +326,16 @@ export default function Registry() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="text-gray-900">{r.bp_customers?.name || '—'}</div>
-                    <div className="text-xs text-gray-400">{r.bp_customers?.phone || '—'}</div>
+                    <div className="text-xs text-gray-400"><Secret>{r.bp_customers?.phone || '—'}</Secret></div>
                   </td>
                   <td className="px-4 py-3">
                     <div className="text-gray-900">{plotNosOf(r).join(', ') || '—'}</div>
                     <div className="text-xs text-gray-400">{r.bp_projects?.name || '—'}</div>
                   </td>
-                  <td className="px-4 py-3 tabular-nums text-gray-700 whitespace-nowrap">{formatINR(r.total)}</td>
+                  <td className="px-4 py-3 tabular-nums text-gray-700 whitespace-nowrap"><Secret>{formatINR(r.total)}</Secret></td>
                   <td className="px-4 py-3 tabular-nums whitespace-nowrap">
                     {r.balance > 0
-                      ? <span className="text-amber-700 font-semibold">{formatINR(r.balance)}</span>
+                      ? <span className="text-amber-700 font-semibold"><Secret>{formatINR(r.balance)}</Secret></span>
                       : <span className="text-emerald-700">Clear</span>}
                   </td>
                   <td className="px-4 py-3">

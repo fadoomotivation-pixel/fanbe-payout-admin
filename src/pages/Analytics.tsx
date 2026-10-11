@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { fetchEmiStatusAll } from '@/lib/emiStatus'
 import { formatINR } from '@/lib/utils'
+import { SecretMoney } from '@/lib/privacy'
 import {
   TrendingUp, TrendingDown, Coins, Wallet,
   Banknote, AlertCircle, Receipt, Activity, Award, Building2,
@@ -448,9 +449,9 @@ function KpiCard({ icon, label, value, sub, tone = 'gray', delta, deltaSub, href
         )}
       </div>
       <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide mt-2.5">{label}</p>
-      <p className={`text-xl font-bold mt-0.5 ${t.text}`}>{value}</p>
-      {sub && <p className="text-[11px] text-gray-400 mt-1">{sub}</p>}
-      {showDelta && deltaSub && <p className="text-[10px] text-gray-400 mt-0.5">{deltaSub}</p>}
+      <p className={`text-xl font-bold mt-0.5 ${t.text}`}><SecretMoney>{value}</SecretMoney></p>
+      {sub && <p className="text-[11px] text-gray-400 mt-1"><SecretMoney>{sub}</SecretMoney></p>}
+      {showDelta && deltaSub && <p className="text-[10px] text-gray-400 mt-0.5"><SecretMoney>{deltaSub}</SecretMoney></p>}
     </div>
   )
   return href ? <Link to={href}>{inner}</Link> : inner

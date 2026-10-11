@@ -29,7 +29,7 @@ import { fetchAllRows, todayLocalISO } from '@/lib/fetchAll'
 import { downloadCsv } from '@/lib/download'
 import { printSimpleTable } from '@/lib/printTemplates'
 import { waLink } from '@/lib/whatsapp'
-import { Secret } from '@/lib/privacy'
+import { Secret, SecretMoney } from '@/lib/privacy'
 import {
   Search, Users, AlertTriangle, XCircle, CheckCircle2, Wallet, TrendingUp, Hourglass,
   Phone, MessageCircle, Download, Printer, ChevronRight, ChevronDown, X, Building2, Banknote,
@@ -561,7 +561,7 @@ export default function AgentReport() {
                       <div className="text-[11px] text-gray-400 font-mono">{r.code}</div>
                     </div>
                     <div className="text-right shrink-0">
-                      <div className="font-bold tabular-nums">{formatINR(r.value)}</div>
+                      <div className="font-bold tabular-nums"><Secret>{formatINR(r.value)}</Secret></div>
                       <div className="text-[11px] text-gray-500">{r.bookings ? `${r.bookings} booking${r.bookings === 1 ? '' : 's'}${r.sqyd ? ` · ${r.sqyd.toLocaleString('en-IN')} sq yd` : ''}` : 'no sale'}</div>
                     </div>
                   </div>
@@ -610,8 +610,8 @@ export default function AgentReport() {
                       <td className="px-3 py-2.5 text-right tabular-nums">
                         {r.bookings || <span className="text-gray-300">0</span>}<div className="text-[11px] text-gray-400">{r.sqyd ? `${r.sqyd.toLocaleString('en-IN')} sq yd` : r.bookings ? `${r.customers} cust.` : 'no sale'}</div>
                       </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums font-semibold">{formatINR(r.value)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums text-emerald-700">{formatINR(r.paid)}<div className="text-[11px] text-gray-400">{pct(r.paid, r.value)}%</div></td>
+                      <td className="px-3 py-2.5 text-right tabular-nums font-semibold"><Secret>{formatINR(r.value)}</Secret></td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-emerald-700"><Secret>{formatINR(r.paid)}</Secret><div className="text-[11px] text-gray-400">{pct(r.paid, r.value)}%</div></td>
                       <td className="px-3 py-2.5 text-right tabular-nums">
                         {formatINR(r.balance)}
                         {r.unknown > 0 && <div className="text-[11px] text-orange-700" title="Old-register bookings whose paid-till-date is not entered">+{r.unknown} not entered</div>}
@@ -893,7 +893,7 @@ function CustomerList({ lines, projectName, showBroker, nameOf }: { lines: Booki
               {showBroker && nameOf && <span className="text-gray-600">{nameOf(l.broker_key)} · </span>}
               <span className="font-mono">{l.booking_no}</span>{l.plot_no ? ` · Plot ${l.plot_no}` : ''}
               {l.project_id ? ` · ${projectName[l.project_id] || ''}` : ''}{l.date ? ` · ${formatDate(l.date)}` : ''}
-              {l.phone ? ` · ${l.phone}` : ''}
+              {l.phone ? <> · <Secret>{l.phone}</Secret></> : ''}
             </div>
           </div>
           <div className="text-right tabular-nums w-28">
@@ -932,8 +932,8 @@ function Tile({ icon, label, value, sub, tone }: { icon: any; label: string; val
   return (
     <div className={`border rounded-xl p-3.5 ${TONES[tone] || TONES.gray}`}>
       <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide opacity-70">{icon}{label}</div>
-      <div className="text-lg font-bold mt-1 tabular-nums">{value}</div>
-      <div className="text-[11px] opacity-60 mt-0.5">{sub}</div>
+      <div className="text-lg font-bold mt-1 tabular-nums"><SecretMoney>{value}</SecretMoney></div>
+      <div className="text-[11px] opacity-60 mt-0.5"><SecretMoney>{sub}</SecretMoney></div>
     </div>
   )
 }
@@ -942,7 +942,7 @@ function Mini({ label, value, tone }: { label: string; value: string; tone: stri
   return (
     <div>
       <div className="text-[10px] uppercase tracking-wide text-gray-400">{label}</div>
-      <div className={`font-semibold tabular-nums ${tone}`}>{value}</div>
+      <div className={`font-semibold tabular-nums ${tone}`}><SecretMoney>{value}</SecretMoney></div>
     </div>
   )
 }
