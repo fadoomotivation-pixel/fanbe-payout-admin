@@ -5,7 +5,8 @@ import {
   UserCheck, Layers, MessageSquare, Megaphone, ShieldCheck, Receipt,
   Wallet, Calculator, TrendingUp, Landmark, Trophy, Star, Gift,
   ScrollText, CalendarRange, Inbox, UserPlus, History, Network,
-  Bell, Menu, X, Phone, ChevronRight as Chevron, AlertTriangle, UserSearch, BookMarked, DatabaseBackup
+  Bell, Menu, X, Phone, ChevronRight as Chevron, AlertTriangle, UserSearch, BookMarked, DatabaseBackup,
+  Globe
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
@@ -26,6 +27,9 @@ const NAV = [
     { to: '/collect',        icon: Phone,            label: 'Collection App' },
   ]},
   { group: 'Sales Pipeline', items: [
+    // Enquiries that came in from www.fanbegroup.com.  Read-only: the call-centre CRM
+    // owns the lead, this is the office's window onto what the website sent.
+    { to: '/fanbe-leads',     icon: Globe,    label: 'FANBE Leads' },
     { to: '/inquiries',       icon: Inbox,    label: 'Inquiries' },
     // Customer History was a customer-centric reader; that view now lives inside
     // /customer-pipeline?customer=X (the booking-centric hub got a customer-aggregate

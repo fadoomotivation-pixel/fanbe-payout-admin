@@ -23,6 +23,7 @@ import KYC from '@/pages/KYC'
 import Analytics from '@/pages/Analytics'
 import Reports from '@/pages/Reports'
 import Inquiries from '@/pages/Inquiries'
+import FanbeLeads from '@/pages/FanbeLeads'
 import Expenses from '@/pages/Expenses'
 import Withdrawals from '@/pages/Withdrawals'
 import Tickets from '@/pages/Tickets'
@@ -130,6 +131,7 @@ export default function App(){
         <Route path="/" element={isNativeApp() ? <Navigate to="/collect" replace/> : <Dashboard/>}/>
         <Route path="/analytics" element={<Analytics/>}/>
         <Route path="/inquiries" element={<Inquiries/>}/>
+        <Route path="/fanbe-leads" element={<FanbeLeads/>}/>
         <Route path="/projects" element={<Projects/>}/>
         <Route path="/plots" element={<Plots/>}/>
         {/* Customer History was folded into Customer Pipeline (which now shows a
