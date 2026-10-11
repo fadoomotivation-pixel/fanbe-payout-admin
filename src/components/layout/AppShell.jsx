@@ -11,6 +11,7 @@ import {
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
+import { PrivacyLockBar, PrivacyLockControl } from '@/components/PrivacyLock'
 
 // Five clean groups, no duplicate names. Mirrors the funnel:
 //   Pipeline → Real Estate → Broker Network → Commissions & Payouts → Programs
@@ -164,6 +165,7 @@ export default function AppShell() {
         </nav>
 
         <div className="sidebar-footer">
+          <PrivacyLockControl />
           <button
             onClick={logout}
             className="nav-item"
@@ -219,6 +221,7 @@ export default function AppShell() {
         </header>
 
         <main className="page-content">
+          <PrivacyLockBar />
           <Outlet />
         </main>
       </div>

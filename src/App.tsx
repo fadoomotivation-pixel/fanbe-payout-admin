@@ -31,6 +31,7 @@ import News from '@/pages/News'
 import NotFound from '@/pages/NotFound'
 import Maintenance from '@/pages/Maintenance'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { PrivacyProvider } from '@/lib/privacy'
 import Roles from '@/pages/Roles'
 import BankAccounts from '@/pages/BankAccounts'
 import CommissionRanks from '@/pages/CommissionRanks'
@@ -124,7 +125,7 @@ export default function App(){
       {/* The collection app is deliberately outside AppLayout — it has its own bottom-tab
           chrome and is used on a phone, not inside the admin sidebar. Same login. */}
       <Route path="/collect" element={<Guard><CollectionApp/></Guard>}/>
-      <Route element={<Guard><MaintenanceGate><AppLayout/></MaintenanceGate></Guard>}>
+      <Route element={<Guard><MaintenanceGate><PrivacyProvider><AppLayout/></PrivacyProvider></MaintenanceGate></Guard>}>
         {/* The packaged Android build opens on the collection app, not the admin
             dashboard. The APK is for the callers; the sidebar panel is for the office.
             In a browser this is untouched and "/" is still the Dashboard. */}

@@ -8,6 +8,7 @@ import { Input, Select } from '@/components/ui/Input.tsx'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { KYC_COLORS, formatINR } from '@/lib/utils'
+import { Secret } from '@/lib/privacy'
 import { Plus, Search, KeyRound, Copy, Check, Eye, UserPlus, X, ClipboardPaste } from 'lucide-react'
 import BrokerImportModal from '@/components/BrokerImportModal'
 import toast from 'react-hot-toast'
@@ -300,7 +301,8 @@ export default function Brokers() {
   const cols = [
     { header: 'Broker ID', render: (r: any) => <span className="font-mono text-xs bg-gray-100 px-2 py-0.5 rounded">{r.broker_id}</span> },
     { header: 'Name', render: (r: any) => <Link to={`/brokers/${r.id}`} className="font-medium text-blue-700 hover:underline">{r.name}</Link> },
-    { header: 'Phone', key: 'phone' },
+    // Blurred when the screen is idle: the phone list is how a broker network gets poached.
+    { header: 'Phone', render: (r: any) => r.phone ? <Secret>{r.phone}</Secret> : <span className="text-gray-300">—</span> },
     { header: 'Type', render: (r: any) => {
       const t = r.broker_type || 'mlm'
       // Bold pill so admin can scan the directory and spot which brokers are MLM
@@ -319,10 +321,10 @@ export default function Brokers() {
       const pending = Math.max(0, (e.promised || 0) - (e.total || 0))
       return (
         <div>
-          <div className="font-semibold text-green-700 text-sm">{formatINR(e.total)}</div>
+          <div className="font-semibold text-green-700 text-sm"><Secret>{formatINR(e.total)}</Secret></div>
           <div className="text-[10px] text-gray-400">
-            {e.ytd ? `YTD ${formatINR(e.ytd)} · ` : ''}{e.count} bk
-            {pending > 0 ? ` · +${formatINR(pending)} promised` : ''}
+            {e.ytd ? <>YTD <Secret>{formatINR(e.ytd)}</Secret> · </> : ''}{e.count} bk
+            {pending > 0 ? <> · +<Secret>{formatINR(pending)}</Secret> promised</> : ''}
           </div>
         </div>
       )
@@ -526,7 +528,7 @@ export default function Brokers() {
                 </div>
 
                 <div className="mt-2.5 flex flex-wrap gap-1.5 text-[11px]">
-                  {r.phone && <span className="bg-gray-50 border border-gray-100 rounded-full px-2 py-0.5 text-gray-700">📞 {r.phone}</span>}
+                  {r.phone && <span className="bg-gray-50 border border-gray-100 rounded-full px-2 py-0.5 text-gray-700">📞 <Secret>{r.phone}</Secret></span>}
                   {r.rank && <span className="bg-gray-50 border border-gray-100 rounded-full px-2 py-0.5 text-gray-700">{r.rank}{pct != null ? ` · ${pct}%` : ''}</span>}
                   <Badge label={r.kyc_status || 'pending'} className={`${KYC_COLORS[r.kyc_status] || 'bg-gray-100 text-gray-600'} text-[10px]`}/>
                   <Badge label={r.status} className={`${r.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'} text-[10px]`}/>
@@ -823,7 +825,7 @@ function SponsorPicker({ brokers, value, excludeId, onChange }: { brokers: any[]
         </div>
         <div className="flex-1 min-w-0">
           <div className="font-semibold text-sm text-gray-900 truncate">{selected.name}</div>
-          <div className="text-xs text-gray-500 truncate">[{selected.broker_id}] · {selected.rank || '—'} · {selected.phone || '—'}</div>
+          <div className="text-xs text-gray-500 truncate">[{selected.broker_id}] · {selected.rank || '—'} · <Secret>{selected.phone || '—'}</Secret></div>
         </div>
         <button
           type="button"
@@ -883,7 +885,7 @@ function SponsorPicker({ brokers, value, excludeId, onChange }: { brokers: any[]
               </div>
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-sm text-gray-900 truncate">{b.name} <span className="font-mono text-[10px] text-gray-400">[{b.broker_id}]</span></div>
-                <div className="text-[11px] text-gray-500 truncate">{b.rank || '—'} · {b.phone || '—'}</div>
+                <div className="text-[11px] text-gray-500 truncate">{b.rank || '—'} · <Secret>{b.phone || '—'}</Secret></div>
               </div>
             </button>
           ))}

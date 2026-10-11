@@ -10,6 +10,7 @@ import { signedDocUrl, isImagePath } from '@/lib/storage'
 import { Link } from 'react-router-dom'
 import { CheckCircle2, XCircle, User, FileText, Eye, Search, ShieldCheck, Clock, Ban, Folder, ChevronRight, ExternalLink } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { Secret } from '@/lib/privacy'
 
 const BROKER_STATUS_COLORS: Record<string, string> = {
   pending:  'bg-amber-50 text-amber-700 border border-amber-200',
@@ -233,7 +234,7 @@ export default function KYC() {
                     <div className="font-semibold text-gray-900 truncate">{b.name}</div>
                     <div className="text-xs text-gray-500 truncate">
                       <span className="font-mono">[{b.broker_id}]</span>
-                      {b.phone && <span> · {b.phone}</span>}
+                      {b.phone && <span> · <Secret>{b.phone}</Secret></span>}
                       {b.email && <span> · {b.email}</span>}
                     </div>
                   </div>

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { formatINR } from '@/lib/utils'
 import { Star, Award, Info, Trophy, ArrowUpRight } from 'lucide-react'
+import { Secret } from '@/lib/privacy'
 
 // Achievers Club previously joined a `broker_incomes` table that doesn't exist and read
 // `brokers.lifetime_business`, also nonexistent — every row showed ₹0 income with no
@@ -244,7 +245,7 @@ export default function AchieversClub() {
                     </div>
                     <p className="text-sm font-semibold text-gray-800 text-center w-28 truncate">{a.broker_name}</p>
                     <p className="text-xs mb-1" style={{ color: a.badge_color }}>{a.rank_name}</p>
-                    <p className="text-xs font-semibold text-gray-700 mb-2">{formatINR(a.total_income)}</p>
+                    <p className="text-xs font-semibold text-gray-700 mb-2"><Secret>{formatINR(a.total_income)}</Secret></p>
                     <div className={`w-24 ${podiumHeights[idx]} rounded-t-lg flex items-center justify-center text-white font-bold text-lg`}
                       style={{ backgroundColor: a.badge_color, opacity: 0.85 }}>
                       #{podiumPositions[idx]}
@@ -322,7 +323,7 @@ export default function AchieversClub() {
                         })()}
                       </td>
                       <td className="px-4 py-3 text-right tabular-nums text-teal-700 font-medium">
-                        {formatINR(a.total_income)}
+                        <Secret>{formatINR(a.total_income)}</Secret>
                       </td>
                       <td className="px-4 py-3 text-center">
                         {a.is_qualifying ? (

@@ -29,6 +29,7 @@ import { fetchAllRows, todayLocalISO } from '@/lib/fetchAll'
 import { downloadCsv } from '@/lib/download'
 import { printSimpleTable } from '@/lib/printTemplates'
 import { waLink } from '@/lib/whatsapp'
+import { Secret } from '@/lib/privacy'
 import {
   Search, Users, AlertTriangle, XCircle, CheckCircle2, Wallet, TrendingUp, Hourglass,
   Phone, MessageCircle, Download, Printer, ChevronRight, ChevronDown, X, Building2, Banknote,
@@ -620,7 +621,7 @@ export default function AgentReport() {
                         {r.late > 0 ? <><span className="text-rose-600 font-semibold">{formatINR(r.late)}</span><div className="text-[11px] text-gray-400">{r.lateBookings} booking{r.lateBookings === 1 ? '' : 's'}</div></> : <span className="text-gray-300">—</span>}
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums">{r.cancelled ? r.cancelled : <span className="text-gray-300">—</span>}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums">{r.earned > 0 ? formatINR(r.earned) : <span className="text-gray-300">—</span>}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums">{r.earned > 0 ? <Secret>{formatINR(r.earned)}</Secret> : <span className="text-gray-300">—</span>}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -637,7 +638,7 @@ export default function AgentReport() {
                     <h2 className="text-base font-bold text-gray-900">{opened.name}</h2>
                     <div className="text-xs text-gray-500 flex flex-wrap items-center gap-x-3 gap-y-1 mt-0.5">
                       <span className="font-mono">{opened.code}</span>
-                      {opened.phone && <a href={`tel:${opened.phone}`} className="inline-flex items-center gap-1 text-blue-700 hover:underline"><Phone size={11}/>{opened.phone}</a>}
+                      {opened.phone && <a href={`tel:${opened.phone}`} className="inline-flex items-center gap-1 text-blue-700 hover:underline"><Phone size={11}/><Secret>{opened.phone}</Secret></a>}
                       {wa && <a href={wa} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-emerald-700 hover:underline"><MessageCircle size={11}/>WhatsApp</a>}
                       {opened.key !== NONE && <Link to={`/brokers/${opened.key}`} className="inline-flex items-center gap-0.5 text-gray-600 hover:underline">Profile<ChevronRight size={11}/></Link>}
                       <Link to={`/customer-pipeline?broker=${opened.key}`} className="inline-flex items-center gap-0.5 text-gray-600 hover:underline">Open in Customer Pipeline<ChevronRight size={11}/></Link>

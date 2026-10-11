@@ -4,6 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { formatINR } from '@/lib/utils'
 import toast from 'react-hot-toast'
+import { Secret } from '@/lib/privacy'
 import {
   ChevronRight, ChevronDown, Search, Users, TrendingUp,
   ShieldCheck, AlertCircle, Phone, MessageCircle, Layers, GitBranch, User, UserPlus, Loader2,
@@ -559,7 +560,7 @@ function ListView({ roots, tree, collapsed, forceOpenIds, matchedIds, earnings, 
           )}
         </Link>
         <span className="text-[11px] text-gray-500 tabular-nums whitespace-nowrap">{subtreeSize > 0 ? `${subtreeSize} team` : 'no team'}</span>
-        <span className="text-[11px] font-medium text-emerald-700 tabular-nums whitespace-nowrap w-24 text-right">{earned > 0 ? formatINR(earned) : ''}</span>
+        <span className="text-[11px] font-medium text-emerald-700 tabular-nums whitespace-nowrap w-24 text-right">{earned > 0 ? <Secret>{formatINR(earned)}</Secret> : ''}</span>
       </div>
     )
     if (showChildren) for (const c of ch) rows.push(...renderRow(c, depth + 1))
@@ -607,7 +608,7 @@ function ByRankView({ brokers, earnings, matchedIds }: any) {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-gray-900 truncate">{b.name || '—'}</div>
-                    <div className="text-[10px] font-mono text-gray-400 truncate">[{b.broker_id || '—'}]{earned > 0 && ` · ${formatINR(earned)}`}</div>
+                    <div className="text-[10px] font-mono text-gray-400 truncate">[{b.broker_id || '—'}]{earned > 0 && <> · <Secret>{formatINR(earned)}</Secret></>}</div>
                   </div>
                 </Link>
               )
