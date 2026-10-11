@@ -18,7 +18,7 @@ import { downloadCsv } from '@/lib/download'
  *   - Per Broker: rollup (earned / approved / paid / owed) with expandable transactions + earnings ledger
  *   - Activity Log: flat chronological feed with running per-broker balance + CSV export (the old /commission page)
  * Data sources:
- *   - payout_distributions: per-payment MLM commission as customer pays (credits)
+ *   - payout_distributions: per-payment Affiliate Network commission as customer pays (credits)
  *   - bp_payout_transactions: cycle-generated broker payout requests (manageable)
  *   - withdrawal_requests: broker self-initiated payouts (debits when paid)
  */
@@ -671,7 +671,7 @@ export default function Payouts() {
                   <div>
                     <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Earnings ledger ({r.distributions.length} entries · {formatINR(r.earned)} net)</div>
                     {r.distributions.length === 0 ? (
-                      <div className="rounded-lg border border-dashed border-gray-300 bg-white py-4 text-center text-xs text-gray-400">No commissions earned yet. MLM distributions appear here as customers pay.</div>
+                      <div className="rounded-lg border border-dashed border-gray-300 bg-white py-4 text-center text-xs text-gray-400">No commissions earned yet. Affiliate Network distributions appear here as customers pay.</div>
                     ) : (
                       <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto max-h-80 overflow-y-auto">
                         <table className="w-full text-xs">

@@ -16,11 +16,11 @@ with post-dated cheques (**PDC**). When fully paid, the sale deed is registered 
 
 Plots are sold through **brokers (agents)**. Two completely separate sales channels:
 
-| | **MLM** | **Traditional** |
+| | **Affiliate Network** | **Traditional** |
 |---|---|---|
 | Who | Network brokers, codes `FNB0xxxx` | Independent agents, codes `TRxxx` |
 | Commission | % by the broker's **rank**, plus **differential** income to every upline | A fixed % (or ₹ per sq yd) agreed per booking; upline only if `traditional_pay_upline` |
-| Tree | `sponsor_id` tree of MLM brokers | Separate tree of traditional brokers — never mixed |
+| Tree | `sponsor_id` tree of Affiliate Network brokers | Separate tree of traditional brokers — never mixed |
 | Booking flag | `bp_bookings.commission_mode = 'mlm'` | `commission_mode = 'traditional'` |
 
 Commission is earned **per verified payment** — when the customer pays ₹1,00,000, the
@@ -104,7 +104,7 @@ brokers earn their % of ₹1,00,000 at that moment, not on the booking value.
   enter one opening payment via "Enter paid till date".
 
 ### Broker
-- `brokers` — `broker_id` (code, assigned by trigger `assign_broker_id`: `FNB0…` for MLM, `TR…` for
+- `brokers` — `broker_id` (code, assigned by trigger `assign_broker_id`: `FNB0…` for Affiliate Network, `TR…` for
   traditional), `name`, `phone`, `broker_type` (`mlm`/`traditional`), **`sponsor_id`** (upline),
   `rank`, `rank_locked`, `status`, `kyc_status`, `tds_applicable`, bank details, `auth_user_id`
   (Supabase login), `customer_id`.
@@ -112,18 +112,18 @@ brokers earn their % of ₹1,00,000 at that moment, not on the booking value.
 
 ### Broker tree
 - The tree is `brokers.sponsor_id` (parent). Rules enforced in the DB:
-  - `enforce_same_type_sponsor` — an MLM broker's sponsor must be MLM, traditional under traditional.
+  - `enforce_same_type_sponsor` — an Affiliate Network broker's sponsor must be Affiliate Network, traditional under traditional.
   - `enforce_no_sponsor_cycle` — no loops.
-  - `sync_tree_sponsor_with_booking_broker` — when a customer who is also a broker makes his first MLM
+  - `sync_tree_sponsor_with_booking_broker` — when a customer who is also a broker makes his first Affiliate Network
     booking, his tree sponsor follows that booking's broker.
 - UI: `src/pages/BrokerTree.tsx`. `sponsor_tree` table exists but is empty; walk `sponsor_id`.
 
-### Ranks (MLM)
+### Ranks (Affiliate Network)
 - `commission_ranks` — slab table: Executive 5% → Senior Executive 5.5% → Sales Officer 6% →
   Senior Sales Officer 6.5% → Team Manager 7% → Senior Team Manager 7.5% → Assistant Sales Manager 8%
   → Sales Manager 8.5% → … → President 12% (`commission_pct`, `level`, qualification by team sq yd
   or by number of sub-ranks).
-- `recompute_broker_ranks()` (DB, runs from a statement trigger on `bp_bookings`) promotes MLM brokers
+- `recompute_broker_ranks()` (DB, runs from a statement trigger on `bp_bookings`) promotes Affiliate Network brokers
   by team business; it only promotes, never demotes, and skips `rank_locked` brokers.
 
 ---
@@ -148,7 +148,7 @@ What it does for one booking:
      `amount × their %` (`income_type = 'traditional_split'`). No upline.
    - **Traditional single broker**: direct % = `traditional_commission_pct`, or
      `per_sqyd × size_sqyd / value × 100`. Row `traditional_direct`. Upline only if `traditional_pay_upline`.
-   - **MLM**: direct % = the selling broker's rank `commission_pct` (row `direct`). Then walk up
+   - **Affiliate Network**: direct % = the selling broker's rank `commission_pct` (row `direct`). Then walk up
      `sponsor_id` (max 15 levels, stop at a type boundary): each upline earns the **differential**
      `their rank % − highest % below them` if positive (row `differential`).
 3. Every row: `gross = amount × % `, `tds = gross × tds_pct`, `admin = gross × admin_charge_pct`,
@@ -288,7 +288,7 @@ Other programs: `AchieversClub.tsx`, `TeamRewards.tsx` (team reward tiers), `Com
 ```
 You are working on the Fanbe Payout CRM (React + Vite + TypeScript + Supabase).
 First read docs/PAYOUT_CRM_GUIDE.md completely — it explains the business (plots sold on EMI
-through MLM and traditional brokers), the data model (projects, plots, customers, bookings,
+through Affiliate Network and traditional brokers), the data model (projects, plots, customers, bookings,
 payments, EMI, PDC, brokers, sponsor tree, ranks, commission, payouts) and the money rules.
 
 Bug to fix: <describe what is wrong, on which page, with an example booking/broker if you have one>

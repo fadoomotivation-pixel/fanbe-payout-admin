@@ -121,7 +121,7 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
    *  - covers an installment fully → status='paid', paid_amount=amount
    *  - covers part of an installment → status='partial', paid_amount cumulative
    *  - excess after last installment → stored as advance (recorded but unallocated)
-   * Inserts ONE bp_payments row for the actual amount, plus per-payment MLM distribution.
+   * Inserts ONE bp_payments row for the actual amount, plus per-payment Affiliate Network distribution.
    */
   const applyPayment = async ({
     amount, mode = 'cash', date = todayLocalISO(),
@@ -214,7 +214,7 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
       toast.error(`Receipt #${receipt_no} saved, but kist ${failed.join(', ')} could not be updated. Re-open this booking and tick them, or tell the office.`, { duration: 12000 })
     }
 
-    // Per-payment MLM distribution
+    // Per-payment Affiliate Network distribution
     const rows = await distributePaymentCommission({
       bookingId: booking.id,
       paymentId: payment.id,
@@ -227,13 +227,13 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
     qc.invalidateQueries({ queryKey: ['payouts'] })
 
     if (closes > 0 && advance > 0) {
-      toast.success(`Receipt #${receipt_no} · ${closes} instalment${closes !== 1 ? 's' : ''} closed · ${formatINR(advance)} advance${rows.length ? ` · MLM × ${rows.length}` : ''} · printing`)
+      toast.success(`Receipt #${receipt_no} · ${closes} instalment${closes !== 1 ? 's' : ''} closed · ${formatINR(advance)} advance${rows.length ? ` · Affiliate Network × ${rows.length}` : ''} · printing`)
     } else if (closes > 0) {
-      toast.success(`Receipt #${receipt_no} · ${closes} instalment${closes !== 1 ? 's' : ''} closed${rows.length ? ` · MLM × ${rows.length}` : ''} · printing`)
+      toast.success(`Receipt #${receipt_no} · ${closes} instalment${closes !== 1 ? 's' : ''} closed${rows.length ? ` · Affiliate Network × ${rows.length}` : ''} · printing`)
     } else if (allocations.length > 0) {
-      toast.success(`Receipt #${receipt_no} · partial payment recorded${rows.length ? ` · MLM × ${rows.length}` : ''} · printing`)
+      toast.success(`Receipt #${receipt_no} · partial payment recorded${rows.length ? ` · Affiliate Network × ${rows.length}` : ''} · printing`)
     } else {
-      toast.success(`Receipt #${receipt_no} · ${formatINR(advance)} advance${rows.length ? ` · MLM × ${rows.length}` : ''} · printing`)
+      toast.success(`Receipt #${receipt_no} · ${formatINR(advance)} advance${rows.length ? ` · Affiliate Network × ${rows.length}` : ''} · printing`)
     }
 
     // Print A4 customer + office receipt
@@ -462,7 +462,7 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
 
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="secondary" onClick={() => setPayOpen(false)}>Cancel</Button>
-              <Button onClick={submitPay} disabled={!Number(payForm.amount) || payBusy} loading={payBusy}>Record &amp; distribute MLM</Button>
+              <Button onClick={submitPay} disabled={!Number(payForm.amount) || payBusy} loading={payBusy}>Record &amp; distribute commission</Button>
             </div>
           </div>
         </div>

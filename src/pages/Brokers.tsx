@@ -18,7 +18,7 @@ const EMPTY = {
   // broker_type splits the directory in two buckets so admin can't accidentally credit
   // a tree-broker on a traditional sale (or vice versa).
   // - 'mlm'         : sits in the sponsor tree, earns via the differential cascade
-  // - 'traditional' : standalone broker used only for non-MLM sales
+  // - 'traditional' : standalone broker used only for sales outside the Affiliate Network
   broker_type:'mlm',
   tds_applicable:false, pan_no:'', gst_no:'',
   sponsor_id:'', date_of_joining:'',
@@ -80,7 +80,7 @@ export default function Brokers() {
   const { data: earningsByBroker = {} } = useQuery({
     queryKey: ['broker_earnings'],
     queryFn: async () => {
-      // EARNED = actually-distributed MLM commission (direct + upline differential), per payout_distributions.
+      // EARNED = actually-distributed Affiliate Network commission (direct + upline differential), per payout_distributions.
       // This is the single source of truth used across the app — NOT bookings.commission_amount (which is only
       // the promised direct commission and ignores both collection progress and upline income).
       const [{ data: dist }, { data: promised }] = await Promise.all([
@@ -305,11 +305,11 @@ export default function Brokers() {
     { header: 'Phone', render: (r: any) => r.phone ? <Secret>{r.phone}</Secret> : <span className="text-gray-300">—</span> },
     { header: 'Type', render: (r: any) => {
       const t = r.broker_type || 'mlm'
-      // Bold pill so admin can scan the directory and spot which brokers are MLM
+      // Bold pill so admin can scan the directory and spot which brokers are Affiliate Network
       // (sponsor-tree, differential cascade) vs traditional (standalone, no cascade).
       return t === 'traditional'
         ? <Badge label="Traditional" className="bg-amber-100 text-amber-800 border border-amber-200"/>
-        : <Badge label="MLM" className="bg-blue-100 text-blue-800 border border-blue-200"/>
+        : <Badge label="Affiliate" className="bg-blue-100 text-blue-800 border border-blue-200"/>
     }},
     { header: 'Rank', render: (r: any) => {
       const pct = rankPctFor(r.rank)
@@ -476,7 +476,7 @@ export default function Brokers() {
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
         <div className="p-4 border-b border-gray-100 flex gap-3 items-center flex-wrap">
           <div className="relative w-full md:flex-1 md:max-w-xs"><Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" /><input value={q} onChange={e => setQ(e.target.value)} placeholder="Search brokers…" className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" /></div>
-          {/* Type chips so admin can scope the list to MLM brokers vs traditional brokers
+          {/* Type chips so admin can scope the list to Affiliate Network brokers vs traditional brokers
               without scrolling.  Counts are computed off the unfiltered list. */}
           <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden text-xs">
             <button
@@ -486,7 +486,7 @@ export default function Brokers() {
             <button
               onClick={() => setTypeFilter('mlm')}
               className={`px-3 py-1.5 border-l border-gray-200 ${typeFilter === 'mlm' ? 'bg-blue-600 text-white' : 'bg-white text-blue-700 hover:bg-blue-50'}`}
-            >MLM ({mlmCount})</button>
+            >Affiliate ({mlmCount})</button>
             <button
               onClick={() => setTypeFilter('traditional')}
               className={`px-3 py-1.5 border-l border-gray-200 ${typeFilter === 'traditional' ? 'bg-amber-600 text-white' : 'bg-white text-amber-700 hover:bg-amber-50'}`}
@@ -520,7 +520,7 @@ export default function Brokers() {
                     <div className="text-[11px] text-gray-500 font-mono">{r.broker_id || '—'}</div>
                   </div>
                   <Badge
-                    label={t === 'traditional' ? 'Traditional' : 'MLM'}
+                    label={t === 'traditional' ? 'Traditional' : 'Affiliate'}
                     className={t === 'traditional'
                       ? 'bg-amber-100 text-amber-800 border border-amber-200 shrink-0'
                       : 'bg-blue-100 text-blue-800 border border-blue-200 shrink-0'}
@@ -590,7 +590,7 @@ export default function Brokers() {
               onClick={() => setForm((p: any) => ({ ...p, broker_type: 'mlm', sponsor_id: (allBrokers.find((b: any) => b.id === p.sponsor_id && (b.broker_type || 'mlm') === 'mlm') ? p.sponsor_id : '') }))}
               className={`flex-1 px-3 py-2.5 text-sm font-semibold transition ${(form.broker_type || 'mlm') === 'mlm' ? 'bg-blue-600 text-white' : 'bg-white text-blue-700 hover:bg-blue-50'}`}
             >
-              MLM broker
+              Affiliate Network broker
               <div className="text-[10px] font-normal opacity-80 mt-0.5">Sits in sponsor tree · differential cascade</div>
             </button>
             <button
@@ -636,7 +636,7 @@ export default function Brokers() {
           <div className="col-span-2 mt-2 pt-3 border-t border-gray-100">
             <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Sponsor / Upline (drives differential payouts)</label>
             <p className="text-xs text-gray-400 mt-0.5 mb-2">Type a name, broker ID or phone to filter. Pick a result from the list, or leave blank for top-of-tree brokers.</p>
-            {/* MLM and Traditional trees are strictly separate -- only let admin pick
+            {/* Affiliate Network and Traditional trees are strictly separate -- only let admin pick
                 a sponsor of the same broker_type as the broker being edited.  The DB
                 trigger enforce_same_type_sponsor would refuse a cross-type save anyway,
                 but filtering up front avoids confusing "sponsor must match" errors. */}

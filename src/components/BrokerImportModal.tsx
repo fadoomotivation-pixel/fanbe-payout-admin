@@ -280,7 +280,7 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
       '# Fill what you have. Nothing is compulsory - the rest can be corrected in the app afterwards.',
       '#',
       '# Broker ID      : the code this broker already uses. Leave BLANK and a new one is generated',
-      '#                  (TR817... for traditional, FNB05144... for MLM - it carries on from your old register).',
+      '#                  (TR817... for traditional, FNB05144... for Affiliate Network - it carries on from your old register).',
       '# Name           : as the office says it. This is also how the Upline column finds them.',
       '# Phone          : 10 digits. This is the broker login, so it must not repeat.',
       '# Email          : optional. Left blank, one is built from the phone number.',
@@ -290,7 +290,7 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
       '#                  and it may be someone further down this same sheet.',
       '#                  Leave blank for a top-level broker. A name matching two brokers is reported,',
       '#                  never guessed, so you can set it by hand.',
-      '#                  MLM and Traditional trees are kept separate - an upline of the other kind is refused.',
+      '#                  Affiliate Network and Traditional trees are kept separate - an upline of the other kind is refused.',
       '',
     ].join('\n')
     saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'broker-import-sample.csv')
@@ -322,7 +322,7 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
         <div className="grid grid-cols-2 gap-3 items-end">
           <Select label="Import these as" value={brokerType} onChange={(e: any) => setBrokerType(e.target.value)}>
             <option value="traditional">Traditional brokers (standalone, custom commission)</option>
-            <option value="mlm">MLM brokers (sponsor tree)</option>
+            <option value="mlm">Affiliate Network brokers (sponsor tree)</option>
           </Select>
           <div className="text-[11px] text-gray-500 pb-2">
             Sponsor / upline is not set by the import — link those from the broker's own page afterwards.

@@ -40,7 +40,7 @@ const NAV = [
     { to: '/projects',          icon: Building2,  label: 'Projects' },
     { to: '/plots',             icon: Map,        label: 'Plots' },
     { to: '/customer-pipeline', icon: Users,      label: 'Customer Pipeline' },
-    // One Bookings entry handles both MLM and Traditional -- the form has a mode
+    // One Bookings entry handles both Affiliate Network and Traditional -- the form has a mode
     // toggle for picking which kind of deal you're recording.  Admin found two
     // entries confusing because clicking either landed on the same /bookings page.
     { to: '/bookings',          icon: BookOpen,   label: 'Bookings' },

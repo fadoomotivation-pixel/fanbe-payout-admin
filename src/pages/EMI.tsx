@@ -139,7 +139,7 @@ export default function EMI() {
    *   covers fully → status='paid'
    *   covers partially → status='partial'
    *   excess after last → stored as advance on the bp_payments row
-   * Inserts ONE bp_payments row + per-payment MLM distribution.
+   * Inserts ONE bp_payments row + per-payment Affiliate Network distribution.
    */
   const applyPayment = useMutation({
     mutationFn: async (params: { amount: number; mode: string; date: string; utr: string; drawnOn: string; branch: string; notes: string }) => {
@@ -213,7 +213,7 @@ export default function EMI() {
       : closes > 0                ? `Receipt #${receipt_no} · ${closes} instalment${closes !== 1 ? 's' : ''} closed`
       : allocations.length > 0    ? `Receipt #${receipt_no} · partial payment recorded`
                                   : `Receipt #${receipt_no} · ${advance.toLocaleString()} advance`
-      toast.success(`${msg}${distributed ? ` · MLM × ${distributed}` : ''}`)
+      toast.success(`${msg}${distributed ? ` · Affiliate Network × ${distributed}` : ''}`)
       setPayOpen(false)
     },
     onError: (e: any) => toast.error(e.message),
@@ -611,7 +611,7 @@ export default function EMI() {
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setPayOpen(false)}>Cancel</Button>
             <Button onClick={() => applyPayment.mutate({ amount: Number(payForm.amount), mode: payForm.mode, date: payForm.date, utr: payForm.utr, drawnOn: payForm.drawn_on, branch: payForm.branch, notes: payForm.notes })} loading={applyPayment.isPending} disabled={!Number(payForm.amount)}>
-              Record &amp; distribute MLM
+              Record &amp; distribute Affiliate Network
             </Button>
           </div>
         </div>

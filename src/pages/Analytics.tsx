@@ -46,7 +46,7 @@ export default function Analytics() {
         // opens can never disagree.  It used to count instalments due TODAY as past-due and
         // add their full amount even when part had been paid.
         fetchEmiStatusAll(),
-        // Per-payment MLM distributions — the actually-paid commission.  Broker info is joined
+        // Per-payment Affiliate Network distributions — the actually-paid commission.  Broker info is joined
         // in-memory below (against the brokers fetch) to avoid relying on a PostgREST FK embed
         // that may not be defined for this column.
         supabase.from('payout_distributions').select('net_payout, created_at, beneficiary_broker_id'),
@@ -240,7 +240,7 @@ export default function Analytics() {
           icon={<Coins size={14}/>}
           label="Broker Commissions"
           value={formatINR(totals.totalPayouts)}
-          sub={`${totals.commissionRate}% of cash received · distributed via MLM`}
+          sub={`${totals.commissionRate}% of cash received · distributed via the Affiliate Network`}
           tone="blue"
           delta={deltas.commissions}
           deltaSub={`${formatINR(deltas.payoutsThisMonth)} this month`}

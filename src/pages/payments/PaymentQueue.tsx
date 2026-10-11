@@ -186,7 +186,7 @@ export default function PaymentQueue() {
         }
       }
 
-      // 4. Mirror to bp_payments so it shows in the unified ledger + triggers MLM
+      // 4. Mirror to bp_payments so it shows in the unified ledger + triggers Affiliate Network
       const { data: payment } = await supabase.from('bp_payments').insert({
         booking_id: item.booking_id,
         customer_id: bkCust?.customer_id ?? null,
@@ -201,7 +201,7 @@ export default function PaymentQueue() {
         notes: `Approved via Payment Queue. ${item.notes || ''}`.trim(),
       }).select('id').single()
 
-      // 5. Per-payment MLM distribution (deferred-commission model)
+      // 5. Per-payment Affiliate Network distribution (deferred-commission model)
       let distributed = 0
       if (payment?.id && Number(item.amount) > 0) {
         const rows = await distributePaymentCommission({
@@ -214,7 +214,7 @@ export default function PaymentQueue() {
       await supabase.from('bp_booking_activity').insert({
         booking_id: item.booking_id,
         action: 'payment_approved',
-        description: `Payment of ${formatINR(item.amount)} approved via queue. Receipt ${receiptNo}${stageAdvanced ? ' · stage → Booking Done' : ''}${distributed ? ` · MLM × ${distributed}` : ''}.`,
+        description: `Payment of ${formatINR(item.amount)} approved via queue. Receipt ${receiptNo}${stageAdvanced ? ' · stage → Booking Done' : ''}${distributed ? ` · Affiliate Network × ${distributed}` : ''}.`,
       })
       return { receiptNo, distributed, stageAdvanced }
     },
@@ -229,7 +229,7 @@ export default function PaymentQueue() {
       qc.invalidateQueries({ queryKey: ['plots_avail'] })
       qc.invalidateQueries({ queryKey: ['payouts'] })
       qc.invalidateQueries({ queryKey: ['commission_ledger'] })
-      toast.success(`Receipt ${receiptNo}${stageAdvanced ? ' · stage advanced' : ''}${distributed ? ` · MLM × ${distributed}` : ''}`)
+      toast.success(`Receipt ${receiptNo}${stageAdvanced ? ' · stage advanced' : ''}${distributed ? ` · Affiliate Network × ${distributed}` : ''}`)
       setApproveOpen(false)
       setSelected(null)
     },

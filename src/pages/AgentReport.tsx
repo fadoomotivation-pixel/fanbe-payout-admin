@@ -378,7 +378,7 @@ export default function AgentReport() {
     const periodLabel: Record<Period, string> = { all: 'All time', this_month: 'This month', last_month: 'Last month', this_fy: 'This financial year', custom: 'Chosen dates' }
     f.push(period === 'all' ? 'All time' : `${periodLabel[period]} (${pFrom || '…'} to ${pTo || '…'})`)
     if (projectF) f.push(`Project: ${projectName[projectF] || '—'}`)
-    if (mode) f.push(mode === 'mlm' ? 'MLM only' : 'Traditional only')
+    if (mode) f.push(mode === 'mlm' ? 'Affiliate Network only' : 'Traditional only')
     return f
   }
   const stamp = todayLocalISO()
@@ -397,7 +397,7 @@ export default function AgentReport() {
     const headers = ['Broker', 'Broker code', 'Customer', 'Customer code', 'Phone', 'Booking', 'Plot', 'Project', 'Booked on', 'Sale type', 'Status', 'Sale value', 'Collected', 'Balance', 'Kist paid', 'Kist total', 'EMI still to come', 'EMI late']
     const body = list.map(l => [
       nameOf(l.broker_key), codeOf(l.broker_key), l.customer_name, l.customer_code, l.phone, l.booking_no, l.plot_no,
-      l.project_id ? (projectName[l.project_id] || '') : '', l.date, l.commission_mode === 'traditional' ? 'Traditional' : 'MLM',
+      l.project_id ? (projectName[l.project_id] || '') : '', l.date, l.commission_mode === 'traditional' ? 'Traditional' : 'Affiliate',
       STATUS_META[l.status].label, l.value, l.paidUnknown ? 'Not entered' : l.paid, l.paidUnknown || l.status === 'cancelled' ? '' : l.balance,
       l.emi?.paid ?? '', l.emi?.total ?? '', l.emi?.amount_left ?? '', l.emi?.amount_overdue ?? '',
     ])
@@ -503,7 +503,7 @@ export default function AgentReport() {
             </select>
             <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden text-xs">
               <button onClick={() => setMode('')} className={`px-3 py-2 ${mode === '' ? 'bg-gray-900 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}>All sales</button>
-              <button onClick={() => setMode('mlm')} className={`px-3 py-2 border-l border-gray-200 ${mode === 'mlm' ? 'bg-blue-600 text-white' : 'bg-white text-blue-700 hover:bg-blue-50'}`}>MLM</button>
+              <button onClick={() => setMode('mlm')} className={`px-3 py-2 border-l border-gray-200 ${mode === 'mlm' ? 'bg-blue-600 text-white' : 'bg-white text-blue-700 hover:bg-blue-50'}`}>Affiliate</button>
               <button onClick={() => setMode('traditional')} className={`px-3 py-2 border-l border-gray-200 ${mode === 'traditional' ? 'bg-amber-600 text-white' : 'bg-white text-amber-700 hover:bg-amber-50'}`}>Traditional</button>
             </div>
           </>

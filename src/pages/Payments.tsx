@@ -116,7 +116,7 @@ export default function Payments() {
       // trigger assigns one as the row is written and it comes back on `data`.
       const { data, error } = await supabase.from('bp_payments').insert(p).select().single()
       if (error) throw error
-      // Per-payment MLM distribution — only fire when the payment is created already verified.
+      // Per-payment Affiliate Network distribution — only fire when the payment is created already verified.
       // Otherwise wait for updateStatus → verified.
       let distributed = 0
       if (data?.verification_status === 'verified' && data.booking_id && Number(data.amount) > 0) {
@@ -131,7 +131,7 @@ export default function Payments() {
       qc.invalidateQueries({ queryKey: ['payouts'] })
       qc.invalidateQueries({ queryKey: ['commission_ledger'] })
       qc.invalidateQueries({ queryKey: ['bookings'] })
-      toast.success(`Payment recorded${res?._distributed ? ` · MLM × ${res._distributed}` : ''}`)
+      toast.success(`Payment recorded${res?._distributed ? ` · Affiliate Network × ${res._distributed}` : ''}`)
     },
     onError: (e: any) => toast.error(e.message),
   })
@@ -150,7 +150,7 @@ export default function Payments() {
         .eq('id', id)
       if (error) throw error
 
-      // Wire MLM to verification:
+      // Wire Affiliate Network to verification:
       // - verified → distribute commission for this payment (idempotent on payment_id)
       // - rejected → reverse any commission previously distributed for this payment
       const row = payments.find((p: any) => p.id === id)
@@ -173,7 +173,7 @@ export default function Payments() {
       if (vars.status === 'verified' && updated) printPaymentReceipt({ ...updated, verification_status: 'verified', verified_at: new Date().toISOString() })
       toast.success(
         vars.status === 'verified'
-          ? `Payment verified${distributed ? ` · MLM × ${distributed}` : ''} — receipt printed`
+          ? `Payment verified${distributed ? ` · Affiliate Network × ${distributed}` : ''} — receipt printed`
           : 'Payment rejected — commissions reversed'
       )
     },

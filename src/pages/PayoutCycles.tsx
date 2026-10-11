@@ -22,7 +22,7 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 // Per-distribution row used to build the cycle close preview.  These are real, already-distributed
-// MLM commissions from `payout_distributions` — NOT the promised `bp_bookings.commission_amount`,
+// Affiliate Network commissions from `payout_distributions` — NOT the promised `bp_bookings.commission_amount`,
 // which would over-state by the unpaid portion of every booking and double-deduct TDS at close time.
 type DistributionRow = {
   id: string

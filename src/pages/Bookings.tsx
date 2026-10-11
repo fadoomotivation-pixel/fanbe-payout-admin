@@ -161,10 +161,10 @@ export default function Bookings() {
   const qc = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   // ?mode= splits the page by how the sale is paid for.  It used to understand only
-  // "traditional", which meant there was no way to look at MLM bookings on their own —
-  // and with 806 traditional against 71 MLM, the MLM ones were simply lost in the list.
+  // "traditional", which meant there was no way to look at Affiliate Network bookings on their own —
+  // and with 806 traditional against 71 Affiliate Network, the Affiliate Network ones were simply lost in the list.
   // The New Booking modal follows the same switch, so the form opens in the mode you are
-  // already looking at instead of defaulting to MLM every time.
+  // already looking at instead of defaulting to Affiliate Network every time.
   const modeParam = searchParams.get('mode')
   const modeFilter = modeParam === 'traditional' ? 'traditional' as const
                    : modeParam === 'mlm'         ? 'mlm' as const
@@ -227,8 +227,8 @@ export default function Bookings() {
           .select('*,bp_plots(*),bp_customers(*),brokers(name,broker_id),bp_projects(*),bp_booking_plots(position,plot_id,bp_plots(*))')
           .in('stage', ['token_received','booking_done','cancelled'])
         // Server-side filter so the other mode's rows are never fetched at all.
-        // MLM is matched with "is null or 'mlm'" because older bookings predate the column
-        // and carry NULL — treating those as traditional would hide most of the MLM book.
+        // Affiliate Network is matched with "is null or 'mlm'" because older bookings predate the column
+        // and carry NULL — treating those as traditional would hide most of the Affiliate Network book.
         if (modeFilter === 'traditional') q = q.eq('commission_mode', 'traditional')
         if (modeFilter === 'mlm')         q = q.or('commission_mode.is.null,commission_mode.eq.mlm')
         return q.order('created_at', { ascending: false }).order('id').range(from, to)
@@ -354,7 +354,7 @@ export default function Bookings() {
     queryKey: ['brokers'],
     queryFn: async () => {
       // Include broker_type so the booking form can filter the picker by sale mode
-      // (MLM brokers for MLM bookings, traditional brokers for traditional bookings).
+      // (Affiliate Network brokers for Affiliate Network bookings, traditional brokers for traditional bookings).
       const { data, error } = await supabase.from('brokers').select('id,name,broker_id,rank,broker_type,status,phone')
       if (error) throw error
       return data
@@ -417,8 +417,8 @@ export default function Bookings() {
     : 0
   const commissionAmt = Math.round(basePrice * brokerRankPct / 100)
 
-  // Pick the right pool of brokers for the current booking mode.  MLM bookings only show
-  // MLM brokers (the ones in the sponsor tree); Traditional bookings only show
+  // Pick the right pool of brokers for the current booking mode.  Affiliate Network bookings only show
+  // Affiliate Network brokers (the ones in the sponsor tree); Traditional bookings only show
   // Traditional brokers (standalone, no sponsor cascade).  Keeps the picker honest so
   // admin can't accidentally credit a tree broker on a traditional sale or vice versa.
   const pickerBrokers = useMemo(() => {
@@ -458,7 +458,7 @@ export default function Bookings() {
     await supabase.from('emi_installments').insert(rows)
   }
 
-  // Records a bp_payments row + fires per-payment MLM distribution.
+  // Records a bp_payments row + fires per-payment Affiliate Network distribution.
   // Returns { paymentId, distributedRows } so callers can surface a toast.
   async function recordPaymentRow(p: any): Promise<{ paymentId: string | null; distributed: number }> {
     if (p.amount <= 0) return { paymentId: null, distributed: 0 }
@@ -552,7 +552,7 @@ export default function Bookings() {
       const tokenAmt   = rest.token_enabled   ? num(rest.token_amount) : 0
       const bookingAmt = rest.booking_enabled ? num(rest.booking_amount) : 0
       const fullAmt    = rest.full_enabled    ? (num(rest.full_amount) || total) : 0
-      // Traditional-mode commission overrides the MLM rank %.  Only one of pct / per_sqyd is sent
+      // Traditional-mode commission overrides the Affiliate Network rank %.  Only one of pct / per_sqyd is sent
       // (whichever input the admin chose); the trigger reads them and computes the effective
       // direct-broker pct -- per_sqyd is converted to an equivalent % via plot.size_sqyd.
       const isTraditional = rest.commission_mode === 'traditional'
@@ -592,7 +592,7 @@ export default function Bookings() {
       if (error) throw error
       await saveBookingPlots(bk.id, plotIds)
 
-      // Auto-promote: every customer becomes a broker the moment their MLM booking lands,
+      // Auto-promote: every customer becomes a broker the moment their Affiliate Network booking lands,
       // sponsored by the broker who made the sale.  No more "Make broker" chasing in the
       // team tree.  Skipped for traditional bookings (those are standalone, no tree) and
       // skipped when this customer was already a broker (matched by customer_id, then by
@@ -678,7 +678,7 @@ export default function Bookings() {
       qc.invalidateQueries({ queryKey: ['plots'] })
       qc.invalidateQueries({ queryKey: ['payouts'] })
       qc.invalidateQueries({ queryKey: ['commission_ledger'] })
-      toast.success(`Booking saved${res?.distributed ? ` · MLM distributed to ${res.distributed} broker${res.distributed !== 1 ? 's' : ''}` : ''}`)
+      toast.success(`Booking saved${res?.distributed ? ` · Affiliate Network distributed to ${res.distributed} broker${res.distributed !== 1 ? 's' : ''}` : ''}`)
     },
     // Translate Supabase / Postgres error spew into plain English so non-technical
     // admins know what to fix.  Raw DB messages still log to console for support.
@@ -806,7 +806,7 @@ export default function Bookings() {
       await syncPlotStatus(plotIds, stageAfterPayment)
 
       // Record the payments admin ticked on this edit, reusing the same path as the
-      // create flow so receipts, UTR checks and MLM distribution all behave identically.
+      // create flow so receipts, UTR checks and Affiliate Network distribution all behave identically.
       const sponsorName = broker?.name || null
       let distributed = 0
       if (addTokenAmt > 0) {
@@ -877,7 +877,7 @@ export default function Bookings() {
       const { error } = await supabase.from('bp_bookings').update({ stage, updated_at: new Date().toISOString() }).eq('id', id)
       if (error) throw error
       await syncPlotStatus(plotIdsOf(current), stage)
-      // Per-payment MLM model: commission is distributed when payments are recorded.
+      // Per-payment Affiliate Network model: commission is distributed when payments are recorded.
       // Stage advance does not redistribute. Cancelling rolls back all commissions for this booking.
       if (stage === 'cancelled') await closeBookingMoney(id)
     },
@@ -925,7 +925,7 @@ export default function Bookings() {
       qc.invalidateQueries({ queryKey: ['plots'] })
       qc.invalidateQueries({ queryKey: ['payouts'] })
       qc.invalidateQueries({ queryKey: ['commission_ledger'] })
-      toast.success(`Booking amount recorded${res?.distributed ? ` · MLM distributed to ${res.distributed} broker${res.distributed !== 1 ? 's' : ''}` : ''}`)
+      toast.success(`Booking amount recorded${res?.distributed ? ` · Affiliate Network distributed to ${res.distributed} broker${res.distributed !== 1 ? 's' : ''}` : ''}`)
       setRecordBookingFor(null)
       if (res?.openEmiAfter) setEmiBooking(res.booking)
     },
@@ -1228,7 +1228,7 @@ export default function Bookings() {
         email,
         broker_type,
         status: 'active',
-        // MLM brokers default to the lowest active rank slab; traditional brokers don't use
+        // Affiliate Network brokers default to the lowest active rank slab; traditional brokers don't use
         // ranks but the column is non-null so 'Executive' is the safe fallback either way.
         // Must match a row in commission_ranks (level 1, 5%) — anything else makes
         // recompute_booking_payouts hit direct_pct=0 and historically over-paid the upline cascade.
@@ -1239,7 +1239,7 @@ export default function Bookings() {
       await qc.invalidateQueries({ queryKey: ['brokers'] })
       // Auto-select the new broker in the form
       handleBrokerChange(created.id)
-      toast.success(`${broker_type === 'traditional' ? 'Traditional' : 'MLM'} broker added · selected`)
+      toast.success(`${broker_type === 'traditional' ? 'Traditional' : 'Affiliate'} broker added · selected`)
       setQuickBroker(null)
     } catch (e: any) {
       console.error('Quick broker save failed:', e)
@@ -1416,10 +1416,10 @@ export default function Bookings() {
           <div className="font-mono text-[10px] text-gray-400" title="Number from the old register">पुराना {r.legacy_booking_no}</div>
         )}
         {/* Sale-mode badge — admin can scan the list and spot Traditional sales without
-            opening each row.  Default MLM is not badged because every booking is MLM
+            opening each row.  Default Affiliate Network is not badged because every booking is Affiliate Network
             unless explicitly switched. */}
         {r.commission_mode === 'traditional' && (
-          <div className="mt-0.5 inline-flex items-center gap-1 text-[9px] font-semibold text-amber-800 bg-amber-100 border border-amber-200 rounded-full px-1.5 py-0.5" title="Sold the traditional way — custom commission, no MLM upline cascade unless opted in">
+          <div className="mt-0.5 inline-flex items-center gap-1 text-[9px] font-semibold text-amber-800 bg-amber-100 border border-amber-200 rounded-full px-1.5 py-0.5" title="Sold the traditional way — custom commission, no Affiliate Network upline cascade unless opted in">
             TRADITIONAL
             {r.traditional_commission_pct != null && <span className="font-mono opacity-80">· {r.traditional_commission_pct}%</span>}
             {r.traditional_commission_per_sqyd != null && <span className="font-mono opacity-80">· ₹{r.traditional_commission_per_sqyd}/sqyd</span>}
@@ -1590,14 +1590,14 @@ export default function Bookings() {
       <div>
         <h1 className="text-2xl md:text-3xl font-bold text-gray-900 tracking-tight">
           {modeFilter === 'traditional' ? 'Traditional Bookings'
-           : modeFilter === 'mlm'       ? 'MLM Bookings'
+           : modeFilter === 'mlm'       ? 'Affiliate Network Bookings'
            : 'Create a booking'}
         </h1>
         <p className="text-sm text-gray-500 mt-1">
           {modeFilter === 'traditional'
             ? <>Custom-commission sales (single or multi-broker split). New bookings here default to traditional mode.</>
             : modeFilter === 'mlm'
-            ? <>Sponsor-tree sales — commission cascades up the upline. New bookings here default to MLM mode.</>
+            ? <>Sponsor-tree sales — commission cascades up the upline. New bookings here default to Affiliate Network mode.</>
             : <>{all.length} bookings · Confirmed value {formatINR(totalValue)}. Manage payments &amp; EMIs in <Link to="/customer-pipeline" className="text-blue-700 hover:underline">Customer Pipeline →</Link></>
           }
         </p>
@@ -1605,7 +1605,7 @@ export default function Bookings() {
 
       {/* Sale type.  The two kinds of sale pay commission in completely different ways, so
           mixing them in one list made it impossible to look at either on its own — and the
-          MLM book (71 bookings) was simply buried under the traditional one (806). */}
+          Affiliate Network book (71 bookings) was simply buried under the traditional one (806). */}
       <div className="inline-flex rounded-xl border border-gray-200 overflow-hidden text-sm bg-white">
         <button
           onClick={() => setMode('all')}
@@ -1614,7 +1614,7 @@ export default function Bookings() {
         <button
           onClick={() => setMode('mlm')}
           className={`px-4 py-2 border-l border-gray-200 transition ${modeFilter === 'mlm' ? 'bg-blue-600 text-white' : 'text-blue-700 hover:bg-blue-50'}`}
-        >MLM</button>
+        >Affiliate</button>
         <button
           onClick={() => setMode('traditional')}
           className={`px-4 py-2 border-l border-gray-200 transition ${modeFilter === 'traditional' ? 'bg-amber-600 text-white' : 'text-amber-700 hover:bg-amber-50'}`}
@@ -1656,7 +1656,7 @@ export default function Bookings() {
                     r.commission_mode === 'traditional'
                       ? 'bg-amber-50 text-amber-800 border-amber-200'
                       : 'bg-blue-50 text-blue-800 border-blue-200'}`}>
-                    {r.commission_mode === 'traditional' ? 'TRAD' : 'MLM'}
+                    {r.commission_mode === 'traditional' ? 'TRAD' : 'AFFILIATE'}
                   </span>
                 </div>
                 <div className="text-[12px] text-gray-500 truncate">
@@ -1801,9 +1801,9 @@ export default function Bookings() {
           </div>
         )}
 
-        {/* Commission mode -- MLM (broker rank + upline cascade) or Traditional (admin-defined
+        {/* Commission mode -- Affiliate Network (broker rank + upline cascade) or Traditional (admin-defined
             commission paid only to the direct broker, with optional upline cascade).  Defaults
-            to MLM so existing flows keep working unchanged.  The selected mode + value are
+            to Affiliate Network so existing flows keep working unchanged.  The selected mode + value are
             persisted to bp_bookings.commission_mode + traditional_commission_pct /
             traditional_commission_per_sqyd, which the recompute_booking_payouts trigger reads. */}
         <div className="mt-4 rounded-lg border border-gray-200 overflow-hidden">
@@ -1813,7 +1813,7 @@ export default function Bookings() {
               onClick={() => set('commission_mode', 'mlm')}
               className={`flex-1 px-3 py-2 text-sm font-medium transition ${form.commission_mode !== 'traditional' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
             >
-              MLM (rank-based + upline cascade)
+              Affiliate Network (rank-based + upline cascade)
             </button>
             <button
               type="button"
@@ -1934,7 +1934,7 @@ export default function Bookings() {
                           className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm"
                         >
                           <option value="">— pick broker —</option>
-                          {/* Use the SAME pool as the primary picker so MLM brokers don't
+                          {/* Use the SAME pool as the primary picker so Affiliate Network brokers don't
                               leak into a Traditional booking's split selector.  Was just
                               `brokers` before, which is the bug admin was reporting. */}
                           {pickerBrokers
@@ -2005,14 +2005,14 @@ export default function Bookings() {
               <PayFields prefix="token" form={form} set={set}
                 amountError={form.token_enabled && !num(form.token_amount) ? 'Required' : undefined} />
 
-              {/* Expected (unpaid) booking deposit — purely informational, does NOT trigger MLM */}
+              {/* Expected (unpaid) booking deposit — purely informational, does NOT trigger Affiliate Network */}
               {form.token_enabled && !form.booking_enabled && (
                 <div className="mt-3 rounded-lg border border-dashed border-blue-300 bg-blue-50/30 p-3">
                   <label className="flex items-start gap-2">
                     <div className="flex-1">
                       <div className="text-sm font-semibold text-blue-900">Expected booking deposit (unpaid)</div>
                       <div className="text-[11px] text-blue-700/80">
-                        Planned amount the customer will pay later. Tracked on the booking — <b>MLM commission does NOT distribute on this amount</b> until it's actually received.
+                        Planned amount the customer will pay later. Tracked on the booking — <b>Affiliate Network commission does NOT distribute on this amount</b> until it's actually received.
                       </div>
                       <div className="grid grid-cols-2 gap-3 mt-2">
                         <Input label="Expected amount (₹)" type="number" value={form.expected_booking_amount}
@@ -2255,7 +2255,7 @@ export default function Bookings() {
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-medium text-gray-700 mb-1">
-              {form.commission_mode === 'traditional' ? 'Broker / Company (Traditional)' : 'Broker (MLM, Upline)'}
+              {form.commission_mode === 'traditional' ? 'Broker / Company (Traditional)' : 'Broker (Affiliate Network, Upline)'}
               <span className="ml-1 font-normal text-gray-400">(optional)</span>
             </label>
             <BrokerCombobox
@@ -2271,17 +2271,17 @@ export default function Bookings() {
             )}
             {/* Quick add — admin can create a fresh broker without leaving the booking
                 page.  Auto-sets broker_type from the current booking mode so the new
-                broker shows up in the right pool (traditional or MLM) immediately. */}
+                broker shows up in the right pool (traditional or Affiliate Network) immediately. */}
             <button
               type="button"
               onClick={() => setQuickBroker({ name: '', phone: '', email: '' })}
               className="mt-1.5 text-[11px] text-blue-700 hover:underline inline-flex items-center gap-1 font-medium"
             >
-              + Add new {form.commission_mode === 'traditional' ? 'traditional' : 'MLM'} broker
+              + Add new {form.commission_mode === 'traditional' ? 'traditional' : 'affiliate'} broker
             </button>
             {pickerBrokers.length === 0 && (
               <div className="mt-1.5 text-[11px] bg-amber-50 border border-amber-200 text-amber-900 rounded-lg px-2 py-1.5">
-                No {form.commission_mode === 'traditional' ? 'traditional' : 'MLM'} brokers yet — tap the button above to add one without leaving this page.
+                No {form.commission_mode === 'traditional' ? 'traditional' : 'affiliate'} brokers yet — tap the button above to add one without leaving this page.
               </div>
             )}
           </div>
@@ -2465,11 +2465,11 @@ export default function Bookings() {
       {/* Quick "Add new broker" modal launched from the booking form picker.  Minimal
           fields (name + phone + optional email) so the workflow stays fast; rank / KYC
           / bank details can be filled in later from the Brokers page. */}
-      <Modal open={!!quickBroker} onClose={() => setQuickBroker(null)} title={`Add new ${form.commission_mode === 'traditional' ? 'traditional' : 'MLM'} broker`}>
+      <Modal open={!!quickBroker} onClose={() => setQuickBroker(null)} title={`Add new ${form.commission_mode === 'traditional' ? 'traditional' : 'affiliate'} broker`}>
         {quickBroker && (
           <div className="space-y-3">
             <div className="text-xs bg-blue-50 border border-blue-200 text-blue-900 rounded-lg p-2.5">
-              This broker will be added as <b>{form.commission_mode === 'traditional' ? 'Traditional' : 'MLM'}</b> and selected on this booking automatically.  Rank, KYC and bank details can be filled in later from the <Link to="/brokers" target="_blank" className="text-blue-700 hover:underline">Brokers page</Link>.
+              This broker will be added as <b>{form.commission_mode === 'traditional' ? 'Traditional' : 'Affiliate'}</b> and selected on this booking automatically.  Rank, KYC and bank details can be filled in later from the <Link to="/brokers" target="_blank" className="text-blue-700 hover:underline">Brokers page</Link>.
             </div>
             <Input label={form.commission_mode === 'traditional' ? 'Broker / Company name' : 'Broker name'} value={quickBroker.name} onChange={(e: any) => setQuickBroker({ ...quickBroker, name: e.target.value })} placeholder={form.commission_mode === 'traditional' ? 'Broker name or company name' : 'Full name as on documents'} required />
             <Input label="Phone" value={quickBroker.phone} onChange={(e: any) => setQuickBroker({ ...quickBroker, phone: e.target.value })} placeholder="10-digit mobile (used as login + password)" required />

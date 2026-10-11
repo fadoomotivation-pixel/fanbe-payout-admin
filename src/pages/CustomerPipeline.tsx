@@ -132,8 +132,8 @@ export default function CustomerPipeline() {
   const [searchScope, setSearchScope] = useState<ScopeF>(() => pick(searchParams.get('in'), ['all', 'customer', 'broker', 'booking', 'plot'] as const, 'all'))
   const [filterBroker, setFilterBroker] = useState(() => searchParams.get('broker') || '')
   const [filterProject, setFilterProject] = useState(() => searchParams.get('project') || '')
-  // MLM and traditional sales pay commission by completely different rules, and with 806
-  // traditional against 71 MLM the MLM customers were impossible to find in one list.
+  // Affiliate Network and traditional sales pay commission by completely different rules, and with 806
+  // traditional against 71 Affiliate Network the Affiliate Network customers were impossible to find in one list.
   const [filterMode, setFilterMode] = useState<'' | 'mlm' | 'traditional'>(() => pick(searchParams.get('mode'), ['', 'mlm', 'traditional'] as const, ''))
   // The finer filters live behind "More filters" so the everyday bar stays four controls.
   const [showMore, setShowMore]     = useState(false)
@@ -683,7 +683,7 @@ export default function CustomerPipeline() {
         await supabase.from('bp_bookings').update({ token_amount: Number(p.booking.token_amount || 0) + p.amount, updated_at: new Date().toISOString() }).eq('id', p.booking.id)
       }
 
-      // Per-payment MLM distribution
+      // Per-payment Affiliate Network distribution
       const rows = await distributePaymentCommission({ bookingId: p.booking.id, paymentId: payment.id, amount: p.amount })
       return { distributed: rows.length, payment, booking: p.booking }
     },
@@ -694,7 +694,7 @@ export default function CustomerPipeline() {
       qc.invalidateQueries({ queryKey: ['payouts'] })
       qc.invalidateQueries({ queryKey: ['commission_ledger'] })
       qc.invalidateQueries({ queryKey: ['plots'] })
-      toast.success(`Payment recorded${res?.distributed ? ` · MLM × ${res.distributed}` : ''} · printing receipt`)
+      toast.success(`Payment recorded${res?.distributed ? ` · Affiliate Network × ${res.distributed}` : ''} · printing receipt`)
       setPayFor(null)
       // Hand admin the A4 receipt (customer + office copies on one sheet)
       if (res?.payment && res?.booking) {
@@ -933,7 +933,7 @@ export default function CustomerPipeline() {
     if (filterBroker === NO_BROKER) f.push('Broker: none linked')
     else if (filterBroker) { const b = (brokers as any[]).find(x => x.id === filterBroker); f.push(`Broker: ${b ? `${b.name} [${b.broker_id}]` : '—'}`) }
     if (filterProject) f.push(`Project: ${projectName[filterProject] || '—'}`)
-    if (filterMode) f.push(filterMode === 'mlm' ? 'MLM only' : 'Traditional only')
+    if (filterMode) f.push(filterMode === 'mlm' ? 'Affiliate Network only' : 'Traditional only')
     if (debouncedSearch) f.push(`Search: "${debouncedSearch}"`)
     const dueLabel: Record<string, string> = { overdue: 'EMI late', today: 'EMI due by today', week: 'EMI due in 7 days', month: 'EMI due this month', no_plan: 'Balance without EMI plan' }
     if (dueWindow) f.push(dueLabel[dueWindow])
@@ -970,7 +970,7 @@ export default function CustomerPipeline() {
       return [
         r.customer_name, r.customer_code, r.customer_phone, r.booking_no, r.legacy_booking_no || '',
         ix.imported ? 'Old register' : 'New', r.plot_no || 'Not allotted', r.project_name,
-        r.broker_name, r.broker_code, r.commission_mode === 'traditional' ? 'Traditional' : 'MLM',
+        r.broker_name, r.broker_code, r.commission_mode === 'traditional' ? 'Traditional' : 'Affiliate',
         // An old record's paid-till-date is unknown, not zero — say so rather than print 0.
         r.value, r.paid_unknown ? 'Not entered' : r.paid, r.paid_unknown ? '' : r.balance,
         r.paid_unknown || !(r.value > 0) ? '' : ix.paidPct, ix.last_paid || '',
@@ -1330,7 +1330,7 @@ export default function CustomerPipeline() {
           <button onClick={() => setFilterMode('')}
             className={`px-3 py-2.5 ${filterMode === '' ? 'bg-gray-900 text-white' : 'text-gray-700 hover:bg-gray-50'}`}>All</button>
           <button onClick={() => setFilterMode('mlm')}
-            className={`px-3 py-2.5 border-l border-gray-200 ${filterMode === 'mlm' ? 'bg-blue-600 text-white' : 'text-blue-700 hover:bg-blue-50'}`}>MLM</button>
+            className={`px-3 py-2.5 border-l border-gray-200 ${filterMode === 'mlm' ? 'bg-blue-600 text-white' : 'text-blue-700 hover:bg-blue-50'}`}>Affiliate</button>
           <button onClick={() => setFilterMode('traditional')}
             className={`px-3 py-2.5 border-l border-gray-200 ${filterMode === 'traditional' ? 'bg-amber-600 text-white' : 'text-amber-700 hover:bg-amber-50'}`}>Traditional</button>
         </div>
@@ -1596,7 +1596,7 @@ export default function CustomerPipeline() {
                     {(r.bp_projects?.name || r.scheme_name) && <span>· {r.bp_projects?.name || r.scheme_name}</span>}
                     {/* Sale-mode badge — admin can spot Traditional bookings without expanding. */}
                     {r.commission_mode === 'traditional' && (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-800 bg-amber-100 border border-amber-200 rounded-full px-1.5 py-0.5" title="Sold the traditional way — custom commission, no MLM upline cascade">
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-800 bg-amber-100 border border-amber-200 rounded-full px-1.5 py-0.5" title="Sold the traditional way — custom commission, no Affiliate Network upline cascade">
                         TRADITIONAL
                         {r.traditional_commission_pct != null && <span className="font-mono opacity-80">· {r.traditional_commission_pct}%</span>}
                         {r.traditional_commission_per_sqyd != null && <span className="font-mono opacity-80">· ₹{r.traditional_commission_per_sqyd}/sqyd</span>}
@@ -1696,7 +1696,7 @@ export default function CustomerPipeline() {
                   r.commission_mode === 'traditional'
                     ? 'text-amber-800 bg-amber-50 border-amber-200'
                     : 'text-blue-800 bg-blue-50 border-blue-200'}`}>
-                  {r.commission_mode === 'traditional' ? 'TRAD' : 'MLM'}
+                  {r.commission_mode === 'traditional' ? 'TRAD' : 'AFFILIATE'}
                 </span>
                 {/* How much EMI is still to come — the question admin asked to see without
                     opening each row. */}
@@ -1846,7 +1846,7 @@ export default function CustomerPipeline() {
                       onClick={r.brokers ? () => navigate(`/broker/dashboard?broker_id=${r.broker_id}`) : undefined}
                       sub={r.chain.length > 1 ? `↑ ${r.chain.slice(1, 4).map((c: any) => c.name).join(' → ')}${r.chain.length > 4 ? ` …+${r.chain.length - 4}` : ''}` : undefined}/>
 
-                    <DetailRow icon="✓" label="MLM net distributed"
+                    <DetailRow icon="✓" label="Affiliate Network net distributed"
                       value={`${formatINR(r.mlm.net)} · ${r.mlm.rows} row${r.mlm.rows === 1 ? '' : 's'}`}
                       tone="emerald"/>
 
@@ -2541,7 +2541,7 @@ function RecordPaymentModal({ open, booking, type, onClose, onSubmit, submitting
         </div>
 
         <div className="text-[11px] text-gray-500">
-          Per-payment MLM commission will be distributed to the broker chain automatically.
+          Per-payment Affiliate Network commission will be distributed to the broker chain automatically.
         </div>
       </div>
       <div className="flex justify-end gap-2 mt-5">
@@ -2553,7 +2553,7 @@ function RecordPaymentModal({ open, booking, type, onClose, onSubmit, submitting
           expected_booking_amount: type !== 'booking' || form.expected === '' ? undefined : (Number(form.expected) > 0 ? Number(form.expected) : null),
           mode: form.mode, date: form.date, utr: form.utr, drawn_on: form.drawn_on, branch: form.branch,
         })} loading={submitting} disabled={!amt}>
-          <IndianRupee size={14}/>Record &amp; distribute MLM
+          <IndianRupee size={14}/>Record &amp; distribute commission
         </Button>
       </div>
     </Modal>
