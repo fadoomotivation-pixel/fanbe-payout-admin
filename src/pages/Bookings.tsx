@@ -118,9 +118,14 @@ function friendlyError(err: any, defaultMsg = 'Could not save the booking.  Plea
 }
 
 const EMPTY: any = {
-  // One booking can carry several plots (customer buys two adjacent plots on one
-  // application).  plot_ids is the source of truth in the form; bp_bookings.plot_id is
-  // written from plot_ids[0] so every existing read path keeps working.
+  // ONE plot per booking.  Admin tried the multi-plot picker and sent it back: a booking
+  // that covers two plots shows a single combined amount, and the office reads a booking
+  // as one plot, one price, one receipt -- "single plot ka hi rehne do".  A customer who
+  // buys two plots now gets two bookings, which is also how the money columns read.
+  //
+  // Still an array, not a bare id: bp_booking_plots and every reader built on it stay as
+  // they are, so bookings imported or created while the picker was multi still show all
+  // their plots.  The form simply never puts more than one id in here.
   plot_ids: [] as string[],
   customer_id:'', broker_id:'', project_id:'', stage:'token_received',
   size_sqyd:'', rate_per_sqyd:'',
@@ -1181,9 +1186,11 @@ export default function Bookings() {
       String(p.sector  || '').toLowerCase().includes(q))
   }, [addablePlots, plotSearch])
 
+  // Replaces rather than appends -- clicking a second plot swaps the choice instead of
+  // adding to it.
   const addPlot    = (plotId: string) => {
     if (!plotId || (form.plot_ids || []).includes(plotId)) return
-    applyPlotIds([...(form.plot_ids || []), plotId])
+    applyPlotIds([plotId])
     setPlotSearch('')
   }
   const removePlot = (plotId: string) => applyPlotIds(((form.plot_ids || []) as string[]).filter(id => id !== plotId))
@@ -1693,7 +1700,7 @@ export default function Bookings() {
               a customer who bought P-12 and P-13 gets ONE booking with both on it. */}
           <div className="col-span-2">
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              प्लॉट नं. / Plot number <span className="text-gray-400 font-normal">— pick one, or several for one customer</span>
+              प्लॉट नं. / Plot number <span className="text-gray-400 font-normal">— one plot per booking</span>
             </label>
             {!form.project_id ? (
               <div className="border border-gray-200 rounded-lg px-3 py-2.5 text-sm text-gray-400 bg-gray-50">
@@ -1713,7 +1720,7 @@ export default function Bookings() {
                 <div className="mt-1.5 border border-gray-200 rounded-lg divide-y divide-gray-50 max-h-56 overflow-y-auto">
                   {addablePlots.length === 0 ? (
                     <div className="px-3 py-3 text-xs text-gray-400">
-                      {selectedPlots.length > 0 ? 'No more available plots in this scheme.' : 'No available plots in this scheme.'}
+                      No available plots in this scheme.
                     </div>
                   ) : plotMatches.length === 0 ? (
                     <div className="px-3 py-3 text-xs text-gray-400">
@@ -1757,11 +1764,10 @@ export default function Bookings() {
           {selectedPlots.length > 0 && (
             <div className="col-span-2 -mt-1">
               <div className="flex flex-wrap gap-1.5">
-                {selectedPlots.map((p: any, i: number) => (
+                {selectedPlots.map((p: any) => (
                   <span key={p.id} className="inline-flex items-center gap-1.5 bg-blue-50 border border-blue-200 text-blue-900 rounded-lg pl-2 pr-1 py-1 text-xs">
                     <b>{p.plot_no}</b>
                     <span className="text-blue-700/70">{p.size_sqyd} sqyd @ {formatINR(p.price_per_sqyd)}/gaj</span>
-                    {i === 0 && selectedPlots.length > 1 && <span className="text-[9px] uppercase tracking-wide bg-blue-600 text-white rounded px-1 py-0.5">main</span>}
                     <button type="button" onClick={() => removePlot(p.id)} className="text-blue-500 hover:text-rose-600 hover:bg-white rounded p-0.5" title="Remove this plot">
                       <X size={12} />
                     </button>
@@ -1769,10 +1775,9 @@ export default function Bookings() {
                 ))}
               </div>
               {selectedPlots.length > 1 && (
-                <div className="mt-1.5 text-[11px] text-blue-800 bg-blue-50/60 border border-blue-200 rounded-lg px-2 py-1.5">
-                  {selectedPlots.length} plots on this booking — total{' '}
-                  <b>{round2(selectedPlots.reduce((s: number, p: any) => s + num(p.size_sqyd), 0))} sqyd</b>.
-                  Size, rate and PLC below are filled from all of them (rate is the size-weighted average); you can still type over them.
+                <div className="mt-1.5 text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
+                  This booking was saved with {selectedPlots.length} plots. New bookings take one plot each —
+                  remove the extras here, or leave it as it is and it will keep working.
                 </div>
               )}
             </div>
