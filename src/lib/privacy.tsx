@@ -8,17 +8,25 @@
 // anyone who opens the browser's dev tools or calls the API directly — the data is still
 // in the page.  What it stops is the thing that actually happens: a laptop left open at
 // lunch, somebody walking past, a phone photo of the broker list and what each one earns.
-// For an Affiliate Network business that list is the business, so a screen that goes blank on its own
-// is worth having, as long as nobody mistakes it for a vault.
+// For an affiliate network that list is the business, so a screen that goes blank on its
+// own is worth having, as long as nobody mistakes it for a vault.
 //
 // WHAT IS NOT LOCKED.  Everyday work carries on while the screen is blurred — adding a
 // booking, a broker, a plot, an expense.  The lock covers what is worth stealing (what a
 // broker earned, and the phone numbers you would poach them with), not what the office
 // has to get done.  Locking the whole app would just teach everyone to share the PIN.
 //
-// THE PIN lives in the database, hashed, and is checked by verify_privacy_pin() — see
-// migration 20261011b.  It is deliberately NOT in this file: a PIN written into the
-// JavaScript is readable by exactly the person it is meant to stop.
+// THE PIN lives in the database and is checked by verify_privacy_pin() — see migration
+// 20261011b.  It is deliberately NOT in this file: a PIN written into the JavaScript is
+// readable by exactly the person it is meant to stop.
+//
+// It is stored as plain text, on purpose, so the owner can read his own PIN in Supabase
+// and see in app_security_log if anyone changed it.  That is not the lapse it looks like:
+// the PIN guards a blur, and every number the blur hides already sits in the same database
+// in plain text, so a hash would have protected nothing while costing the owner sight of
+// it.  What keeps staff out is the table, not the storage — RLS on with no policies and
+// every grant revoked, so the API cannot read it at all.  The browser only ever sends a
+// guess and gets back true or false.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { supabase } from '@/lib/supabase'
