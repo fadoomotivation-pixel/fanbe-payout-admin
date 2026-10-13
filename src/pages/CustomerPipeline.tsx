@@ -1979,6 +1979,7 @@ export default function CustomerPipeline() {
         booking={registryFor}
         open={!!registryFor}
         onClose={() => setRegistryFor(null)}
+        onEditBooking={() => { const id = registryFor?.id; setRegistryFor(null); if (id) navigate(`/bookings?edit=${id}`) }}
         onSubmit={(f: any) => markRegistry.mutate({ booking: registryFor, ...f })}
         submitting={markRegistry.isPending}
       />
@@ -2150,7 +2151,7 @@ function OpeningBalanceModal({ booking, open, onClose, onSubmit, submitting }: a
   )
 }
 
-function MarkRegistryModal({ booking, open, onClose, onSubmit, submitting }: any) {
+function MarkRegistryModal({ booking, open, onClose, onSubmit, submitting, onEditBooking }: any) {
   const [f, setF] = useState<any>({})
   useEffect(() => {
     if (!open || !booking) return
@@ -2182,7 +2183,11 @@ function MarkRegistryModal({ booking, open, onClose, onSubmit, submitting }: any
 
         {noPrice && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
-            This booking has no plot price, so it cannot be checked as paid. Set the plot and price first (Edit booking).
+            This booking has no plot price, so it cannot be checked as paid. Set the plot and price first.
+            <button type="button" onClick={onEditBooking}
+              className="mt-1.5 block inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-md bg-amber-600 text-white hover:bg-amber-700">
+              Set plot &amp; price
+            </button>
           </div>
         )}
 
@@ -2214,11 +2219,18 @@ function MarkRegistryModal({ booking, open, onClose, onSubmit, submitting }: any
              a deed with no plot linked means inventory never learns the plot is gone, so
              the same plot can be sold to a second customer.  Say what happens, and say
              where to fix it. */
-          <p className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2">
+          /* Manisha asked for a plot option right here. The booking's own Edit screen
+              already links a plot AND moves it out of the available pool; writing plot
+              status from a second place is how a registered plot ends up still on sale.
+              So this takes you there in one click instead of growing a second path. */
+          <div className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2">
             <b>No plot is linked to this booking.</b> The deed details will be recorded, but no plot
-            is marked sold — so this plot stays in the available list and can be sold again. Link the
-            plot first on the booking’s <b>Edit</b> screen (प्लॉट नं. / Plot number), then come back here.
-          </p>
+            is marked sold — so this plot stays in the available list and can be sold again.
+            <button type="button" onClick={onEditBooking}
+              className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-md bg-amber-600 text-white hover:bg-amber-700">
+              Link the plot now
+            </button>
+          </div>
         )}
       </div>
       <div className="flex justify-end gap-2 mt-5">

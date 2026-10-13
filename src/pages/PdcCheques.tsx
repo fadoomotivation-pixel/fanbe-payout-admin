@@ -20,10 +20,11 @@ import { Input, Select, Textarea } from '@/components/ui/Input.tsx'
 import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
-import { Plus, Search, Download, X, AlertTriangle, CheckCircle2, Landmark, Phone, MessageCircle } from 'lucide-react'
+import { Plus, Search, Download, X, AlertTriangle, CheckCircle2, Landmark, Phone, MessageCircle, Hash } from 'lucide-react'
 import { waLink } from '@/lib/whatsapp'
 import toast from 'react-hot-toast'
 import { downloadCsv } from '@/lib/download'
+import { Secret } from '@/lib/privacy'
 
 type Status = 'pending' | 'deposited' | 'cleared' | 'bounced' | 'cancelled'
 
@@ -108,6 +109,13 @@ export default function PdcCheques() {
 
   const selectedBooking = (bookings as any[]).find((b: any) => b.id === form.booking_id)
 
+  // Renumbering a whole chequebook series. Manisha: "agr pdc m koi cheque number series
+  // edit krni hoto ho jygi kya?" — she had entered fifty cheques for one booking, and
+  // fixing a wrong starting number meant editing fifty rows one at a time.
+  const [renumberOpen, setRenumberOpen] = useState(false)
+  const [renumberFor, setRenumberFor] = useState<string>('')
+  const [renumberFrom, setRenumberFrom] = useState('')
+
   // Rows the admin is about to create — shown before saving so a 12-cheque series can
   // be eyeballed (and the duplicate guard understood) rather than discovered after.
   const seriesPreview = useMemo(() => {
@@ -169,6 +177,52 @@ export default function PdcCheques() {
       toast.success('Cheque updated')
     },
     onError: (e: any) => toast.error(e.message),
+  })
+
+  // Only PENDING cheques are renumbered. A cleared or bounced cheque is history — money
+  // has already moved against that number and a receipt carries it — so renaming it would
+  // put the books out of step with the bank.
+  const renumberRows = useMemo(() => {
+    if (!renumberFor) return []
+    return (cheques as any[])
+      .filter(c => c.booking_id === renumberFor && c.status === 'pending')
+      .sort((a, b) => String(a.cheque_date).localeCompare(String(b.cheque_date)))
+  }, [cheques, renumberFor])
+
+  // Same bumpChequeNo the series builder uses, so a renumbered book runs exactly the way
+  // a freshly entered one does — one rule, not two that can drift apart.
+  const renumberPreview = useMemo(
+    () => renumberRows.map((c, i) => ({ row: c, next: bumpChequeNo(renumberFrom.trim(), i) })),
+    [renumberRows, renumberFrom],
+  )
+
+  // A cheque number that already exists on a cheque we are NOT renumbering would make two
+  // rows claim the same number, and nobody could tell which one the bank returned.
+  const renumberClashes = useMemo(() => {
+    if (!renumberFrom.trim()) return []
+    const moving = new Set(renumberRows.map(c => c.id))
+    const taken = new Map<string, any>()
+    for (const c of cheques as any[]) if (!moving.has(c.id)) taken.set(String(c.cheque_no || '').trim(), c)
+    return renumberPreview.filter(p => taken.has(p.next)).map(p => p.next)
+  }, [renumberPreview, renumberRows, cheques, renumberFrom])
+
+  const renumber = useMutation({
+    mutationFn: async () => {
+      if (!renumberFrom.trim()) throw new Error('Enter the first cheque number.')
+      if (renumberPreview.length === 0) throw new Error('This booking has no pending cheques to renumber.')
+      if (renumberClashes.length > 0) throw new Error(`Cheque number ${renumberClashes[0]} is already used by another cheque.`)
+      for (const p of renumberPreview) {
+        const { error } = await supabase.from('bp_pdc_cheques')
+          .update({ cheque_no: p.next }).eq('id', p.row.id)
+        if (error) throw error
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['pdc_cheques'] })
+      toast.success(`${renumberPreview.length} cheque${renumberPreview.length === 1 ? '' : 's'} renumbered`)
+      setRenumberFor(''); setRenumberFrom('')
+    },
+    onError: (e: any) => toast.error(e.message || 'Could not renumber the cheques.'),
   })
 
   // Clearing goes through the RPC so the cheque row and the payment row are written in
@@ -324,7 +378,7 @@ export default function PdcCheques() {
               <div className="flex items-center gap-2 mt-1">
                 <a href={`tel:${phone}`} onClick={e => e.stopPropagation()}
                   className="inline-flex items-center gap-1 text-[11px] text-gray-600 hover:text-blue-700">
-                  <Phone size={10}/>{phone}
+                  <Phone size={10}/><Secret>{phone}</Secret>
                 </a>
                 <button onClick={e => { e.stopPropagation(); chequeReminder(r) }}
                   title="Send a WhatsApp reminder about this cheque"
@@ -418,6 +472,9 @@ export default function PdcCheques() {
         </div>
         <div className="flex gap-2">
           <Button variant="secondary" onClick={exportCsv}><Download size={14}/>Export</Button>
+          <Button variant="secondary" onClick={() => { setRenumberFor(''); setRenumberFrom('') ; setRenumberOpen(true) }}>
+            <Hash size={14}/>Renumber a series
+          </Button>
           <Button onClick={() => { setForm({ ...EMPTY_FORM }); setModal(true) }}><Plus size={14}/>Add cheques</Button>
         </div>
       </div>
@@ -469,6 +526,86 @@ export default function PdcCheques() {
         </div>
         <Table columns={columns} data={rows} loading={isLoading} emptyMsg="No cheques on file yet. Use “Add cheques” when a customer hands over their PDCs." />
       </div>
+
+      {/* ── Renumber a series ─────────────────────────────────────────────── */}
+      <Modal open={renumberOpen} onClose={() => setRenumberOpen(false)} title="Renumber a cheque series" size="md">
+        <div className="space-y-3">
+          <p className="text-xs text-gray-500">
+            Pick the booking, then type the first cheque number from the chequebook. The rest follow it
+            in order, oldest cheque date first — the same way a chequebook runs.
+          </p>
+
+          <Select label="Booking" value={renumberFor} onChange={(e: any) => setRenumberFor(e.target.value)}>
+            <option value="">Select a booking…</option>
+            {(bookings as any[]).map((b: any) => (
+              <option key={b.id} value={b.id}>
+                {b.booking_no} — {b.bp_customers?.name || 'No name'}
+              </option>
+            ))}
+          </Select>
+
+          {renumberFor && renumberRows.length === 0 && (
+            <div className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2">
+              This booking has no pending cheques. Cleared and bounced cheques are left alone — money has
+              already moved against those numbers and a receipt carries them.
+            </div>
+          )}
+
+          {renumberRows.length > 0 && (
+            <>
+              <Input
+                label={`First cheque number (${renumberRows.length} pending cheque${renumberRows.length === 1 ? '' : 's'})`}
+                value={renumberFrom}
+                onChange={(e: any) => setRenumberFrom(e.target.value)}
+                placeholder="e.g. 000123"
+              />
+
+              {renumberClashes.length > 0 && (
+                <div className="text-xs text-rose-800 bg-rose-50 border border-rose-200 rounded-lg px-2.5 py-2">
+                  Cheque number <b className="font-mono">{renumberClashes[0]}</b> is already on another cheque.
+                  Two cheques with the same number cannot be told apart when one comes back from the bank —
+                  pick a different starting number.
+                </div>
+              )}
+
+              {renumberFrom.trim() && (
+                <div className="max-h-56 overflow-auto rounded-lg border border-gray-200">
+                  <table className="w-full text-xs">
+                    <thead className="bg-gray-50 sticky top-0">
+                      <tr>
+                        {['Cheque date', 'Now', '→', 'New number'].map(h => (
+                          <th key={h} className="text-left px-2 py-1.5 font-semibold text-gray-500">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {renumberPreview.map(p => (
+                        <tr key={p.row.id}>
+                          <td className="px-2 py-1">{formatDate(p.row.cheque_date)}</td>
+                          <td className="px-2 py-1 font-mono text-gray-500">{p.row.cheque_no || '—'}</td>
+                          <td className="px-2 py-1 text-gray-300">→</td>
+                          <td className="px-2 py-1 font-mono font-semibold text-gray-900">{p.next}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="secondary" onClick={() => setRenumberOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => renumber.mutate(undefined, { onSuccess: () => setRenumberOpen(false) })}
+              loading={renumber.isPending}
+              disabled={renumberRows.length === 0 || !renumberFrom.trim() || renumberClashes.length > 0}
+            >
+              <Hash size={14}/>Renumber {renumberPreview.length || ''} cheque{renumberPreview.length === 1 ? '' : 's'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* ── Add cheques ───────────────────────────────────────────────────── */}
       <Modal open={modal} onClose={() => setModal(false)} title="Add PDC cheques">
