@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { fetchEmiStatusAll } from '@/lib/emiStatus'
 import { formatINR } from '@/lib/utils'
-import { SecretMoney } from '@/lib/privacy'
+import { Secret, SecretMoney } from '@/lib/privacy'
 import {
   TrendingUp, TrendingDown, Coins, Wallet,
   Banknote, AlertCircle, Receipt, Activity, Award, Building2,
@@ -281,7 +281,7 @@ export default function Analytics() {
               return (
                 <div key={i} className="flex-1 flex flex-col items-center gap-1.5 min-w-0">
                   <span className="text-[9px] text-gray-500 tabular-nums">
-                    {m.revenue > 0 ? formatINR(m.revenue).replace('₹', '') : ''}
+                    {m.revenue > 0 ? <Secret>{formatINR(m.revenue).replace('₹', '')}</Secret> : ''}
                   </span>
                   <div
                     className="w-full rounded-t-md bg-gradient-to-t from-emerald-600 to-emerald-400 transition-all"
@@ -373,8 +373,8 @@ export default function Analytics() {
                     <div className="text-[11px] text-gray-500 font-mono">[{b.code}] · {b.rank}</div>
                   </div>
                   <div className="text-right">
-                    <div className="text-sm font-semibold text-emerald-700">{formatINR(b.earned)}</div>
-                    <div className="text-[10px] text-gray-400">{formatINR(b.ytdEarned)} lifetime</div>
+                    <div className="text-sm font-semibold text-emerald-700"><Secret>{formatINR(b.earned)}</Secret></div>
+                    <div className="text-[10px] text-gray-400"><Secret>{formatINR(b.ytdEarned)}</Secret> lifetime</div>
                   </div>
                 </Link>
               ))}
@@ -402,7 +402,7 @@ export default function Analytics() {
                   <div className="flex items-center justify-between text-sm mb-1">
                     <span className="font-medium text-gray-800 truncate">{p.name}</span>
                     <span className="text-gray-500 text-xs tabular-nums">
-                      <b className="text-gray-900">{formatINR(p.value)}</b> · {p.bookings} bookings · {share}%
+                      <b className="text-gray-900"><Secret>{formatINR(p.value)}</Secret></b> · {p.bookings} bookings · {share}%
                     </span>
                   </div>
                   <div className="h-2 bg-gray-100 rounded-full overflow-hidden">

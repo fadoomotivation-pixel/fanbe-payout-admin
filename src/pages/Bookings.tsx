@@ -1196,6 +1196,19 @@ export default function Bookings() {
   }
   const removePlot = (plotId: string) => applyPlotIds(((form.plot_ids || []) as string[]).filter(id => id !== plotId))
 
+  // The form used to print straight from the list row, which carries no payments -- so a
+  // customer who had paid half was handed a form reading "0 payments" and the full price
+  // as balance due. One query for the one booking being printed fixes that; the Customer
+  // Pipeline already did this, the Bookings list simply never had.
+  const printForm = async (b: any) => {
+    const { data } = await supabase
+      .from('bp_payments')
+      .select('*')
+      .eq('booking_id', b.id)
+      .order('payment_date', { ascending: true })
+    printApplicationForm(b, { payments: data || [] })
+  }
+
   const handleBrokerChange = (brokerId: string) => {
     setForm((p: any) => {
       const b = (brokers as any[]).find((br: any) => br.id === brokerId)
@@ -1540,7 +1553,7 @@ export default function Bookings() {
               <Users size={11}/>Pipeline
             </Link>
             {!locked && <Button size="sm" variant="ghost" onClick={() => open(r)}><FileText size={12} />Edit</Button>}
-            <Button size="sm" variant="ghost" onClick={() => printApplicationForm(r)}><Printer size={12} />Form</Button>
+            <Button size="sm" variant="ghost" onClick={() => printForm(r)}><Printer size={12} />Form</Button>
             {locked && (
               <Button size="sm" variant="secondary" onClick={() => setClosureFor({ booking: r, action: 'reopen' })}>
                 <Unlock size={12}/>Reopen
@@ -1707,6 +1720,34 @@ export default function Bookings() {
               <div className="border border-gray-200 rounded-lg px-3 py-2.5 text-sm text-gray-400 bg-gray-50">
                 Select a scheme / project first
               </div>
+            ) : selectedPlots.length === 1 ? (
+              /* Once a plot is picked the list goes away and the chosen plot takes its
+                 place, with a Change button to reopen it.  Manisha: "jo plot select kr
+                 rahe h drop-down nahi hat raha" — the list was never a dropdown at all,
+                 it just sat there open under the search box with nothing to close it, so
+                 after choosing P2 you still faced every other plot in the scheme. */
+              <div className="flex items-center gap-2 p-2.5 rounded-lg border border-blue-200 bg-blue-50">
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-sm text-gray-900 truncate">
+                    {selectedPlots[0].plot_no}
+                    {(selectedPlots[0].block || selectedPlots[0].sector) && (
+                      <span className="ml-1.5 text-[11px] font-normal text-gray-500">
+                        {[selectedPlots[0].block, selectedPlots[0].sector].filter(Boolean).join(' · ')}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-blue-700/80">
+                    {selectedPlots[0].size_sqyd} sqyd @ {formatINR(selectedPlots[0].price_per_sqyd)}/gaj
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { removePlot(selectedPlots[0].id); setPlotSearch('') }}
+                  className="text-xs px-2.5 py-1.5 rounded-lg text-blue-700 hover:bg-white"
+                >
+                  Change
+                </button>
+              </div>
             ) : (
               <>
                 <div className="relative">
@@ -1760,9 +1801,10 @@ export default function Bookings() {
             )}
           </div>
 
-          {/* Selected plots — chips with the running total, so admin can see (and undo)
-              exactly which plots this one booking covers. */}
-          {selectedPlots.length > 0 && (
+          {/* Only for the old bookings that were saved with several plots before the
+              one-plot rule.  A single plot is shown by the card above instead, so it is
+              not printed twice — that double line is what made the picker look broken. */}
+          {selectedPlots.length > 1 && (
             <div className="col-span-2 -mt-1">
               <div className="flex flex-wrap gap-1.5">
                 {selectedPlots.map((p: any) => (

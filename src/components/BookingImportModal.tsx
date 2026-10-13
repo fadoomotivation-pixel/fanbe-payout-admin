@@ -161,6 +161,9 @@ type Row = {
   commission_pct: number
   advance: number
   warnings: string[]
+  /** Set when the row must NOT be imported. A warning is a gap to fix later; this is a
+      row that would make the books wrong, so it is left out entirely. */
+  skip: string
 }
 
 export default function BookingImportModal({ open, onClose, onImported }: {
@@ -273,9 +276,19 @@ export default function BookingImportModal({ open, onClose, onImported }: {
         warnings.push('No plot no — add it on the booking later')
       }
 
+      // A duplicate old id is the one thing that must never be waved through. Everything
+      // else on this sheet is a gap the office can fill in later; a second copy of a deal
+      // that is already in the system is a wrong record that doubles the books, and it
+      // cannot be spotted afterwards without comparing against the old register by hand.
+      //
+      // This is not theory. The Import button stayed on screen after a run, Manisha
+      // pressed it three times because the window would not close, and 45 old deals
+      // became 99 bookings. With this check the second and third press do nothing.
+      let skip = ''
       if (legacy_no) {
         const k = norm(legacy_no)
-        if (seenNos.has(k) || takenNos.has(k)) warnings.push(`Old id no ${legacy_no} appears more than once — imported anyway, so check these`)
+        if (takenNos.has(k))      skip = `Old id ${legacy_no} is already in the system — skipped`
+        else if (seenNos.has(k))  skip = `Old id ${legacy_no} appears twice in this sheet — only the first is imported`
         else seenNos.add(k)
       }
 
@@ -327,7 +340,7 @@ export default function BookingImportModal({ open, onClose, onImported }: {
       }
 
       return {
-        line: i + 1, legacy_no, booking_date,
+        line: i + 1, legacy_no, booking_date, skip,
         project_id: project?.id || null, project_name,
         plot_id: plot?.id || null, plot_no,
         size_sqyd, size_tag, rate_per_sqyd, total,
@@ -338,8 +351,15 @@ export default function BookingImportModal({ open, onClose, onImported }: {
     })
   }, [text, ref])
 
-  const valid = parsed
-  const invalid = parsed.filter(r => r.warnings.length > 0)
+  // Rows whose sheet names an upline that matched no broker. Counted once per row, not
+  // once per name, because the question the office needs answered is "how many of these
+  // deals would pay nobody".
+  const unmatchedUplineRows = parsed.filter(
+    r => !r.skip && r.uplines.length > 0 && r.uplines.every(u => !u.broker_id),
+  ).length
+  const valid   = parsed.filter(r => !r.skip)
+  const skipped = parsed.filter(r =>  r.skip)
+  const invalid = valid.filter(r => r.warnings.length > 0)
 
   const runImport = async () => {
     if (valid.length === 0) return
@@ -373,6 +393,15 @@ export default function BookingImportModal({ open, onClose, onImported }: {
 
         const noteBits = ['Imported from the old records sheet']
         if (r.size_tag) noteBits.push(`Size written as "${r.size_tag}" in the sheet`)
+        // When the plot number on the sheet matched nothing in Plots, the booking is saved
+        // without a plot and the number was simply thrown away -- so the printed form had
+        // a blank plot no. and nobody could tell which plot the old register meant. Keep it.
+        if (r.plot_no && !r.plot_id) noteBits.push(`Plot "${r.plot_no}" from the sheet is not in Plots yet — link it from the booking`)
+        // Same for upline names that matched no broker: the sheet said who sells this deal
+        // and the system would otherwise forget it entirely.
+        if (r.uplines.length > 0 && r.uplines.every(u => !u.broker_id)) {
+          noteBits.push(`Upline from the sheet, not in Brokers: ${r.uplines.map(u => `${u.name} ${u.share}%`).join(', ')}`)
+        }
         if (hits.length > 0 && !(payCommission && r.commission_pct > 0)) {
           noteBits.push(`Upline split from the sheet (not paid): ${r.uplines.map(u => `${u.name} ${u.share}%`).join(', ')}`)
         }
@@ -542,11 +571,25 @@ export default function BookingImportModal({ open, onClose, onImported }: {
 
         {!ref && open && <div className="text-xs text-gray-400">Loading projects, plots, brokers and customers…</div>}
 
+        {/* Brokers must go in BEFORE bookings. The office imported 99 bookings while the
+            Brokers page held two names, so every upline on the sheet matched nothing and
+            not one of those deals pays anybody. That was only a yellow line per row
+            among many; it needed to be the first thing you see. */}
+        {unmatchedUplineRows > 0 && (
+          <div className="text-xs rounded-lg px-3 py-2.5 border bg-rose-50 border-rose-300 text-rose-900">
+            <b>{unmatchedUplineRows} of {parsed.length} rows name an upline that is not in Brokers.</b>
+            {' '}Those bookings would be saved with no broker attached, so <b>nobody gets paid</b> on
+            them and no commission is ever worked out — the names on your sheet are simply dropped.
+            Import your brokers first (Brokers → Import), then paste this sheet again.
+          </div>
+        )}
+
         {parsed.length > 0 && (
           <>
             <div className="flex flex-wrap gap-3 text-xs">
               <span className="inline-flex items-center gap-1 text-emerald-700"><CheckCircle2 size={13}/><b>{valid.length}</b> will be imported</span>
               {invalid.length > 0 && <span className="inline-flex items-center gap-1 text-amber-700"><AlertTriangle size={13}/><b>{invalid.length}</b> with gaps — fix in the app afterwards</span>}
+              {skipped.length > 0 && <span className="inline-flex items-center gap-1 text-rose-700"><AlertTriangle size={13}/><b>{skipped.length}</b> already imported — skipped</span>}
               <span className="text-gray-500">Total value {formatINR(valid.reduce((s, r) => s + r.total, 0))} · advance {formatINR(valid.reduce((s, r) => s + r.advance, 0))}</span>
             </div>
 
@@ -588,9 +631,11 @@ export default function BookingImportModal({ open, onClose, onImported }: {
                         )}
                       </td>
                       <td className="px-2 py-1">
-                        {r.warnings.length > 0
-                          ? <span className="text-amber-700">{r.warnings.join('; ')}</span>
-                          : <span className="text-emerald-700">OK</span>}
+                        {r.skip
+                          ? <span className="text-rose-700 font-medium">{r.skip}</span>
+                          : r.warnings.length > 0
+                            ? <span className="text-amber-700">{r.warnings.join('; ')}</span>
+                            : <span className="text-emerald-700">OK</span>}
                       </td>
                     </tr>
                   ))}
@@ -626,11 +671,20 @@ export default function BookingImportModal({ open, onClose, onImported }: {
           </span>
         </div>
 
+        {/* After a run the Import button is gone, not merely disabled. Leaving it on
+            screen is what caused the duplicates: the window stayed open, it still said
+            "Import 20 bookings", and pressing it again imported all 20 a second time. */}
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={close}>{result ? 'Done' : 'Cancel'}</Button>
-          <Button onClick={runImport} loading={saving} disabled={valid.length === 0 || !ref}>
-            <ClipboardPaste size={14}/>Import {valid.length} booking{valid.length === 1 ? '' : 's'}
-          </Button>
+          {result ? (
+            <Button onClick={close}><CheckCircle2 size={14}/>Done</Button>
+          ) : (
+            <>
+              <Button variant="secondary" onClick={close}>Cancel</Button>
+              <Button onClick={runImport} loading={saving} disabled={valid.length === 0 || !ref}>
+                <ClipboardPaste size={14}/>Import {valid.length} booking{valid.length === 1 ? '' : 's'}
+              </Button>
+            </>
+          )}
         </div>
       </div>
     </Modal>
