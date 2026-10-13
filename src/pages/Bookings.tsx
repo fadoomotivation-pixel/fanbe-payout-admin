@@ -1548,9 +1548,14 @@ export default function Bookings() {
         const locked = isClosed(r)
         return (
           <div className="flex gap-1 flex-wrap">
+            {/* Manisha: "Emi pay krne ka option kaha h??? Plot book hone k baad".  It was
+                right here, behind the word "Pipeline" — a name that tells an office nothing
+                about taking a payment.  The screen is unchanged; only the label now says
+                what you came for. */}
             <Link to={`/customer-pipeline?booking=${r.id}`}
+              title="Record a payment, set up or collect EMI for this booking"
               className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100">
-              <Users size={11}/>Pipeline
+              <IndianRupee size={11}/>Payment / EMI
             </Link>
             {!locked && <Button size="sm" variant="ghost" onClick={() => open(r)}><FileText size={12} />Edit</Button>}
             <Button size="sm" variant="ghost" onClick={() => printForm(r)}><Printer size={12} />Form</Button>
