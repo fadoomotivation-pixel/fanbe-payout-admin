@@ -32,6 +32,13 @@
 --
 -- The whole thing is one transaction: it either all happens or none of it does.
 --
+-- RE-RUNNABLE. This first used a TEMP table to hold the list of copies, which
+-- only exists for one transaction - so running the file a second time, or
+-- running part of it with text selected in the editor, failed with
+-- 'relation "_dupes" does not exist'. The list is now a real table,
+-- backup_20261013.dup_plan, which doubles as the record of exactly what was
+-- removed and why. Running this again on clean data now does nothing at all.
+--
 -- Plain ASCII, short lines, no long rules. A banner of repeated punctuation has
 -- already cost us one failed paste on a phone.
 
@@ -54,7 +61,9 @@ $guard$;
 CREATE SCHEMA IF NOT EXISTS backup_20261013;
 
 -- The copies to remove: everything that is not the keeper for its old id.
-CREATE TEMP TABLE _dupes ON COMMIT DROP AS
+-- A real table, not a temp one: it must survive to the next statement, and it
+-- is worth keeping as the record of what was taken out.
+CREATE TABLE IF NOT EXISTS backup_20261013.dup_plan AS
 WITH work AS (
   SELECT b.id, b.booking_no, b.legacy_booking_no, b.customer_id, b.created_at,
          (SELECT count(*) FROM public.bp_pdc_cheques      c WHERE c.booking_id = b.id)
@@ -82,7 +91,7 @@ SELECT id, booking_no, legacy_booking_no, customer_id, attached
 DO $check$
 DECLARE n bigint;
 BEGIN
-  SELECT coalesce(sum(attached), 0) INTO n FROM _dupes;
+  SELECT coalesce(sum(attached), 0) INTO n FROM backup_20261013.dup_plan;
   IF n > 0 THEN
     RAISE EXCEPTION '%',
       'Refusing to continue: ' || n || ' attached rows (cheques, payments, '
@@ -92,19 +101,19 @@ BEGIN
 END
 $check$;
 
-CREATE TABLE backup_20261013.dup_bookings AS
+CREATE TABLE IF NOT EXISTS backup_20261013.dup_bookings AS
   SELECT b.* FROM public.bp_bookings b
-   WHERE b.id IN (SELECT id FROM _dupes);
+   WHERE b.id IN (SELECT id FROM backup_20261013.dup_plan);
 
-CREATE TABLE backup_20261013.dup_customers AS
+CREATE TABLE IF NOT EXISTS backup_20261013.dup_customers AS
   SELECT c.* FROM public.bp_customers c
-   WHERE c.id IN (SELECT customer_id FROM _dupes WHERE customer_id IS NOT NULL)
+   WHERE c.id IN (SELECT customer_id FROM backup_20261013.dup_plan WHERE customer_id IS NOT NULL)
      AND NOT EXISTS (
        SELECT 1 FROM public.bp_bookings b
         WHERE b.customer_id = c.id
-          AND b.id NOT IN (SELECT id FROM _dupes));
+          AND b.id NOT IN (SELECT id FROM backup_20261013.dup_plan));
 
-DELETE FROM public.bp_bookings WHERE id IN (SELECT id FROM _dupes);
+DELETE FROM public.bp_bookings WHERE id IN (SELECT id FROM backup_20261013.dup_plan);
 
 DELETE FROM public.bp_customers c
  WHERE c.id IN (SELECT id FROM backup_20261013.dup_customers)
