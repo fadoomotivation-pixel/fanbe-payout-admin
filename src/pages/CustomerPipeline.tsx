@@ -2205,11 +2205,21 @@ function MarkRegistryModal({ booking, open, onClose, onSubmit, submitting }: any
           <div className="col-span-2"><Input label="Notes" value={f.registry_notes ?? ''} onChange={(e: any) => set('registry_notes', e.target.value)}/></div>
         </div>
 
-        <p className="text-[11px] text-gray-500">
-          {plotCount > 0
-            ? `${plotCount} plot${plotCount === 1 ? '' : 's'} on this booking will move to Registry done and leave the available pool.`
-            : 'No plot is linked to this booking, so only the deed details are recorded.'}
-        </p>
+        {plotCount > 0 ? (
+          <p className="text-[11px] text-gray-500">
+            {plotCount} plot{plotCount === 1 ? '' : 's'} on this booking will move to Registry done and leave the available pool.
+          </p>
+        ) : (
+          /* This used to be a quiet grey line and it is not a quiet problem.  Registering
+             a deed with no plot linked means inventory never learns the plot is gone, so
+             the same plot can be sold to a second customer.  Say what happens, and say
+             where to fix it. */
+          <p className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2">
+            <b>No plot is linked to this booking.</b> The deed details will be recorded, but no plot
+            is marked sold — so this plot stays in the available list and can be sold again. Link the
+            plot first on the booking’s <b>Edit</b> screen (प्लॉट नं. / Plot number), then come back here.
+          </p>
+        )}
       </div>
       <div className="flex justify-end gap-2 mt-5">
         <Button variant="secondary" onClick={onClose}>Cancel</Button>

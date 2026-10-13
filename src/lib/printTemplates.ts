@@ -317,6 +317,16 @@ function applicationFormBody(b: any, ctx: { customer?: any; project?: any; plot?
   const br   = ctx.broker   || b.brokers      || {}
   const payments = (ctx.payments || []).slice().sort((a, b) => (a.payment_date || a.created_at || '').localeCompare(b.payment_date || b.created_at || ''))
   const fmtDate = (d: any) => d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: '2-digit' }) : ''
+
+  // Size and rate live on the BOOKING as well as on the plot, and the booking is the one
+  // that is always there - an old deal imported from the register has both figures and no
+  // linked plot at all, which is why these three came out blank on every imported form.
+  //
+  // The rate was blank on EVERY form, linked plot or not: this read pl.sqft_rate, and that
+  // column does not exist. The plots table calls it price_per_sqyd.
+  const plotNo      = pl.plot_no || pl.plot_number || ''
+  const sizeSqyd    = b.size_sqyd || pl.size_sqyd || pl.area || ''
+  const ratePerSqyd = b.rate_per_sqyd || pl.price_per_sqyd || pl.sqft_rate || ''
   const totalPaid = payments.reduce((s, p) => s + Number(p.amount || 0), 0)
   const totalNet  = Number(b.total_amount || b.plot_total_price || 0)
   const balance   = Math.max(0, totalNet - totalPaid)
@@ -363,14 +373,14 @@ function applicationFormBody(b: any, ctx: { customer?: any; project?: any; plot?
     <div><div class="title">FANBE GROUP</div><div style="font-size:10px;color:#64748b">Success Starts Here</div></div>
   </div>
   <div class="sub"><h2>आवासीय भू-खण्ड योजना</h2><br/><h3>आवेदन-पत्र</h3></div>
-  <div class="row"><div class="field"><b>आवासीय योजना का नाम</b><span>${b.scheme_name || pj.name || pj.project_name || ''}</span></div><div class="field" style="max-width:200px"><b>दिनांक</b><span>${fmtDate(b.application_date || b.created_at)}</span></div></div>
+  <div class="row"><div class="field"><b>आवासीय योजना का नाम</b><span>${b.scheme_name || pj.name || pj.project_name || ''}</span></div><div class="field" style="max-width:200px"><b>दिनांक</b><span>${fmtDate(b.booking_date || b.application_date || b.created_at)}</span></div></div>
   <div class="row"><div class="field"><b>नाम</b><span>${cust.name || ''}</span></div><div class="field" style="max-width:200px"><b>जन्म तिथि</b><span>${fmtDate(cust.dob)}</span></div></div>
   <div class="row"><div class="field"><b>पिता/पति का नाम</b><span>${cust.father_or_husband_name || ''}</span></div></div>
   <div class="row"><div class="field"><b>स्थाई पता</b><span>${cust.address || ''}</span></div></div>
   <div class="row"><div class="field"><b>बुकिंग राशि</b><span>${b.booking_amount ? '₹' + Number(b.booking_amount).toLocaleString('en-IN') : ''}</span></div><div class="field"><b>बुकिंग राशि समय</b><span>${b.booking_time || ''}</span></div></div>
   <div class="row"><div class="field"><b>दूरभाष</b><span>${cust.phone || cust.mobile || ''}</span></div><div class="field"><b>ई-मेल</b><span>${cust.email || ''}</span></div></div>
   <div class="row"><div class="field"><b>बैंक का नाम</b><span>${b.customer_bank_name || ''}</span></div><div class="field" style="max-width:200px"><b>समय</b><span>${b.booking_time || ''}</span></div></div>
-  <div class="row"><div class="field"><b>प्लॉट नं.</b><span>${pl.plot_no || pl.plot_number || ''}</span></div><div class="field"><b>वर्ग गज</b><span>${pl.size_sqyd || pl.area || ''}</span></div><div class="field"><b>प्रति वर्ग गज कीमत</b><span>${pl.sqft_rate ? '₹' + pl.sqft_rate : ''}</span></div><div class="field"><b>प्लॉट की कुल कीमत</b><span>${b.total_amount ? '₹' + Number(b.total_amount).toLocaleString('en-IN') : ''}</span></div></div>
+  <div class="row"><div class="field"><b>प्लॉट नं.</b><span>${plotNo}</span></div><div class="field"><b>वर्ग गज</b><span>${sizeSqyd || ''}</span></div><div class="field"><b>प्रति वर्ग गज कीमत</b><span>${ratePerSqyd ? '₹' + Number(ratePerSqyd).toLocaleString('en-IN') : ''}</span></div><div class="field"><b>प्लॉट की कुल कीमत</b><span>${b.total_amount ? '₹' + Number(b.total_amount).toLocaleString('en-IN') : ''}</span></div></div>
   <div class="row"><div class="field"><b>परिचयकर्ता / Upline</b><span>${br.name || ''}</span></div><div class="field" style="max-width:240px"><b>परिचयकर्ता कोड नं.</b><span>${b.upline_broker_code || br.broker_id || ''}</span></div></div>
 
   <div class="section-title">उतराधिकारी / Nominee</div>
