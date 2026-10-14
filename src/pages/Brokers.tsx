@@ -9,6 +9,7 @@ import { Modal } from '@/components/ui/Modal.tsx'
 import { Badge } from '@/components/ui/Badge.tsx'
 import { KYC_COLORS, formatINR } from '@/lib/utils'
 import { Secret } from '@/lib/privacy'
+import UplineChain from '@/components/UplineChain'
 import { Plus, Search, KeyRound, Copy, Check, Eye, UserPlus, X, ClipboardPaste } from 'lucide-react'
 import BrokerImportModal from '@/components/BrokerImportModal'
 import toast from 'react-hot-toast'
@@ -646,7 +647,13 @@ export default function Brokers() {
               excludeId={editing?.id}
               onChange={(id) => set('sponsor_id', id)}
             />
-            <UplineChain brokers={allBrokers} sponsorId={form.sponsor_id} self={form.name}/>
+            <UplineChain
+              brokers={allBrokers}
+              startId={form.sponsor_id}
+              title={form.name?.trim() ? `Team above ${form.name.trim()}` : 'Team above this broker'}
+              emptyText="No sponsor — this broker sits at the top of their own tree."
+              note="Commission climbs this chain one level at a time, each level earning the difference between its own rank % and the one below. One sponsor per broker is what keeps that arithmetic from paying the same money twice."
+            />
           </div>
 
           <Input label="Date of Joining" type="date" value={form.date_of_joining} onChange={(e: any) => set('date_of_joining', e.target.value)} />
@@ -808,74 +815,6 @@ function Field({ label, value, copyKey, copiedKey, onCopy }: any) {
 
 // Combobox-style sponsor picker. Single input → live filtered dropdown → click to pick.
 // Selected sponsor is shown as a chip with a Change button.
-/**
- * The whole team above this broker, not just the one name they were given.
- *
- * Manisha: "yha hum multiple agents select kar skte h kya?? taki uper team tak show ho".
- * The answer to the first half is no, and it is not a limitation of this form - it is what
- * makes the commission arithmetic possible at all. recompute_booking_payouts() starts at
- * the selling broker and walks sponsor_id upwards one step at a time, paying each level the
- * DIFFERENCE between its rank % and the level below it. Two sponsors would mean two chains
- * out of the same broker, and the same rupee would be paid up both of them.
- *
- * But the second half of what she asked for is exactly right, and it was simply missing:
- * you pick one name and cannot see who sits above THEM. So the chain is drawn here, up to
- * the top of the tree, as soon as a sponsor is chosen. Nothing is selected or saved - this
- * is the upline the system already derives, shown instead of left to be imagined.
- */
-function UplineChain({ brokers, sponsorId, self }: { brokers: any[]; sponsorId: string; self?: string }) {
-  const chain = useMemo(() => {
-    const byId = new Map(brokers.map((b: any) => [b.id, b]))
-    const out: any[] = []
-    let cur = sponsorId
-    // The same 15-level ceiling the payout function uses, and the same reason: a loop in
-    // the data must not spin for ever. The DB refuses cycles, but this runs on whatever is
-    // in the browser's copy.
-    for (let i = 0; i < 15 && cur; i++) {
-      const b = byId.get(cur)
-      if (!b) break
-      out.push(b)
-      cur = b.sponsor_id
-    }
-    return out
-  }, [brokers, sponsorId])
-
-  if (!sponsorId) {
-    return (
-      <p className="mt-2 text-[11px] text-gray-400">
-        No sponsor — this broker sits at the top of their own tree.
-      </p>
-    )
-  }
-  if (chain.length === 0) return null
-
-  return (
-    <div className="mt-2.5 rounded-lg border border-indigo-100 bg-indigo-50/40 px-3 py-2">
-      <div className="text-[11px] font-semibold text-indigo-900 mb-1.5">
-        Team above {self?.trim() ? <b>{self.trim()}</b> : 'this broker'} — {chain.length} level{chain.length === 1 ? '' : 's'}
-      </div>
-      <ol className="space-y-1">
-        {chain.map((b: any, i: number) => (
-          <li key={b.id} className="flex items-center gap-2 text-[12px]">
-            <span className="w-5 shrink-0 text-[10px] font-mono text-indigo-400">L{i + 1}</span>
-            <span className="font-medium text-gray-900 truncate">{b.name}</span>
-            <span className="text-[10px] font-mono text-gray-400 shrink-0">[{b.broker_id || '—'}]</span>
-            {b.rank && <span className="text-[10px] text-indigo-700 shrink-0">{b.rank}</span>}
-            {i === chain.length - 1 && !b.sponsor_id && (
-              <span className="text-[10px] text-gray-400 shrink-0">top of tree</span>
-            )}
-          </li>
-        ))}
-      </ol>
-      <p className="mt-1.5 text-[11px] text-indigo-900/70">
-        Commission climbs this chain one level at a time, each level earning the difference
-        between its own rank % and the one below. One sponsor per broker is what keeps that
-        arithmetic from paying the same money twice.
-      </p>
-    </div>
-  )
-}
-
 function SponsorPicker({ brokers, value, excludeId, onChange }: { brokers: any[]; value: string; excludeId?: string; onChange: (id: string) => void }) {
   const [q, setQ] = useState('')
   const [open, setOpen] = useState(false)
