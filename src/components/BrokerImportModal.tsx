@@ -47,6 +47,10 @@ import { downloadTemplateFile } from '@/lib/download'
 const COLUMNS = [
   'broker_id', 'name', 'phone', 'email', 'pan_no', 'date_of_joining', 'sponsor',
   'type', 'bank_name', 'account_no', 'ifsc', 'account_holder', 'aadhaar_no',
+  // Traditional brokers only: the rate they are on, in rupees per gaj. Without it the
+  // booking form cannot fill the team commission and the office is back to Excel, so it
+  // belongs on the same sheet as everything else about the broker.
+  'rate_per_sqyd',
 ] as const
 
 const digitsOnly = (s: string) => (s || '').replace(/\D/g, '')
@@ -76,6 +80,7 @@ type Row = {
   ifsc: string
   account_holder: string
   aadhaar_no: string
+  rate_per_sqyd: number | null
   errors: string[]
 }
 
@@ -90,6 +95,13 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
   const [brokerType, setBrokerType] = useState<'traditional' | 'mlm'>('traditional')
   const [saving, setSaving] = useState(false)
   const [result, setResult] = useState<{ ok: number; failed: { line: number; name: string; reason: string }[] } | null>(null)
+
+  // Does the database have the per-gaj rate column yet? Brokers are loaded with select *,
+  // so the key is present on every row once migration 20261014 has been run. Feature-
+  // detected because that migration is run by hand after this code deploys, and a column
+  // Postgres does not have would fail the whole import rather than one field.
+  const hasRateColumn = existing.length === 0
+    || Object.prototype.hasOwnProperty.call(existing[0] as any, 'traditional_rate_per_sqyd')
 
   const parsed = useMemo<Row[]>(() => {
     // '#' marks the sample rows in the downloadable template.  Skipping them means the
@@ -196,6 +208,21 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
       const account_holder = get('account_holder') || ''
       const aadhaar_no     = digitsOnly(get('aadhaar_no'))
 
+      // What a traditional broker is on, per gaj. Null, not 0, when the sheet leaves it
+      // blank: 0 would be a decision about somebody's money that nobody has made, and the
+      // booking form reports a missing rate instead of quietly paying nothing.
+      const rateRaw = Number(String(get('rate_per_sqyd')).replace(/[^\d.]/g, ''))
+      const rate_per_sqyd = Number.isFinite(rateRaw) && rateRaw > 0 ? rateRaw : null
+      if (rate_per_sqyd != null && broker_type !== 'traditional') {
+        warnings.push('Rate per gaj only applies to a traditional broker — ignored on this row, an Affiliate broker is paid from their rank')
+      }
+      if (rate_per_sqyd != null && rate_per_sqyd > 5000) {
+        warnings.push(`Rate ${rate_per_sqyd}/gaj looks high — check the column before paying on it`)
+      }
+      if (rate_per_sqyd == null && broker_type === 'traditional') {
+        warnings.push('No rate per gaj — this broker earns nothing from the team commission until one is set')
+      }
+
       if (ifsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) {
         warnings.push(`IFSC ${ifsc} does not look like an IFSC code — saved anyway, check it before paying`)
       }
@@ -213,6 +240,7 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
       return {
         line: i + 1, broker_id, name, phone, email, pan_no, date_of_joining, sponsor,
         broker_type, bank_name, account_no, ifsc, account_holder, aadhaar_no,
+        rate_per_sqyd,
         errors: warnings,
       }
     })
@@ -251,6 +279,12 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
       // uses, so imported rows behave exactly like hand-added ones.
       rank: 'Executive',
       status: 'active',
+      // Only on a traditional broker, and only once the database has the column —
+      // migration 20261014 is run by hand after this deploys, and sending a column
+      // Postgres does not have would fail the whole import.
+      ...(hasRateColumn && r.broker_type === 'traditional' && r.rate_per_sqyd != null
+        ? { traditional_rate_per_sqyd: r.rate_per_sqyd }
+        : {}),
     })
 
     // Chunked so a long sheet doesn't hit a request limit; on a chunk failure we retry
@@ -329,11 +363,11 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
   // admin adds get imported.  Opens straight in Excel / Google Sheets.
   const downloadTemplate = () => {
     const csv = [
-      'Broker ID,Name,Phone,Email,PAN,Date of Joining,Upline (sponsor),Type,Bank name,Account no,IFSC,Account holder,Aadhaar',
-      'TR814,SHIV SHANKAR THAKUR,9811100011,,,01/04/2024,,traditional,State Bank of India,30123456789,SBIN0001234,SHIV SHANKAR THAKUR,',
-      'TR816,SURENDER CHAUDHARY,9811100012,,ABCPK1234A,15/07/2023,SHIV SHANKAR THAKUR,traditional,HDFC Bank,50100123456789,HDFC0000123,SURENDER CHAUDHARY,',
-      ',SATISH KUMAR,9811100013,,,,TR816,traditional,,,,,',
-      ',RADHEY SHYAM,9811100014,,,,SATISH KUMAR,affiliate,Punjab National Bank,1234567890123,PUNB0123456,RADHEY SHYAM,123412341234',
+      'Broker ID,Name,Phone,Email,PAN,Date of Joining,Upline (sponsor),Type,Bank name,Account no,IFSC,Account holder,Aadhaar,Rate per gaj',
+      'TR814,SHIV SHANKAR THAKUR,9811100011,,,01/04/2024,,traditional,State Bank of India,30123456789,SBIN0001234,SHIV SHANKAR THAKUR,,2000',
+      'TR816,SURENDER CHAUDHARY,9811100012,,ABCPK1234A,15/07/2023,SHIV SHANKAR THAKUR,traditional,HDFC Bank,50100123456789,HDFC0000123,SURENDER CHAUDHARY,,1500',
+      ',SATISH KUMAR,9811100013,,,,TR816,traditional,,,,,,1200',
+      ',RADHEY SHYAM,9811100014,,,,SATISH KUMAR,affiliate,Punjab National Bank,1234567890123,PUNB0123456,RADHEY SHYAM,123412341234,',
       '',
       '# ---- Notes. Lines starting with # are ignored, so you can leave them in. ----',
       '# Fill what you have. Nothing is compulsory - the rest can be corrected in the app afterwards.',
@@ -343,6 +377,19 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
       '#                    This is how a booking finds its broker. "Radheyshyam" and',
       '#                    "Radhey Shyam" both match, but "R. Shyam" does not, and that',
       '#                    booking then pays nobody.',
+      '# * Rate per gaj   : TRADITIONAL brokers only - what this broker is on, per gaj.',
+      '#                    This is the number that used to live in your head and send the',
+      '#                    commission out to Excel. Put it here and the booking form fills',
+      '#                    the whole team in one click.',
+      '#                    Each level earns the DIFFERENCE between their rate and the rate',
+      '#                    of the person below them. In the four sample rows above:',
+      '#                      SATISH   1200/gaj sells it -> earns 1200/gaj',
+      '#                      SURENDER 1500/gaj          -> earns  300/gaj (1500-1200)',
+      '#                      SHIV     2000/gaj          -> earns  500/gaj (2000-1500)',
+      '#                    So a 100 gaj deal costs 2000 x 100 in all, NOT the three rates',
+      '#                    added together. Leave blank if nothing is agreed yet - that',
+      '#                    broker is then left out of the auto-fill rather than paid zero.',
+      '#                    Affiliate brokers ignore this: they are paid from their rank.',
       '# * Account no     : with IFSC. Withdrawals will not pay a broker who has no bank',
       '#                    details, so a sheet without these just moves the typing to a',
       '#                    hundred broker pages later. Account holder is the name as the',
@@ -380,7 +427,7 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
           Copy the rows straight out of Excel or Google Sheets and paste them below — one broker per line, in this column order:
         </div>
         <div className="font-mono text-[11px] bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-700 overflow-x-auto whitespace-nowrap">
-          Broker ID → Name → Phone → Email → PAN → Date of joining → Upline (sponsor) → Type → Bank name → Account no → IFSC → Account holder → Aadhaar
+          Broker ID → Name → Phone → Email → PAN → Date of joining → Upline (sponsor) → Type → Bank name → Account no → IFSC → Account holder → Aadhaar → Rate per gaj
         </div>
         <div className="flex items-center gap-2 text-xs bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-2">
           <span className="text-emerald-900 flex-1">

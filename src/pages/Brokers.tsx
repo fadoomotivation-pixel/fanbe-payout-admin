@@ -24,6 +24,8 @@ const EMPTY = {
   tds_applicable:false, pan_no:'', gst_no:'',
   sponsor_id:'', date_of_joining:'',
   bank_name:'', account_no:'', ifsc:'', account_holder:'', aadhaar_no:'',
+  // Traditional brokers only: the rate they are on, in rupees per gaj.
+  traditional_rate_per_sqyd:'',
 }
 
 function nullifyBlanks(obj: any) {
@@ -167,11 +169,18 @@ export default function Brokers() {
       sponsor_id:b.sponsor_id||'', date_of_joining:b.date_of_joining||'',
       bank_name:b.bank_name||'', account_no:b.account_no||'', ifsc:b.ifsc||'',
       account_holder:b.account_holder||'', aadhaar_no:b.aadhaar_no||'',
+      traditional_rate_per_sqyd: b.traditional_rate_per_sqyd ?? '',
     } : EMPTY)
     setModal(true)
   }
 
   const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }))
+
+  // Does the database have the per-gaj rate column yet? The query above selects *, so the
+  // key is present on every row once migration 20261014 has been run. Feature-detected
+  // rather than assumed, because the migration is run by hand after this deploys.
+  const hasRateColumn = (brokers as any[]).length === 0
+    || Object.prototype.hasOwnProperty.call((brokers as any[])[0], 'traditional_rate_per_sqyd')
 
   const save = async () => {
     let email = form.email?.trim() || ''
@@ -183,6 +192,24 @@ export default function Brokers() {
       sponsor_id: form.sponsor_id || null,
       date_of_joining: form.date_of_joining || null,
     })
+
+    // The rate column arrives with migration 20261014, which is run by hand. The app
+    // deploys the moment this merges, so for the gap between the two the column may not be
+    // there yet — and sending a column Postgres does not have fails the whole save, which
+    // would stop the office adding brokers at all. So it goes in only once a loaded row
+    // proves it exists.
+    //
+    // Only meaningful on a traditional broker. Blanked on an Affiliate one so a broker
+    // switched between the two cannot leave a stale rate behind for the booking form to
+    // pick up and pay on.
+    if (hasRateColumn) {
+      payload.traditional_rate_per_sqyd =
+        form.broker_type === 'traditional' && Number(form.traditional_rate_per_sqyd) > 0
+          ? Number(form.traditional_rate_per_sqyd)
+          : null
+    } else {
+      delete payload.traditional_rate_per_sqyd
+    }
 
     if (editing) {
       await update.mutateAsync({ id: editing.id, data: payload })
@@ -652,9 +679,38 @@ export default function Brokers() {
               startId={form.sponsor_id}
               title={form.name?.trim() ? `Team above ${form.name.trim()}` : 'Team above this broker'}
               emptyText="No sponsor — this broker sits at the top of their own tree."
-              note="Commission climbs this chain one level at a time, each level earning the difference between its own rank % and the one below. One sponsor per broker is what keeps that arithmetic from paying the same money twice."
+              note={form.broker_type === 'traditional'
+                ? 'Commission climbs this chain one level at a time, each level earning the difference between their rate per gaj and the one below. One sponsor per broker is what keeps that arithmetic from paying the same money twice.'
+                : 'Commission climbs this chain one level at a time, each level earning the difference between its own rank % and the one below. One sponsor per broker is what keeps that arithmetic from paying the same money twice.'}
             />
           </div>
+
+          {/* The rate a traditional broker is on.
+
+              Affiliate brokers get their percentage from their rank, so there is nothing to
+              type. Traditional brokers have no rank — each one is on a rate the office
+              agreed with them, "kisi ko 100 rupaye gaj de rakha hai kisi ko 1000 kisi ko
+              1500", and that number used to live only in somebody's head. That is why the
+              commission on a traditional chain had to be worked out in Excel every time.
+
+              Put it here once and the booking form fills the whole team in one click. */}
+          {form.broker_type === 'traditional' && hasRateColumn && (
+            <div className="col-span-2">
+              <Input
+                label="Commission rate per gaj (₹/sq.yd)"
+                type="number"
+                value={form.traditional_rate_per_sqyd}
+                onChange={(e: any) => set('traditional_rate_per_sqyd', e.target.value)}
+                placeholder="e.g. 1000 — what this broker is on"
+              />
+              <p className="text-[11px] text-gray-500 mt-1">
+                What this broker is paid per gaj. The booking form uses it to fill the team
+                commission: each level earns the difference between their rate and the rate of
+                the person below them. Leave blank if nothing is agreed yet — they will simply be
+                left out of the auto-fill.
+              </p>
+            </div>
+          )}
 
           <Input label="Date of Joining" type="date" value={form.date_of_joining} onChange={(e: any) => set('date_of_joining', e.target.value)} />
           <Input label="Aadhaar No" value={form.aadhaar_no} onChange={(e: any) => set('aadhaar_no', e.target.value)} placeholder="XXXX-XXXX-XXXX" />

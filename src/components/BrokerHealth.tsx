@@ -20,11 +20,13 @@ import { Secret, usePrivacy } from '@/lib/privacy'
 import { Search, Download, Check, X, Pencil, AlertTriangle } from 'lucide-react'
 import toast from 'react-hot-toast'
 
-type Issue = 'no_bank' | 'no_phone' | 'no_sponsor' | 'no_pan' | 'no_booking'
+type Issue = 'no_bank' | 'no_rate' | 'no_phone' | 'no_sponsor' | 'no_pan' | 'no_booking'
 
 const ISSUES: { key: Issue; label: string; why: string; severity: 'high' | 'mid' }[] = [
   { key: 'no_bank', label: 'No bank details', severity: 'high',
     why: 'Withdrawals cannot pay these brokers at all. Account number AND IFSC are both needed — half of one is no use to the bank.' },
+  { key: 'no_rate', label: 'No rate per gaj', severity: 'high',
+    why: 'Traditional brokers only. Without the rate they are on, the booking form cannot work out their share of a sale — they are left out of the team commission and earn nothing. This is the number that used to be kept in Excel.' },
   { key: 'no_phone', label: 'No phone', severity: 'high',
     why: 'The phone is the broker login. Without it they can never open their own dashboard, and nobody can call them.' },
   { key: 'no_booking', label: 'No booking yet', severity: 'mid',
@@ -47,11 +49,12 @@ type Row = {
   account_holder: string | null
   broker_type: string | null
   sponsor_id: string | null
+  traditional_rate_per_sqyd: number | null
   bookings: number
   issues: Issue[]
 }
 
-const BLANK_EDIT = { phone: '', pan_no: '', bank_name: '', account_no: '', ifsc: '', account_holder: '' }
+const BLANK_EDIT = { phone: '', pan_no: '', bank_name: '', account_no: '', ifsc: '', account_holder: '', traditional_rate_per_sqyd: '' }
 
 export default function BrokerHealth() {
   const qc = useQueryClient()
@@ -66,9 +69,17 @@ export default function BrokerHealth() {
     queryKey: ['broker_health'],
     refetchOnWindowFocus: true,
     queryFn: async () => {
+      // traditional_rate_per_sqyd arrives with migration 20261014, which is run by hand
+      // after this deploys. Asking for a column Postgres does not have fails the request,
+      // so this screen falls back to the old list rather than going blank.
+      const BASE = 'id, broker_id, name, phone, pan_no, bank_name, account_no, ifsc, account_holder, broker_type, sponsor_id, status'
+      let rateCols = ', traditional_rate_per_sqyd'
+      const probe = await supabase.from('brokers').select(`id${rateCols}`).limit(1)
+      if (probe.error?.code === '42703') rateCols = ''
+
       const [brokers, bookings] = await Promise.all([
         fetchAllRows((from, to) => supabase.from('brokers')
-          .select('id, broker_id, name, phone, pan_no, bank_name, account_no, ifsc, account_holder, broker_type, sponsor_id, status')
+          .select(BASE + rateCols)
           .order('id').range(from, to)),
         fetchAllRows((from, to) => supabase.from('bp_bookings')
           .select('broker_id').neq('stage', 'cancelled').order('id').range(from, to)),
@@ -84,6 +95,9 @@ export default function BrokerHealth() {
           // Both halves or nothing: a transfer with an account number and no IFSC fails at
           // the bank days later, which is worse than knowing now.
           if (!(b.account_no && b.ifsc)) issues.push('no_bank')
+          // Only a traditional broker needs a rate. An Affiliate broker is paid from their
+          // rank, so asking them for one would be noise on this screen.
+          if (rateCols && b.broker_type === 'traditional' && !(Number(b.traditional_rate_per_sqyd) > 0)) issues.push('no_rate')
           if (!b.phone) issues.push('no_phone')
           if (!b.sponsor_id) issues.push('no_sponsor')
           if (!b.pan_no) issues.push('no_pan')
@@ -92,6 +106,11 @@ export default function BrokerHealth() {
         })
     },
   })
+
+  // Did the rate column come back with the rows? Gates both the editor below and the
+  // update, so the screen keeps working in the window before migration 20261014 is run.
+  const hasRateColumn = rows.length === 0
+    || Object.prototype.hasOwnProperty.call(rows[0] as any, 'traditional_rate_per_sqyd')
 
   const save = useMutation({
     mutationFn: async (row: Row) => {
@@ -118,6 +137,12 @@ export default function BrokerHealth() {
         // A bank rejects a transfer with no holder name; the broker's own name is the
         // right default and is what the import uses too.
         account_holder: edit.account_holder.trim() || row.name || null,
+        // Traditional brokers only, and only when the column exists. Blank clears it back
+        // to "no rate agreed" rather than writing a zero somebody never decided on.
+        ...(hasRateColumn && row.broker_type === 'traditional' ? {
+          traditional_rate_per_sqyd: Number(edit.traditional_rate_per_sqyd) > 0
+            ? Number(edit.traditional_rate_per_sqyd) : null,
+        } : {}),
       }).eq('id', row.id)
       if (error) throw error
     },
@@ -131,7 +156,7 @@ export default function BrokerHealth() {
   })
 
   const counts = useMemo(() => {
-    const c: Record<Issue, number> = { no_bank: 0, no_phone: 0, no_sponsor: 0, no_pan: 0, no_booking: 0 }
+    const c: Record<Issue, number> = { no_bank: 0, no_rate: 0, no_phone: 0, no_sponsor: 0, no_pan: 0, no_booking: 0 }
     for (const r of rows) for (const i of r.issues) c[i]++
     return c
   }, [rows])
@@ -152,14 +177,16 @@ export default function BrokerHealth() {
     setEdit({
       phone: r.phone || '', pan_no: r.pan_no || '', bank_name: r.bank_name || '',
       account_no: r.account_no || '', ifsc: r.ifsc || '', account_holder: r.account_holder || '',
+      traditional_rate_per_sqyd: r.traditional_rate_per_sqyd != null ? String(r.traditional_rate_per_sqyd) : '',
     })
   }
 
   const exportCsv = () => {
     downloadCsv(`broker-health-${active}`, [
-      ['Issue', 'Broker ID', 'Name', 'Phone', 'PAN', 'Bank', 'Account no', 'IFSC', 'Type', 'Bookings'],
+      ['Issue', 'Broker ID', 'Name', 'Phone', 'PAN', 'Bank', 'Account no', 'IFSC', 'Type', 'Rate per gaj', 'Bookings'],
       ...list.map(r => [meta.label, r.broker_id || '', r.name, r.phone || '', r.pan_no || '',
-        r.bank_name || '', r.account_no || '', r.ifsc || '', r.broker_type === 'mlm' ? 'Affiliate' : 'Traditional', r.bookings]),
+        r.bank_name || '', r.account_no || '', r.ifsc || '', r.broker_type === 'mlm' ? 'Affiliate' : 'Traditional',
+        r.traditional_rate_per_sqyd ?? '', r.bookings]),
     ])
   }
 
@@ -231,7 +258,8 @@ export default function BrokerHealth() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-[11px] uppercase tracking-wide text-gray-500">
                 <tr>
-                  {['Broker', 'Phone', 'PAN', 'Bank', 'Account no', 'IFSC', 'Sales', ''].map(h => (
+                  {['Broker', 'Phone', 'PAN', 'Bank', 'Account no', 'IFSC',
+                    ...(hasRateColumn ? ['Rate /gaj'] : []), 'Sales', ''].map(h => (
                     <th key={h} className="text-left px-4 py-2 font-semibold whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -273,6 +301,21 @@ export default function BrokerHealth() {
                           ? <input className={cell} value={edit.ifsc} onChange={e => setEdit(p => ({ ...p, ifsc: e.target.value }))} placeholder="HDFC0000123"/>
                           : (r.ifsc || <span className="text-gray-300">—</span>)}
                       </td>
+                      {/* The rate only means something on a traditional broker — an
+                          Affiliate one is paid from their rank, so there is nothing to type. */}
+                      {hasRateColumn && (
+                        <td className="px-4 py-2.5 font-mono text-xs">
+                          {r.broker_type !== 'traditional'
+                            ? <span className="text-gray-300" title="Affiliate brokers are paid from their rank">n/a</span>
+                            : editing
+                              ? <input className={cell} type="number" value={edit.traditional_rate_per_sqyd}
+                                  onChange={e => setEdit(p => ({ ...p, traditional_rate_per_sqyd: e.target.value }))}
+                                  placeholder="e.g. 1000"/>
+                              : (r.traditional_rate_per_sqyd != null
+                                  ? <Secret>{`₹${r.traditional_rate_per_sqyd}`}</Secret>
+                                  : <span className="text-gray-300">—</span>)}
+                        </td>
+                      )}
                       <td className="px-4 py-2.5 tabular-nums text-gray-600">{r.bookings}</td>
                       <td className="px-4 py-2.5 text-right whitespace-nowrap">
                         {editing ? (

@@ -25,6 +25,43 @@ import toast from 'react-hot-toast'
 import { downloadCsv } from '@/lib/download'
 import { Secret } from '@/lib/privacy'
 import UplineChain from '@/components/UplineChain'
+import { teamForSale, buildSplitPlan, pctFromRatePerSqyd, ratePerSqydFromPct } from '@/lib/tradSplit'
+
+/**
+ * The bp_booking_brokers rows for a traditional sale, built once and used by both the
+ * create and the edit path so the two can never drift apart.
+ *
+ * Position 1 is the booking's own broker. That row matters: once ANY row exists,
+ * recompute_booking_payouts() switches to the split branch and stops reading
+ * bp_bookings.traditional_commission_pct altogether, so leaving the primary out would
+ * pay the helpers and pay the person who actually sold the plot nothing.
+ *
+ * `primaryPct` is the effective percent — a typed % as-is, or rupees-per-gaj already
+ * converted — so adding a helper works the same in either input mode. It used to be the
+ * typed % only, which meant a sale entered in rupees per gaj wrote no rows at all and
+ * the helpers were dropped on save without a word.
+ */
+function splitRowsFor(
+  bookingId: string,
+  primaryBrokerId: string | null | undefined,
+  primaryPct: number,
+  splits: { broker_id?: string; commission_pct?: string | number }[],
+) {
+  const extras = (splits || [])
+    .filter(s => s.broker_id && Number(s.commission_pct) > 0)
+    .map((s, i) => ({
+      booking_id: bookingId,
+      broker_id: s.broker_id as string,
+      commission_pct: Number(s.commission_pct),
+      position: i + 2,
+    }))
+  // Nothing to share: no rows, so the booking keeps the plain direct-broker path.
+  if (extras.length === 0 || !primaryBrokerId) return []
+  return [
+    { booking_id: bookingId, broker_id: primaryBrokerId, commission_pct: primaryPct, position: 1 },
+    ...extras,
+  ]
+}
 
 const STAGES = ['token_received','booking_done','cancelled'] as const
 type Stage = typeof STAGES[number]
@@ -370,7 +407,18 @@ export default function Bookings() {
       // (Affiliate Network brokers for Affiliate Network bookings, traditional brokers for traditional bookings).
       // sponsor_id comes along so the booking form can draw the team above the broker and
       // tell two brokers of the same name apart by who sits over them.
-      const { data, error } = await supabase.from('brokers').select('id,name,broker_id,rank,broker_type,status,phone,sponsor_id')
+      // traditional_rate_per_sqyd is what each traditional broker is on, per gaj — the
+      // number the team-commission calculator turns into the split.
+      const COLS = 'id,name,broker_id,rank,broker_type,status,phone,sponsor_id'
+      const { data, error } = await supabase.from('brokers').select(`${COLS},traditional_rate_per_sqyd`)
+      // The rate column arrives with migration 20261014. Until that is run the whole
+      // booking page would go blank on a 42703, so fall back to the old column list and
+      // let the calculator report "no rate set" instead.
+      if (error?.code === '42703') {
+        const retry = await supabase.from('brokers').select(COLS)
+        if (retry.error) throw retry.error
+        return retry.data
+      }
       if (error) throw error
       return data
     },
@@ -425,6 +473,55 @@ export default function Bookings() {
   const plc   = num(form.plc_charges)
   const disc  = num(form.discount_amount)
   const totalNet = Math.max(0, basePrice + dev + plc - disc)
+
+  // The effective commission % for the primary broker, whichever way the office typed it.
+  // Same helper the save path uses, so the figure on screen is the figure that gets paid.
+  const tradPrimaryPct = form.commission_mode === 'traditional'
+    ? (form.traditional_input === 'per_sqyd'
+        ? pctFromRatePerSqyd(num(form.traditional_commission_per_sqyd), size, totalNet)
+        : num(form.traditional_commission_pct))
+    : 0
+
+  // What each level of the team above would earn on this deal, from the rate each of them
+  // is on. Worked out live so the office can see it before anything is written, and so
+  // "Fill team commission" has nothing of its own to calculate.
+  const tradTeamPlan = useMemo(() => {
+    if (form.commission_mode !== 'traditional' || !form.broker_id) return null
+    const team = teamForSale(brokers as any[], form.broker_id)
+    if (team.length < 2) return null   // nobody above them — nothing to split
+    return buildSplitPlan({
+      team,
+      sizeSqyd: size,
+      total: totalNet,
+      // A typed rate wins for the seller: traditional rates are agreed per deal, and the
+      // office is looking at this deal when they type it.
+      sellerRateOverride: form.traditional_input === 'per_sqyd'
+        ? num(form.traditional_commission_per_sqyd)
+        : ratePerSqydFromPct(num(form.traditional_commission_pct), size, totalNet),
+    })
+  }, [
+    form.commission_mode, form.broker_id, form.traditional_input,
+    form.traditional_commission_per_sqyd, form.traditional_commission_pct,
+    brokers, size, totalNet,
+  ])
+
+  /** Put the worked-out team split into the rows that actually get saved. */
+  const fillTeamCommission = () => {
+    const plan = tradTeamPlan
+    if (!plan || plan.paid.length === 0) return
+    // Level 0 is the seller; their share is the primary % field, not a split row.
+    const uplines = plan.paid.filter(l => l.level > 0)
+    setSplitBrokers(uplines.map((l, i) => ({
+      broker_id: l.broker.id,
+      commission_pct: String(l.pct),
+      position: i + 2,
+    })))
+    const skipped = plan.missingRate.filter(l => l.level > 0).length
+    toast.success(
+      `Filled ${uplines.length} level${uplines.length === 1 ? '' : 's'} of the team`
+      + (skipped > 0 ? ` · ${skipped} left out, no rate set` : ''),
+    )
+  }
 
   const selectedBroker = (brokers as any[]).find((b: any) => b.id === form.broker_id)
   const brokerRankPct = selectedBroker
@@ -577,7 +674,11 @@ export default function Bookings() {
       const tradPct       = isTraditional && rest.traditional_input === 'pct'      ? num(rest.traditional_commission_pct)      : null
       const tradPerSqyd   = isTraditional && rest.traditional_input === 'per_sqyd' ? num(rest.traditional_commission_per_sqyd) : null
       const effectivePct  = isTraditional
-        ? (tradPct != null ? tradPct : (tradPerSqyd != null && sz > 0 && total > 0 ? round2((tradPerSqyd * sz / total) * 100) : 0))
+        // Rupees per gaj -> percent through the shared helper, which is the payout
+        // function's own line, round((rate * size / total) * 100, 4). This used to round
+        // to 2 here and 4 in the database, so the form quoted a figure the engine then
+        // paid slightly differently.
+        ? (tradPct != null ? tradPct : (tradPerSqyd != null ? pctFromRatePerSqyd(tradPerSqyd, sz, total) : 0))
         : mlmPct
       const bookingPayload: any = {
         // plot_id stays the position-1 plot so every existing join keeps resolving; the
@@ -595,7 +696,11 @@ export default function Bookings() {
         commission_mode: isTraditional ? 'traditional' : 'mlm',
         traditional_commission_pct:      tradPct,
         traditional_commission_per_sqyd: tradPerSqyd,
-        traditional_pay_upline:          isTraditional ? !!rest.traditional_pay_upline : false,
+        // Always false. This flag routes the payout function into the Affiliate cascade,
+        // which pays a traditional upline out of commission_ranks via brokers.rank — not
+        // the rate the office agreed with them. The team above a traditional sale is paid
+        // through bp_booking_brokers instead, from "Fill team commission" below.
+        traditional_pay_upline:          false,
         commission_rate:                 effectivePct || null,
         commission_amount:               effectivePct > 0 ? Math.round(base * effectivePct / 100) : null,
         notes: rest.notes || null, scheme_name: project?.name || null,
@@ -654,16 +759,13 @@ export default function Bookings() {
       // traditional booking AND admin added at least one extra broker.  Position 1 is the
       // primary broker (bp_bookings.broker_id) + their traditional_commission_pct; we
       // duplicate it into bp_booking_brokers so the trigger only has to read one source.
-      const splits = (rest.splitBrokers || []) as any[]
-      if (isTraditional && splits.length > 0 && tradPct != null && tradPct > 0) {
-        const rows = [
-          { booking_id: bk.id, broker_id: rest.broker_id, commission_pct: tradPct, position: 1 },
-          ...splits
-            .filter((s: any) => s.broker_id && num(s.commission_pct) > 0)
-            .map((s: any, i: number) => ({ booking_id: bk.id, broker_id: s.broker_id, commission_pct: num(s.commission_pct), position: i + 2 })),
-        ]
-        if (rows.length > 1) {
-          await supabase.from('bp_booking_brokers').insert(rows)
+      if (isTraditional) {
+        const rows = splitRowsFor(bk.id, rest.broker_id, effectivePct, (rest.splitBrokers || []) as any[])
+        if (rows.length > 0) {
+          const { error: sErr } = await supabase.from('bp_booking_brokers').insert(rows)
+          // Not swallowed. If the team rows do not land, the booking pays only the direct
+          // broker and nobody would know until a payout cycle came up short.
+          if (sErr) toast.error(`Booking saved, but the team split could not be recorded: ${sErr.message}`)
         }
       }
       const sponsorName = broker?.name || null
@@ -718,7 +820,11 @@ export default function Bookings() {
       const tradPct       = isTraditional && data.traditional_input === 'pct'      ? num(data.traditional_commission_pct)      : null
       const tradPerSqyd   = isTraditional && data.traditional_input === 'per_sqyd' ? num(data.traditional_commission_per_sqyd) : null
       const effectivePct  = isTraditional
-        ? (tradPct != null ? tradPct : (tradPerSqyd != null && sz > 0 && total > 0 ? round2((tradPerSqyd * sz / total) * 100) : 0))
+        // Rupees per gaj -> percent through the shared helper, which is the payout
+        // function's own line, round((rate * size / total) * 100, 4). This used to round
+        // to 2 here and 4 in the database, so the form quoted a figure the engine then
+        // paid slightly differently.
+        ? (tradPct != null ? tradPct : (tradPerSqyd != null ? pctFromRatePerSqyd(tradPerSqyd, sz, total) : 0))
         : mlmPct
       const { data: current } = await supabase
         .from('bp_bookings')
@@ -764,7 +870,11 @@ export default function Bookings() {
         commission_mode: isTraditional ? 'traditional' : 'mlm',
         traditional_commission_pct:      tradPct,
         traditional_commission_per_sqyd: tradPerSqyd,
-        traditional_pay_upline:          isTraditional ? !!data.traditional_pay_upline : false,
+        // Always false. This flag routes the payout function into the Affiliate cascade,
+        // which pays a traditional upline out of commission_ranks via brokers.rank — not
+        // the rate the office agreed with them. The team above a traditional sale is paid
+        // through bp_booking_brokers instead, from "Fill team commission" below.
+        traditional_pay_upline:          false,
         commission_rate:                 effectivePct || null,
         commission_amount:               effectivePct > 0 ? Math.round(base * effectivePct / 100) : null,
         expected_booking_amount: num(data.expected_booking_amount) || null,
@@ -804,15 +914,11 @@ export default function Bookings() {
       // admin may have added / removed / re-ordered brokers in the form.  CASCADE on the
       // FK means re-inserting is safe.
       await supabase.from('bp_booking_brokers').delete().eq('booking_id', id)
-      if (isTraditional && data.splitBrokers?.length > 0 && tradPct != null && tradPct > 0) {
-        const rows = [
-          { booking_id: id, broker_id: data.broker_id, commission_pct: tradPct, position: 1 },
-          ...(data.splitBrokers as any[])
-            .filter((s: any) => s.broker_id && num(s.commission_pct) > 0)
-            .map((s: any, i: number) => ({ booking_id: id, broker_id: s.broker_id, commission_pct: num(s.commission_pct), position: i + 2 })),
-        ]
-        if (rows.length > 1) {
-          await supabase.from('bp_booking_brokers').insert(rows)
+      if (isTraditional) {
+        const rows = splitRowsFor(id, data.broker_id, effectivePct, (data.splitBrokers || []) as any[])
+        if (rows.length > 0) {
+          const { error: sErr } = await supabase.from('bp_booking_brokers').insert(rows)
+          if (sErr) toast.error(`Booking saved, but the team split could not be recorded: ${sErr.message}`)
         }
       }
       await saveBookingPlots(id, plotIds)
@@ -1892,8 +1998,9 @@ export default function Bookings() {
           {form.commission_mode === 'traditional' && (
             <div className="p-3 bg-amber-50/40 border-t border-amber-200 space-y-3">
               <p className="text-xs text-amber-900">
-                Traditional sale -- the system uses the value below instead of the broker's rank %.
-                Direct broker gets paid only; upline cascade is OFF by default.
+                Traditional sale — the system uses the rate below instead of the broker's rank %.
+                The broker who sold it is paid from that rate. If the team above them is also to
+                be paid, use Team commission further down.
               </p>
 
               {/* Commission is no longer mandatory — but a blank value means nothing gets
@@ -1960,34 +2067,133 @@ export default function Bookings() {
                 )}
               </div>
 
-              <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={!!form.traditional_pay_upline}
-                  onChange={e => set('traditional_pay_upline', e.target.checked)}
-                  className="rounded"
-                />
-                Also pay upline differential (mixed mode — uncommon)
-              </label>
+              {/* The old "Also pay upline differential" tick box lived here. It is gone, and
+                  that is a deliberate removal rather than a tidy-up.
 
-              {/* Multi-broker split — admin can add up to 2 more brokers to share the
-                  commission on a single traditional sale.  Each additional broker has
-                  their own commission %.  When at least one extra broker is added,
-                  the trigger uses bp_booking_brokers rows instead of the single % above. */}
+                  It set bp_bookings.traditional_pay_upline, which sends the payout function
+                  into the AFFILIATE cascade — and that cascade takes each upline's percentage
+                  from commission_ranks via brokers.rank. Traditional brokers have no real
+                  rank, but the Add Broker form defaults the column to 'Executive', a live 5%
+                  slab. So the tick box did not pay the upline the rate the office agreed with
+                  them; it paid them Affiliate money on a traditional deal. It had simply never
+                  fired yet, because no traditional broker had a sponsor.
+
+                  Paying the team above a traditional sale now has exactly one route, below,
+                  and it uses the rate each of them is actually on. */}
+
+              {/* Who else gets paid on this sale.
+
+                  Two ways in. "Fill team commission" walks the sponsor chain above the
+                  broker and works out each level from the rate they are on — this is the
+                  job that used to be done in Excel. Or the office adds people by hand,
+                  which is still the right thing when a sale was helped by somebody who is
+                  not in the chain at all.
+
+                  Either way the rows land in bp_booking_brokers and the payout function
+                  pays them. There is no second commission path. */}
               <div className="border-t border-amber-200 pt-3 mt-1">
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex items-start justify-between mb-2 gap-2">
                   <div>
-                    <div className="text-xs font-semibold text-amber-900">Sold with help of other brokers? (optional)</div>
-                    <div className="text-[10px] text-amber-800">Add up to 2 more brokers and choose what % each gets on every payment.</div>
+                    <div className="text-xs font-semibold text-amber-900">Who else gets paid on this sale? (optional)</div>
+                    <div className="text-[10px] text-amber-800">
+                      The team above the broker, or anyone who helped. Each one gets their own % of every payment.
+                    </div>
                   </div>
-                  {splitBrokers.length < 2 && (
-                    <button type="button"
-                      onClick={() => setSplitBrokers([...splitBrokers, { broker_id: '', commission_pct: '', position: splitBrokers.length + 2 }])}
-                      className="text-xs font-medium bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg">
-                      + Add broker
-                    </button>
-                  )}
+                  <button type="button"
+                    onClick={() => setSplitBrokers([...splitBrokers, { broker_id: '', commission_pct: '', position: splitBrokers.length + 2 }])}
+                    className="shrink-0 text-xs font-medium bg-white border border-amber-300 text-amber-900 hover:bg-amber-50 px-3 py-1.5 rounded-lg">
+                    + Add by hand
+                  </button>
                 </div>
+
+                {/* The team calculator. Only shown when there IS a team above the broker. */}
+                {tradTeamPlan && (
+                  <div className="mb-3 rounded-lg border border-amber-300 bg-white p-2.5" data-testid="team-commission">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <div className="text-xs font-semibold text-amber-900">Team commission</div>
+                      <button type="button"
+                        onClick={fillTeamCommission}
+                        disabled={tradTeamPlan.paid.filter(l => l.level > 0).length === 0}
+                        data-testid="fill-team-commission"
+                        className="shrink-0 text-xs font-medium bg-amber-600 hover:bg-amber-700 disabled:bg-gray-200 disabled:text-gray-400 text-white px-3 py-1.5 rounded-lg">
+                        Fill team commission
+                      </button>
+                    </div>
+
+                    {tradTeamPlan.problem === 'no_size' || tradTeamPlan.problem === 'no_total' ? (
+                      <p className="text-[11px] text-amber-900">
+                        Add the plot Size and Rate above first — without the deal value there is
+                        nothing to work the commission out of.
+                      </p>
+                    ) : (
+                      <>
+                        <table className="w-full text-[11px]">
+                          <thead>
+                            <tr className="text-gray-500 text-left">
+                              <th className="font-medium pb-1">Who</th>
+                              <th className="font-medium pb-1 text-right">On ₹/gaj</th>
+                              <th className="font-medium pb-1 text-right">Earns ₹/gaj</th>
+                              <th className="font-medium pb-1 text-right">This deal</th>
+                              <th className="font-medium pb-1 text-right">% of payment</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {tradTeamPlan.levels.map(l => (
+                              <tr key={l.broker.id} className="border-t border-gray-100">
+                                <td className="py-1 pr-2">
+                                  <span className="font-medium text-gray-900">{l.broker.name || '—'}</span>
+                                  <span className="text-[10px] font-mono text-gray-400"> [{l.broker.broker_id || '—'}]</span>
+                                  <span className="text-[10px] text-gray-400">{l.level === 0 ? ' · sold it' : ` · L${l.level}`}</span>
+                                </td>
+                                <td className="py-1 text-right font-mono text-gray-600">
+                                  {l.ownRate != null ? l.ownRate : '—'}
+                                </td>
+                                <td className="py-1 text-right font-mono text-gray-600">
+                                  {l.earnRate > 0 ? l.earnRate : '—'}
+                                </td>
+                                <td className="py-1 text-right font-mono text-gray-900">
+                                  {l.rupees > 0 ? <Secret>{formatINR(l.rupees)}</Secret> : '—'}
+                                </td>
+                                <td className="py-1 text-right font-mono font-semibold text-amber-900">
+                                  {l.pct > 0 ? `${l.pct}%` : (
+                                    <span className="font-normal text-gray-400">
+                                      {l.blocked === 'no_rate' ? 'no rate set' : 'nothing'}
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+
+                        <div className="mt-1.5 pt-1.5 border-t border-amber-200 text-[11px] text-amber-900 flex justify-between">
+                          <span>
+                            Whole deal at the top rate of ₹{tradTeamPlan.topRate}/gaj
+                          </span>
+                          <span className="font-semibold">
+                            <Secret>{formatINR(tradTeamPlan.totalRupees)}</Secret> · {tradTeamPlan.totalPct}% of every payment
+                          </span>
+                        </div>
+
+                        {/* Each level earns the gap to the person below, so the company never
+                            pays the rates added together. Worth stating: it is the one thing
+                            that surprises people about a differential. */}
+                        <p className="mt-1 text-[10px] text-amber-800">
+                          Each level earns the difference between their rate and the one below, so the
+                          whole chain costs ₹{tradTeamPlan.topRate}/gaj — not every rate added up.
+                        </p>
+
+                        {tradTeamPlan.missingRate.length > 0 && (
+                          <div className="mt-1.5 text-[11px] bg-amber-50 border border-amber-300 text-amber-900 rounded px-2 py-1.5">
+                            No rate set for {tradTeamPlan.missingRate.map(l => l.broker.name || '—').join(', ')}.
+                            They earn nothing until someone sets their ₹/gaj on their broker record
+                            {tradTeamPlan.missingRate.some(l => l.level === 0) ? ', or you type a rate above' : ''}.
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
                 {splitBrokers.length > 0 && (
                   <div className="space-y-2">
                     {splitBrokers.map((sb, idx) => (
@@ -2005,6 +2211,14 @@ export default function Bookings() {
                           {pickerBrokers
                             .filter((b: any) => b.id !== form.broker_id && !splitBrokers.some((x, i) => i !== idx && x.broker_id === b.id))
                             .map((b: any) => <option key={b.id} value={b.id}>{b.name} [{b.broker_id}]</option>)}
+                          {/* Keep whoever is actually on this row, even if they are not in the
+                              pool — an inactive broker can still sit in the chain, and a
+                              dropdown that silently showed blank while the row still carried
+                              their id would hide a real payment. */}
+                          {sb.broker_id && !pickerBrokers.some((b: any) => b.id === sb.broker_id) && (() => {
+                            const b = (brokers as any[]).find((x: any) => x.id === sb.broker_id)
+                            return <option value={sb.broker_id}>{b?.name || 'Broker'} [{b?.broker_id || '—'}] — not in the active list</option>
+                          })()}
                         </select>
                         <input
                           type="number"
@@ -2020,15 +2234,20 @@ export default function Bookings() {
                         </button>
                       </div>
                     ))}
-                    {/* Live total so admin sees the combined commission burden at a glance */}
+                    {/* Live total so admin sees the combined commission burden at a glance.
+                        Uses the effective primary % — it read the typed % only, so a sale
+                        entered in rupees per gaj showed "primary 0%" and understated the
+                        whole bill. */}
                     {(() => {
-                      const primary = num(form.traditional_input === 'pct' ? form.traditional_commission_pct : 0)
-                      const extra = splitBrokers.reduce((s, x) => s + num(x.commission_pct), 0)
-                      const total = round2(primary + extra)
+                      const extra = round2(splitBrokers.reduce((s, x) => s + num(x.commission_pct), 0))
+                      const total = round2(tradPrimaryPct + extra)
                       return (
-                        <div className="text-[11px] text-amber-900 px-1">
+                        <div className="text-[11px] text-amber-900 px-1" data-testid="split-total">
                           Total commission paid per verified payment: <b>{total}%</b>
-                          {' '} (primary {primary}% + extras {extra}%)
+                          {' '} (broker {round2(tradPrimaryPct)}% + others {extra}%)
+                          {totalNet > 0 && (
+                            <> — about <Secret>{formatINR(Math.round(totalNet * total / 100))}</Secret> on this deal</>
+                          )}
                         </div>
                       )
                     })()}
