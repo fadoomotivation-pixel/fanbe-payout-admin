@@ -54,6 +54,27 @@ export function downloadCsv(filename: string, rows: unknown[][]): void {
   saveBlob(new Blob(['﻿' + toCsv(rows)], { type: 'text/csv;charset=utf-8' }), name)
 }
 
+/**
+ * A blank sample sheet for an import.
+ *
+ * Deliberately NOT guarded by the privacy lock. The lock exists to stop a hidden screen
+ * being downloaded as a spreadsheet, and a template carries no customer, no broker and no
+ * money - it is an empty form with made-up example rows. Blocking it only stopped the
+ * office learning the column order, which is the opposite of helpful.
+ */
+export function downloadTemplateFile(filename: string, text: string): void {
+  const url = URL.createObjectURL(new Blob(['\ufeff' + text], { type: 'text/csv;charset=utf-8' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.rel = 'noopener'
+  a.style.display = 'none'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 60_000)
+}
+
 /** Download any JSON-serialisable value as a .json file. */
 export function downloadJson(filename: string, value: unknown): void {
   saveBlob(new Blob([JSON.stringify(value, null, 1)], { type: 'application/json' }), filename)

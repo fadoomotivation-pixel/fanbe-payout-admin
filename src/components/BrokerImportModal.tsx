@@ -33,13 +33,21 @@ import { Select } from '@/components/ui/Input.tsx'
 import { ClipboardPaste, AlertTriangle, CheckCircle2, Download } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { makeBrokerFinder } from '@/lib/brokerMatch'
-import { saveBlob } from '@/lib/download'
+import { downloadTemplateFile } from '@/lib/download'
 
 // Column order the paste is read in.  Matches the order admin already keeps in the
 // sheet.  Every one of them is optional.
 // `sponsor` is appended rather than slotted in, so a sheet written against the older
 // column order still pastes correctly -- it just leaves the upline blank.
-const COLUMNS = ['broker_id', 'name', 'phone', 'email', 'pan_no', 'date_of_joining', 'sponsor'] as const
+// The bank columns are not decoration.  This software exists to pay these people, and
+// Withdrawals holds a payout until the broker has bank details and KYC — so importing a
+// hundred brokers without them just moves the typing to a hundred broker pages before
+// anyone can be paid a rupee.  'type' lets ONE sheet carry both trees instead of running
+// the import twice.
+const COLUMNS = [
+  'broker_id', 'name', 'phone', 'email', 'pan_no', 'date_of_joining', 'sponsor',
+  'type', 'bank_name', 'account_no', 'ifsc', 'account_holder', 'aadhaar_no',
+] as const
 
 const digitsOnly = (s: string) => (s || '').replace(/\D/g, '')
 
@@ -62,6 +70,12 @@ type Row = {
   pan_no: string
   date_of_joining: string | null
   sponsor: string
+  broker_type: 'traditional' | 'mlm'
+  bank_name: string
+  account_no: string
+  ifsc: string
+  account_holder: string
+  aadhaar_no: string
   errors: string[]
 }
 
@@ -163,7 +177,44 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
       // same sheet, so it only exists once the batch has landed.
       const sponsor = get('sponsor')
 
-      return { line: i + 1, broker_id, name, phone, email, pan_no, date_of_joining, sponsor, errors: warnings }
+      // Per-row type, so one sheet can hold both trees.  Blank falls back to the dropdown,
+      // which is how every existing sheet keeps working unchanged.
+      const typeCell = get('type').trim().toLowerCase()
+      const broker_type: 'traditional' | 'mlm' =
+          /^(trad|traditional|tr)$/.test(typeCell)                  ? 'traditional'
+        : /^(mlm|affiliate|affiliate network|fnb|network)$/.test(typeCell) ? 'mlm'
+        : brokerType
+      if (typeCell && broker_type !== (/^(trad|traditional|tr)$/.test(typeCell) ? 'traditional' : 'mlm')) {
+        warnings.push(`Type "${typeCell}" not understood — imported as ${brokerType === 'mlm' ? 'Affiliate Network' : 'Traditional'}`)
+      }
+
+      // Bank details.  Nothing is forced: a broker without them still imports, they just
+      // cannot be paid until somebody fills them in, which Withdrawals already says.
+      const bank_name      = get('bank_name')
+      const account_no     = digitsOnly(get('account_no'))
+      const ifsc           = get('ifsc').toUpperCase().replace(/\s/g, '')
+      const account_holder = get('account_holder') || ''
+      const aadhaar_no     = digitsOnly(get('aadhaar_no'))
+
+      if (ifsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) {
+        warnings.push(`IFSC ${ifsc} does not look like an IFSC code — saved anyway, check it before paying`)
+      }
+      if (account_no && (account_no.length < 9 || account_no.length > 18)) {
+        warnings.push(`Account number ${account_no} is ${account_no.length} digits — check it before paying`)
+      }
+      if (aadhaar_no && aadhaar_no.length !== 12) {
+        warnings.push(`Aadhaar ${aadhaar_no} is not 12 digits — saved anyway`)
+      }
+      // Half a bank account cannot be paid into, so say which half is missing.
+      if ((account_no || ifsc) && !(account_no && ifsc)) {
+        warnings.push(account_no ? 'Account number without an IFSC — payment would fail' : 'IFSC without an account number — payment would fail')
+      }
+
+      return {
+        line: i + 1, broker_id, name, phone, email, pan_no, date_of_joining, sponsor,
+        broker_type, bank_name, account_no, ifsc, account_holder, aadhaar_no,
+        errors: warnings,
+      }
     })
   }, [text, existing])
 
@@ -187,7 +238,14 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
       phone: r.phone || null,
       pan_no: r.pan_no || null,
       date_of_joining: r.date_of_joining,
-      broker_type: brokerType,
+      broker_type: r.broker_type,
+      bank_name: r.bank_name || null,
+      account_no: r.account_no || null,
+      ifsc: r.ifsc || null,
+      // Falls back to the broker's own name: a bank rejects a transfer whose account
+      // holder is blank, and for most of these two names are the same anyway.
+      account_holder: r.account_holder || r.name || null,
+      aadhaar_no: r.aadhaar_no || null,
       // Traditional brokers are paid the per-booking %, not a rank slab, but rank is
       // NOT NULL — 'Executive' is the lowest active slab and what the Add Broker form
       // uses, so imported rows behave exactly like hand-added ones.
@@ -271,29 +329,48 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
   // admin adds get imported.  Opens straight in Excel / Google Sheets.
   const downloadTemplate = () => {
     const csv = [
-      'Broker ID,Name,Phone,Email,PAN,Date of Joining,Upline (sponsor)',
-      'TR814,RADHEY SHYAM,9811100011,,,01/04/2024,',
-      'TR815,SATISH KUMAR,9811100012,,ABCPK1234A,15/07/2023,RADHEY SHYAM',
-      ',NN PANDEY,9811100013,,,,TR815',
+      'Broker ID,Name,Phone,Email,PAN,Date of Joining,Upline (sponsor),Type,Bank name,Account no,IFSC,Account holder,Aadhaar',
+      'TR814,SHIV SHANKAR THAKUR,9811100011,,,01/04/2024,,traditional,State Bank of India,30123456789,SBIN0001234,SHIV SHANKAR THAKUR,',
+      'TR816,SURENDER CHAUDHARY,9811100012,,ABCPK1234A,15/07/2023,SHIV SHANKAR THAKUR,traditional,HDFC Bank,50100123456789,HDFC0000123,SURENDER CHAUDHARY,',
+      ',SATISH KUMAR,9811100013,,,,TR816,traditional,,,,,',
+      ',RADHEY SHYAM,9811100014,,,,SATISH KUMAR,affiliate,Punjab National Bank,1234567890123,PUNB0123456,RADHEY SHYAM,123412341234',
       '',
-      '# ---- Notes. Delete these lines before importing, or just leave them: lines starting with # are ignored. ----',
+      '# ---- Notes. Lines starting with # are ignored, so you can leave them in. ----',
       '# Fill what you have. Nothing is compulsory - the rest can be corrected in the app afterwards.',
+      '# But read the two starred lines: those are the ones that cost money if they are wrong.',
       '#',
-      '# Broker ID      : the code this broker already uses. Leave BLANK and a new one is generated',
-      '#                  (TR817... for traditional, FNB05144... for Affiliate Network - it carries on from your old register).',
-      '# Name           : as the office says it. This is also how the Upline column finds them.',
+      '# * Name           : spell it EXACTLY as your booking sheet spells the upline.',
+      '#                    This is how a booking finds its broker. "Radheyshyam" and',
+      '#                    "Radhey Shyam" both match, but "R. Shyam" does not, and that',
+      '#                    booking then pays nobody.',
+      '# * Account no     : with IFSC. Withdrawals will not pay a broker who has no bank',
+      '#                    details, so a sheet without these just moves the typing to a',
+      '#                    hundred broker pages later. Account holder is the name as the',
+      '#                    BANK has it - left blank, the broker name is used.',
+      '#',
+      '# Broker ID      : the code this broker already uses. Leave BLANK and a new one is',
+      '#                  generated - TR817... for traditional, FNB05144... for Affiliate',
+      '#                  Network - carrying on from your old register.',
       '# Phone          : 10 digits. This is the broker login, so it must not repeat.',
       '# Email          : optional. Left blank, one is built from the phone number.',
-      '# PAN            : optional.',
+      '# PAN            : optional, but TDS is deducted at a higher rate without it.',
+      '# Aadhaar        : optional, 12 digits. Used for KYC.',
       '# Date of Joining: dd/mm/yyyy, dd-mm-yyyy or yyyy-mm-dd.',
-      '# Upline         : who sits above them in the tree. Write the NAME or the code - either works,',
-      '#                  and it may be someone further down this same sheet.',
-      '#                  Leave blank for a top-level broker. A name matching two brokers is reported,',
-      '#                  never guessed, so you can set it by hand.',
-      '#                  Affiliate Network and Traditional trees are kept separate - an upline of the other kind is refused.',
+      '# Type           : traditional or affiliate. Leave BLANK and the dropdown in the',
+      '#                  import window decides - so one sheet can hold both kinds, or',
+      '#                  you can keep separate sheets, whichever suits.',
+      '# Upline         : who sits above them in the tree. NAME or code, either works, and',
+      '#                  it may be someone further down this same sheet. Leave blank for a',
+      '#                  top-level broker. A name matching two brokers is reported, never',
+      '#                  guessed. Affiliate and Traditional trees stay separate - an upline',
+      '#                  of the other kind is refused.',
+      '#',
+      '# Order matters: brokers go in BEFORE bookings. A booking imported first finds no',
+      '# upline to match, and the names on that sheet are dropped - which is exactly how',
+      '# 44 of the 45 bookings currently on file ended up with no broker on them.',
       '',
     ].join('\n')
-    saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'broker-import-sample.csv')
+    downloadTemplateFile('broker-import-sample.csv', csv)
   }
 
   return (
@@ -303,7 +380,7 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
           Copy the rows straight out of Excel or Google Sheets and paste them below — one broker per line, in this column order:
         </div>
         <div className="font-mono text-[11px] bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-700 overflow-x-auto whitespace-nowrap">
-          Broker ID → Name → Phone → Email → PAN → Date of joining → Upline (sponsor)
+          Broker ID → Name → Phone → Email → PAN → Date of joining → Upline (sponsor) → Type → Bank name → Account no → IFSC → Account holder → Aadhaar
         </div>
         <div className="flex items-center gap-2 text-xs bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-2">
           <span className="text-emerald-900 flex-1">
@@ -349,7 +426,7 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
               <table className="w-full text-xs">
                 <thead className="bg-gray-50 sticky top-0">
                   <tr>
-                    {['#', 'Broker ID', 'Name', 'Phone', 'Email', 'PAN', 'Joined', 'Upline', 'Status'].map(h => (
+                    {['#', 'Broker ID', 'Name', 'Phone', 'Email', 'PAN', 'Joined', 'Upline', 'Type', 'Bank', 'Status'].map(h => (
                       <th key={h} className="text-left px-2 py-1.5 font-semibold text-gray-500 whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
@@ -365,6 +442,18 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
                       <td className="px-2 py-1 font-mono">{r.pan_no || '—'}</td>
                       <td className="px-2 py-1">{r.date_of_joining || '—'}</td>
                       <td className="px-2 py-1">{r.sponsor || <span className="text-gray-400">—</span>}</td>
+                      <td className="px-2 py-1">
+                        {r.broker_type === 'mlm'
+                          ? <span className="text-blue-700">Affiliate</span>
+                          : <span className="text-amber-700">Traditional</span>}
+                      </td>
+                      {/* Payable or not, at a glance: the whole point of importing these
+                          people is to be able to pay them. */}
+                      <td className="px-2 py-1">
+                        {r.account_no && r.ifsc
+                          ? <span className="text-emerald-700">can be paid</span>
+                          : <span className="text-gray-400">no bank yet</span>}
+                      </td>
                       <td className="px-2 py-1">
                         {r.errors.length === 0
                           ? <span className="text-emerald-700">OK</span>
