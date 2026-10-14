@@ -324,6 +324,16 @@ function applicationFormBody(b: any, ctx: { customer?: any; project?: any; plot?
   //
   // The rate was blank on EVERY form, linked plot or not: this read pl.sqft_rate, and that
   // column does not exist. The plots table calls it price_per_sqyd.
+  // An old record has no booking_time typed in, so fall back to the time the row was
+  // created rather than printing a blank. Manisha: "all ok bss time nh aa raha".
+  const fmtTime = (t: any, iso: any) => {
+    if (t) return String(t).slice(0, 5)
+    const d = iso ? new Date(iso) : null
+    if (!d || Number.isNaN(d.getTime())) return ''
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  }
+  const bookingTime = fmtTime(b.booking_time, b.created_at)
+
   const plotNo      = pl.plot_no || pl.plot_number || ''
   const sizeSqyd    = b.size_sqyd || pl.size_sqyd || pl.area || ''
   const ratePerSqyd = b.rate_per_sqyd || pl.price_per_sqyd || pl.sqft_rate || ''
@@ -377,9 +387,9 @@ function applicationFormBody(b: any, ctx: { customer?: any; project?: any; plot?
   <div class="row"><div class="field"><b>नाम</b><span>${cust.name || ''}</span></div><div class="field" style="max-width:200px"><b>जन्म तिथि</b><span>${fmtDate(cust.dob)}</span></div></div>
   <div class="row"><div class="field"><b>पिता/पति का नाम</b><span>${cust.father_or_husband_name || ''}</span></div></div>
   <div class="row"><div class="field"><b>स्थाई पता</b><span>${cust.address || ''}</span></div></div>
-  <div class="row"><div class="field"><b>बुकिंग राशि</b><span>${b.booking_amount ? '₹' + Number(b.booking_amount).toLocaleString('en-IN') : ''}</span></div><div class="field"><b>बुकिंग राशि समय</b><span>${b.booking_time || ''}</span></div></div>
+  <div class="row"><div class="field"><b>बुकिंग राशि</b><span>${b.booking_amount ? '₹' + Number(b.booking_amount).toLocaleString('en-IN') : ''}</span></div><div class="field"><b>बुकिंग राशि समय</b><span>${bookingTime}</span></div></div>
   <div class="row"><div class="field"><b>दूरभाष</b><span>${cust.phone || cust.mobile || ''}</span></div><div class="field"><b>ई-मेल</b><span>${cust.email || ''}</span></div></div>
-  <div class="row"><div class="field"><b>बैंक का नाम</b><span>${b.customer_bank_name || ''}</span></div><div class="field" style="max-width:200px"><b>समय</b><span>${b.booking_time || ''}</span></div></div>
+  <div class="row"><div class="field"><b>बैंक का नाम</b><span>${b.customer_bank_name || ''}</span></div><div class="field" style="max-width:200px"><b>समय</b><span>${bookingTime}</span></div></div>
   <div class="row"><div class="field"><b>प्लॉट नं.</b><span>${plotNo}</span></div><div class="field"><b>वर्ग गज</b><span>${sizeSqyd || ''}</span></div><div class="field"><b>प्रति वर्ग गज कीमत</b><span>${ratePerSqyd ? '₹' + Number(ratePerSqyd).toLocaleString('en-IN') : ''}</span></div><div class="field"><b>प्लॉट की कुल कीमत</b><span>${b.total_amount ? '₹' + Number(b.total_amount).toLocaleString('en-IN') : ''}</span></div></div>
   <div class="row"><div class="field"><b>परिचयकर्ता / Upline</b><span>${br.name || ''}</span></div><div class="field" style="max-width:240px"><b>परिचयकर्ता कोड नं.</b><span>${b.upline_broker_code || br.broker_id || ''}</span></div></div>
 

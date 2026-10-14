@@ -340,6 +340,20 @@ export default function EmiPanel({ booking, open, onClose }: { booking: any; ope
           </div>
         ) : (
           <div className="text-center py-8">
+            {/* An old record brought in from the register has no payment history in the
+                system, so the balance a plan would be built on is the FULL price. If the
+                customer has already paid some of it, every instalment comes out too big.
+                The window used to be unreachable on these bookings, which was worse -
+                the office simply could not take money. Say it plainly instead. */}
+            {booking?.imported && Number(booking?.paid || 0) === 0 && (
+              <div className="mx-auto max-w-md mb-4 text-left text-[12px] text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                <b>This booking came from the old register</b> and nothing it paid before is
+                entered, so the plan below would be built on the full price of{' '}
+                <b>{formatINR(Number(booking?.total_amount || booking?.plot_total_price || 0))}</b>.
+                If the customer has already paid part of it, close this and use{' '}
+                <b>Enter paid till date</b> first. If they have paid nothing yet, carry on — this is right.
+              </div>
+            )}
             <p className="text-sm text-gray-500 mb-3">No EMI schedule for this booking yet.</p>
             <Button onClick={() => setCreating(true)}><Plus size={14}/>Create EMI Schedule</Button>
           </div>
