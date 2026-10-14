@@ -24,6 +24,7 @@ import { fetchAllRows } from '@/lib/fetchAll'
 import { ShieldCheck, Search, AlertTriangle, ArrowRight, Download } from 'lucide-react'
 import { downloadCsv } from '@/lib/download'
 import { Secret } from '@/lib/privacy'
+import BrokerHealth from '@/components/BrokerHealth'
 
 type Issue = 'no_payment' | 'no_broker' | 'no_plot' | 'no_value' | 'no_project' | 'bad_phone'
 
@@ -58,6 +59,10 @@ type Row = {
 }
 
 export default function DataHealth() {
+  // Bookings and brokers are two halves of the same question after an import: did the
+  // records land, and can anyone be paid for them.  Two tabs on one page rather than two
+  // pages, because the office checks both in the same minute and neither is useful alone.
+  const [tab, setTab] = useState<'bookings' | 'brokers'>('bookings')
   const [active, setActive] = useState<Issue>('no_plot')
   const [q, setQ] = useState('')
   const [limit, setLimit] = useState(100)
@@ -163,13 +168,24 @@ export default function DataHealth() {
             Every report in this CRM is only as right as the bookings under it. These are the records missing something — work through them and the reports become true.
           </p>
         </div>
-        <div className="text-right">
-          <div className={`text-3xl font-bold tabular-nums ${score >= 90 ? 'text-emerald-600' : score >= 60 ? 'text-amber-600' : 'text-red-600'}`}>{score}%</div>
-          <div className="text-[11px] text-gray-500">have plot, value, phone &amp; project</div>
-        </div>
+        {tab === 'bookings' && (
+          <div className="text-right">
+            <div className={`text-3xl font-bold tabular-nums ${score >= 90 ? 'text-emerald-600' : score >= 60 ? 'text-amber-600' : 'text-red-600'}`}>{score}%</div>
+            <div className="text-[11px] text-gray-500">have plot, value, phone &amp; project</div>
+          </div>
+        )}
       </div>
 
-      {isLoading ? (
+      <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden text-sm bg-white">
+        <button onClick={() => setTab('bookings')}
+          className={`px-4 py-2 ${tab === 'bookings' ? 'bg-gray-900 text-white' : 'text-gray-700 hover:bg-gray-50'}`}>Bookings</button>
+        <button onClick={() => setTab('brokers')}
+          className={`px-4 py-2 border-l border-gray-200 ${tab === 'brokers' ? 'bg-gray-900 text-white' : 'text-gray-700 hover:bg-gray-50'}`}>Brokers</button>
+      </div>
+
+      {tab === 'brokers' && <BrokerHealth/>}
+
+      {tab === 'bookings' && (isLoading ? (
         <div className="py-16 text-center text-sm text-gray-400">Checking every booking…</div>
       ) : (
         <>
@@ -271,7 +287,7 @@ export default function DataHealth() {
             )}
           </div>
         </>
-      )}
+      ))}
     </div>
   )
 }
