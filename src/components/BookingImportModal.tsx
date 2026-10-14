@@ -488,25 +488,63 @@ export default function BookingImportModal({ open, onClose, onImported }: {
       '2,runa devi,deva singh,radheyshyam:50/shyam:30/jyoti:20,8447807061,p65,50sq,6525,kunj bihari,13-01-26,25000,3',
       '3,pritilata,nawnit kumar,satish/nn pandey,7004711426,p470,150(L)sq,6025,kunj bihari,29-12-25,,',
       '',
-      '# ---- Notes. Delete these lines before importing, or just leave them: lines starting with # are ignored. ----',
-      '# Fill what you have. Nothing is compulsory - the rest can be corrected in the app afterwards.',
+      '# ================ READ THIS FIRST ================',
       '#',
-      '# id no        : your old register number. It is KEPT and shown next to the system id - it does not replace it.',
+      '# ORDER MATTERS MORE THAN THE SHEET DOES.',
+      '#   1. Projects   2. Plots   3. Brokers   4. Bookings  <- this sheet is step 4',
+      '#',
+      '# A booking can only point at something that ALREADY EXISTS. If the broker is not',
+      '# in Brokers yet, the booking still saves - with no broker on it - and that deal',
+      '# then pays nobody, for ever, until someone notices. Same with the plot: no plot',
+      '# linked means inventory never learns it is sold, so it can be sold again.',
+      '#',
+      '# That is not a worry, it is what happened. The first import ran before the brokers',
+      '# were in: 44 of 45 bookings ended up with no broker and 90 with no plot.',
+      '#',
+      '# The import window shows you this BEFORE you press the button - how many projects,',
+      '# free plots and brokers exist, and how many of your rows would lose their broker,',
+      '# their plot or their date. If those numbers look wrong, stop and fix the lists first.',
+      '#',
+      '# ================ THE THREE THAT COST MONEY ================',
+      '#',
+      '# * upline       : spell the broker EXACTLY as the Brokers page spells them.',
+      '#                  "radheyshyam" and "radhey shyam" both find Radhey Shyam; "r. shyam"',
+      '#                  finds nobody and that booking pays nobody.',
+      '#                  More than one broker: separate with /   e.g. satish/nn pandey',
+      '#                  To set the split, write a share after the name:',
+      '#                      radheyshyam:50/shyam:30/jyoti:20',
+      '#                  No share written = divided equally. These are SHARES OF THE',
+      '#                  COMMISSION, never of the sale price.',
+      '#',
+      '# * commission % : what the WHOLE deal pays, e.g. 2 means 2%. The upline shares',
+      '#                  divide this one number between them.',
+      '#                  Leave BLANK for old deals whose commission was already settled -',
+      '#                  otherwise the system would pay everyone a second time.',
+      '#                  Even when filled, nothing is actually paid unless you tick',
+      '#                  "Pay broker commission" in the import window.',
+      '#',
+      '# * id no        : your old register number, e.g. TR-448. It is kept beside the new',
+      '#                  CR- number, and it is what stops the same deal being imported',
+      '#                  twice - a row whose id is already in the system is now skipped.',
+      '#',
+      '# ================ THE REST ================',
+      '#',
       '# name / s/o   : buyer, and father or husband.',
-      '# upline       : broker name. For more than one, separate with /  e.g. satish/nn pandey',
-      '#                To set the split, write a share after the name:  radheyshyam:50/shyam:30/jyoti:20',
-      '#                No share written = the rest is divided equally between those names.',
-      '#                These are SHARES OF THE COMMISSION, not of the sale price.',
-      '# mobile no    : 10 digits. Same mobile + same name on two rows = one customer with two bookings.',
-      '# plot no      : must exist in that project and must not already be on a booking. One plot per row.',
+      '# mobile no    : 10 digits. Same mobile + same name on two rows = ONE customer with',
+      '#                two bookings, which is usually what you want.',
+      '# plot no      : must already exist in that project and not be on another booking.',
+      '#                One plot per row. Not in Plots yet? Add the plots first.',
       '# say          : size in gaj. "66sq" or "150(L)sq" both work - the (L) is kept as a note.',
-      '# RATE         : price per gaj. Value = say x RATE.',
-      '# Project      : must match the name on the Projects page exactly.',
-      '# booking date : dd-mm-yy, dd/mm/yyyy or yyyy-mm-dd.',
-      '# advance      : money already collected. Recorded as one opening receipt so Paid/Balance are right.',
-      '# commission % : what the WHOLE deal pays, e.g. 2. The upline shares divide this number.',
-      '#                Leave blank for old deals already settled. Commission is only actually paid if you',
-      '#                tick "Pay broker commission" in the import window.',
+      '# RATE         : price per gaj. Value = say x RATE. Both are stored on the booking,',
+      '#                so the printed aavedan-patra fills in even without a linked plot.',
+      '# Project      : must match the Projects page spelling exactly.',
+      '# booking date : dd-mm-yy, dd/mm/yyyy or yyyy-mm-dd. Leave it blank and the booking',
+      '#                has no date at all - every report by month then misses it.',
+      '# advance      : money already collected, as one figure. Saved as one opening receipt',
+      '#                so Paid and Balance read correctly from day one. Leave blank if',
+      '#                nothing was collected.',
+      '#',
+      '# Lines starting with # are ignored, so you can leave all of this in the file.',
       '',
     ].join('\n')
     downloadTemplateFile('booking-import-sample.csv', csv)
@@ -514,9 +552,64 @@ export default function BookingImportModal({ open, onClose, onImported }: {
 
   const payableRows = parsed.filter(r => r.commission_pct > 0 && r.uplines.some(u => u.broker_id)).length
 
+  // What the import can actually link to, counted BEFORE anything is pasted.
+  //
+  // This is the lesson from the first run, turned into a screen. 99 bookings went in while
+  // the Brokers page held two names and most plot numbers were not in Plots yet, so every
+  // upline matched nothing and 90 bookings locked no plot. Each row said so in a small
+  // amber line that nobody reads at row 60 of 99. The question staff actually need answered
+  // is "is this system ready for my sheet", and it has to be answered first, not per row.
+  const readiness = useMemo(() => {
+    const projects = (ref?.projects || []).length
+    const brokers  = (ref?.brokers  || []).length
+    const plots    = (ref?.plots    || []).length
+    const free     = (ref?.plots    || []).filter((p: any) => p.status === 'available').length
+    return { projects, brokers, plots, free }
+  }, [ref])
+
+  // How many rows would silently lose something. Counted on what is pasted, so the office
+  // sees the damage as a number before it presses the button, not as 99 small warnings.
+  const gaps = useMemo(() => {
+    const live = parsed.filter(r => !r.skip)
+    return {
+      total:    live.length,
+      noPlot:   live.filter(r => !r.plot_id).length,
+      noBroker: live.filter(r => r.uplines.length === 0 || r.uplines.every(u => !u.broker_id)).length,
+      noDate:   live.filter(r => !r.booking_date).length,
+      noProject: live.filter(r => !r.project_id).length,
+    }
+  }, [parsed])
+
   return (
     <Modal open={open} onClose={close} title="Import old bookings from Excel" size="xl">
       <div className="space-y-3">
+        {/* Step 0, before the paste box: is this system ready for your sheet? */}
+        {ref && (
+          <div className={`rounded-lg border px-3 py-2.5 text-xs ${
+            readiness.brokers === 0 || readiness.projects === 0
+              ? 'bg-rose-50 border-rose-300 text-rose-900'
+              : 'bg-slate-50 border-slate-200 text-slate-700'}`}>
+            <div className="font-semibold mb-1">Before you paste — what this sheet can link to</div>
+            <div className="flex flex-wrap gap-x-5 gap-y-1">
+              <span><b>{readiness.projects}</b> project{readiness.projects === 1 ? '' : 's'}</span>
+              <span><b>{readiness.free}</b> plot{readiness.free === 1 ? '' : 's'} free <span className="opacity-60">of {readiness.plots}</span></span>
+              <span><b>{readiness.brokers}</b> broker{readiness.brokers === 1 ? '' : 's'}</span>
+            </div>
+            {/* Always on, not only when a count is zero. "2 brokers and 100 bookings" is
+                not zero and is just as wrong — which is exactly the state the first import
+                ran in. The sentence is short; the lesson is the point. */}
+            <div className="mt-1.5 leading-relaxed">
+              <b>Order: Projects → Plots → Brokers → Bookings.</b>{' '}
+              A booking can only point at something that already exists. Anything missing is
+              <b> dropped silently</b> — the booking still saves, just with no plot or no broker,
+              and then it pays nobody and its plot stays on sale.
+              {(readiness.brokers === 0 || readiness.projects === 0 || readiness.free === 0) && (
+                <> <b>Something above is empty — fix that list before importing.</b></>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="text-sm text-gray-600">
           Paste the rows straight out of Excel or Google Sheets — one booking per line, in your sheet's own column order:
         </div>
@@ -590,6 +683,24 @@ export default function BookingImportModal({ open, onClose, onImported }: {
               <span className="inline-flex items-center gap-1 text-emerald-700"><CheckCircle2 size={13}/><b>{valid.length}</b> will be imported</span>
               {invalid.length > 0 && <span className="inline-flex items-center gap-1 text-amber-700"><AlertTriangle size={13}/><b>{invalid.length}</b> with gaps — fix in the app afterwards</span>}
               {skipped.length > 0 && <span className="inline-flex items-center gap-1 text-rose-700"><AlertTriangle size={13}/><b>{skipped.length}</b> already imported — skipped</span>}
+            </div>
+
+            {/* The same three gaps as one honest sentence each, instead of 99 amber lines. */}
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+              <span className={gaps.noBroker > 0 ? 'text-rose-700 font-medium' : 'text-emerald-700'}>
+                {gaps.noBroker > 0
+                  ? `${gaps.noBroker} of ${gaps.total} will have NO BROKER — nobody is paid on those`
+                  : 'every row found its broker'}
+              </span>
+              <span className={gaps.noPlot > 0 ? 'text-amber-700' : 'text-emerald-700'}>
+                {gaps.noPlot > 0
+                  ? `${gaps.noPlot} will have no plot — those plots stay on sale`
+                  : 'every row found its plot'}
+              </span>
+              <span className={gaps.noDate > 0 ? 'text-amber-700' : 'text-emerald-700'}>
+                {gaps.noDate > 0 ? `${gaps.noDate} have no booking date` : 'every row has a date'}
+              </span>
+              {gaps.noProject > 0 && <span className="text-amber-700">{gaps.noProject} have no project</span>}
               <span className="text-gray-500">Total value {formatINR(valid.reduce((s, r) => s + r.total, 0))} · advance {formatINR(valid.reduce((s, r) => s + r.advance, 0))}</span>
             </div>
 
