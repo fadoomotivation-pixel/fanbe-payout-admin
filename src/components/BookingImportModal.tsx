@@ -53,7 +53,7 @@ import { Select } from '@/components/ui/Input.tsx'
 import { formatINR } from '@/lib/utils'
 import { ClipboardPaste, AlertTriangle, CheckCircle2, Download, Info } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { saveBlob } from '@/lib/download'
+import { downloadTemplateFile } from '@/lib/download'
 import { makeBrokerFinder } from '@/lib/brokerMatch'
 
 // Admin's sheet, in admin's order, plus the two optional columns on the end.
@@ -509,7 +509,7 @@ export default function BookingImportModal({ open, onClose, onImported }: {
       '#                tick "Pay broker commission" in the import window.',
       '',
     ].join('\n')
-    saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'booking-import-sample.csv')
+    downloadTemplateFile('booking-import-sample.csv', csv)
   }
 
   const payableRows = parsed.filter(r => r.commission_pct > 0 && r.uplines.some(u => u.broker_id)).length
