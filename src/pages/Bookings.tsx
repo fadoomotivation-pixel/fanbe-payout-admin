@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
-import { fetchAllRows } from '@/lib/fetchAll'
+import { fetchAllRows, todayLocalISO } from '@/lib/fetchAll'
 import { Table } from '@/components/ui/Table.tsx'
 import { Button } from '@/components/ui/Button.tsx'
 import { Input, Select, Textarea } from '@/components/ui/Input.tsx'
@@ -60,7 +60,18 @@ const NEW_CUST_EMPTY = {
   nominee_address:'', nominee_pan:'',
 }
 
-const today = () => new Date().toISOString().slice(0,10)
+// The browser's own date, not UTC.  toISOString() is UTC, so a booking entered at 2am in
+// India used to be stamped with yesterday's date -- the office works late and that is a
+// real hour of the day here.
+const today = () => todayLocalISO()
+
+// The time of day a booking is taken, for the Booking Time field.  It defaults the way the
+// date does: Manisha printed a form and said "all ok bss time nh aa raha" -- the date filled
+// itself and the time sat empty, so nobody thought to type it.
+const nowHHMM = () => {
+  const d = new Date()
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
 
 // Translate Postgres / Supabase error spew into something a non-technical admin can
 // read.  Falls back to the original message when we don't recognise the pattern.
@@ -143,7 +154,7 @@ const EMPTY: any = {
   // cannot be typed over; this sits beside it so a record entered by hand from the old book
   // carries the same number the office already knows, and stays searchable by it.
   legacy_booking_no:'',
-  application_date: today(), booking_time:'', customer_bank_name:'',
+  application_date: today(), booking_time: nowHHMM(), customer_bank_name:'',
   upline_broker_code:'', manager_signature_by:'', affidavit_accepted:true,
   cust_mode: 'new' as CustMode,
   new_customer: { ...NEW_CUST_EMPTY },
@@ -2078,30 +2089,11 @@ export default function Bookings() {
                 </div>
               )}
 
-              {/* Explicit "What about the booking deposit?" decision panel — appears whenever token is being received but booking is not yet decided */}
-              {form.token_enabled && num(form.token_amount) > 0 && !form.booking_enabled && (
-                <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50/60 p-3">
-                  <div className="text-[11px] font-semibold text-blue-900 mb-2 uppercase tracking-wider">Booking deposit — what now?</div>
-                  <div className="flex flex-wrap gap-2">
-                    <button type="button"
-                      onClick={() => { set('booking_enabled', true); set('booking_amount', String(suggestedDeposit10pct)); set('booking_date', form.token_date) }}
-                      className="flex-1 min-w-[140px] text-left px-3 py-2 text-xs rounded-md bg-blue-600 text-white hover:bg-blue-700">
-                      <div className="font-semibold">Receiving today (10% suggested)</div>
-                      <div className="opacity-80 text-[11px]">{formatINR(suggestedDeposit10pct)} — tick Booking section</div>
-                    </button>
-                    <button type="button"
-                      onClick={() => { set('booking_enabled', true); set('booking_amount', '') }}
-                      className="flex-1 min-w-[140px] text-left px-3 py-2 text-xs rounded-md bg-white border border-blue-300 text-blue-800 hover:bg-blue-50">
-                      <div className="font-semibold">Receiving today — custom amount</div>
-                      <div className="opacity-80 text-[11px]">opens Booking section blank</div>
-                    </button>
-                    <div className="flex-1 min-w-[140px] px-3 py-2 text-xs rounded-md bg-amber-50 border border-amber-200 text-amber-900">
-                      <div className="font-semibold">⏳ Pending — record later</div>
-                      <div className="opacity-80 text-[11px]">leave both unticked, list will flag it</div>
-                    </div>
-                  </div>
-                </div>
-              )}
+              {/* The "Booking deposit - what now?" panel used to sit here: three cards
+                  offering 10%, a custom amount, or nothing. Manisha: "ye hata do confusion
+                  hoti h". It explained a decision the Booking section below already asks
+                  for, so it read as a second, competing set of controls. The section is
+                  the control; it does not need a panel above it telling you it exists. */}
 
               {form.token_enabled && (
                 <InlineBreakdown
@@ -2258,13 +2250,14 @@ export default function Bookings() {
               <div className="col-span-2"><Input label="Permanent Address" value={form.new_customer.address} onChange={(e:any) => setNC('address', e.target.value)} /></div>
               <div className="col-span-2">
                 <Input
-                  label="पुराना ग्राहक कोड / Old customer ID (optional)"
+                  label="पुराना ग्राहक कोड / Old CUSTOMER code (optional)"
                   value={form.new_customer.previous_customer_code}
                   onChange={(e:any) => setNC('previous_customer_code', e.target.value)}
-                  placeholder="Code from the old register, if this buyer already had one"
+                  placeholder="e.g. CR-0833 — the BUYER's number in the old book"
                 />
                 <p className="mt-1 text-[11px] text-gray-500">
                   A new CR- code is given automatically. Fill this only when the buyer already had a number in the old book.
+                  This is the <b>customer's</b> code, not the booking's — the booking's old number goes in the Booking section below.
                 </p>
               </div>
             </div>
@@ -2286,14 +2279,15 @@ export default function Bookings() {
           <Input label="Booking Time" type="time" value={form.booking_time} onChange={(e: any) => set('booking_time', e.target.value)} />
           <div className="col-span-2">
             <Input
-              label="पुराना रजिस्टर नं. / Old ID number (optional)"
+              label="पुरानी बुकिंग नं. / Old BOOKING number (optional)"
               value={form.legacy_booking_no}
               onChange={(e: any) => set('legacy_booking_no', e.target.value)}
-              placeholder="Number from the old register, if this is an old booking"
+              placeholder="e.g. TR-448 — THIS BOOKING's number in the old register"
             />
             <p className="mt-1 text-[11px] text-gray-500">
-              Leave blank for a new sale. The system's own booking number is created automatically either way —
-              this is only so an old record can still be found by the number the office already uses.
+              Leave blank for a new sale. The system's own CR- booking number is created automatically either way.
+              This is the <b>booking's</b> number, not the customer's — and it is what stops the same old deal being
+              imported twice, so it is worth getting right.
             </p>
           </div>
           <Input label="Customer Bank Name" value={form.customer_bank_name} onChange={(e: any) => set('customer_bank_name', e.target.value)} placeholder="e.g. HDFC Bank" />

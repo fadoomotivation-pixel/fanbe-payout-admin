@@ -1869,15 +1869,20 @@ export default function CustomerPipeline() {
                       </>
                     )}
                     <div className="ml-auto flex flex-wrap gap-1.5">
-                      {r.hasToken && r.balance > 0 && r.hasBooking && (
+
+                      {/* These two used to be hidden on an old record until its paid-till-date
+                          was entered - and that figure could not be saved as 0, so a booking
+                          imported from the register with nothing paid before had NO way to take
+                          money at all. Manisha: "Pay emi option??". Money coming in today must
+                          never wait on yesterday's bookkeeping, so both are always offered; the
+                          EMI window warns if the opening figure is still missing. */}
+                      {r.balance > 0 && (
                         <button onClick={() => setPayFor({ booking: r, type: 'booking' })}
-                          className="inline-flex items-center gap-1 text-[12px] px-3 py-1.5 rounded-full border border-gray-200 text-gray-700 hover:bg-gray-50">
-                          <Banknote size={12}/>Add booking payment
+                          className="inline-flex items-center gap-1 text-[12px] px-3 py-1.5 rounded-full border border-emerald-200 text-emerald-700 hover:bg-emerald-50">
+                          <IndianRupee size={12}/>Record payment
                         </button>
                       )}
-                      {/* An EMI plan is built on the balance; an old record's balance is not known
-                          until its paid-till-date is entered. */}
-                      {r.balance > 0 && (r.emi || !r.oldUnrecorded) && (
+                      {r.balance > 0 && (
                         <button onClick={() => setEmiBooking(r)}
                           className="inline-flex items-center gap-1 text-[12px] px-3 py-1.5 rounded-full border border-gray-200 text-gray-700 hover:bg-gray-50">
                           <Calculator size={12}/>{r.emi ? 'EMI schedule' : 'Start EMI'}
@@ -2098,7 +2103,12 @@ function OpeningBalanceModal({ booking, open, onClose, onSubmit, submitting }: a
 
         <div className="pt-2 border-t border-gray-100">
           <label className="text-[13px] font-semibold text-gray-900 block mb-1">Total paid till date (₹)</label>
-          <p className="text-[11px] text-gray-500 mb-2">Everything this customer paid in the old system, as one figure — from the old register or ledger.</p>
+          <p className="text-[11px] text-gray-500 mb-2">
+            Everything this customer paid <b>in the old system, before this software</b> — one figure from the old
+            register or ledger. It is not a payment taken today; it is only so the Balance reads correctly.
+            If the customer has paid nothing yet, you do not need this screen at all — close it and use
+            <b> Record payment</b> or <b> Start EMI</b> on the row.
+          </p>
           <input type="number" min={0} autoFocus value={f.amount ?? ''} onChange={e => set('amount', e.target.value)} placeholder="0"
             className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base font-semibold tabular-nums focus:outline-none focus:border-gray-900"/>
           <div className="flex flex-wrap gap-1.5 mt-2">
