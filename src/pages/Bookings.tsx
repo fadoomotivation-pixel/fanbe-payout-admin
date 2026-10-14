@@ -24,6 +24,7 @@ import { Plus, ArrowRight, FileText, Printer, Calculator, UserPlus, UserCheck, I
 import toast from 'react-hot-toast'
 import { downloadCsv } from '@/lib/download'
 import { Secret } from '@/lib/privacy'
+import UplineChain from '@/components/UplineChain'
 
 const STAGES = ['token_received','booking_done','cancelled'] as const
 type Stage = typeof STAGES[number]
@@ -367,7 +368,9 @@ export default function Bookings() {
     queryFn: async () => {
       // Include broker_type so the booking form can filter the picker by sale mode
       // (Affiliate Network brokers for Affiliate Network bookings, traditional brokers for traditional bookings).
-      const { data, error } = await supabase.from('brokers').select('id,name,broker_id,rank,broker_type,status,phone')
+      // sponsor_id comes along so the booking form can draw the team above the broker and
+      // tell two brokers of the same name apart by who sits over them.
+      const { data, error } = await supabase.from('brokers').select('id,name,broker_id,rank,broker_type,status,phone,sponsor_id')
       if (error) throw error
       return data
     },
@@ -434,6 +437,7 @@ export default function Bookings() {
   // Traditional brokers (standalone, no sponsor cascade).  Keeps the picker honest so
   // admin can't accidentally credit a tree broker on a traditional sale or vice versa.
   const pickerBrokers = useMemo(() => {
+    const nameById = new Map((brokers as any[]).map((b: any) => [b.id, b.name]))
     const wantType = form.commission_mode === 'traditional' ? 'traditional' : 'mlm'
     const list = (brokers as any[]).filter((b: any) => {
       if (b.status && b.status !== 'active') return false
@@ -447,7 +451,9 @@ export default function Bookings() {
       const stray = (brokers as any[]).find((b: any) => b.id === form.broker_id)
       if (stray) list.push(stray)
     }
-    return list
+    // Carry the sponsor's NAME onto each option, so the dropdown can show "under Shashi"
+    // beside the two Rajivs instead of leaving the office to guess.
+    return list.map((b: any) => ({ ...b, sponsor_name: b.sponsor_id ? nameById.get(b.sponsor_id) || null : null }))
   }, [brokers, form.commission_mode, form.broker_id])
 
   async function generateEmiSchedule(bookingId: string, customerId: string|null, principal: number, n: number, freq: string, startDate: string) {
@@ -2311,6 +2317,16 @@ export default function Bookings() {
                 Leave blank for a direct / walk-in sale — no commission will be credited.
               </div>
             )}
+            {/* Who this sale sits under. Names only, on purpose: on a traditional deal the
+                rate is whatever was agreed for that one deal, and paying the upline is a
+                separate per-booking choice — a figure here would read as a promise the
+                system has not made. The office takes the commission out to Excel. */}
+            <UplineChain
+              brokers={brokers as any[]}
+              startId={(brokers as any[]).find((b: any) => b.id === form.broker_id)?.sponsor_id}
+              title="This sale sits under"
+              note="Names only — what each of them earns is set per booking, and on a traditional deal the rate differs from deal to deal. This is here so you can see whose downline the sale belongs to, and tell two brokers of the same name apart."
+            />
             {/* Quick add — admin can create a fresh broker without leaving the booking
                 page.  Auto-sets broker_type from the current booking mode so the new
                 broker shows up in the right pool (traditional or Affiliate Network) immediately. */}
@@ -2625,6 +2641,13 @@ function BrokerCombobox({ value, options, onChange, placeholder }: {
                         {o.phone && <> · {o.phone}</>}
                         {o.broker_type === 'traditional' ? ' · Traditional' : (o.rank ? ` · ${o.rank}` : '')}
                       </div>
+                      {/* "Vaidehi mam ki team me maan lo 2 Rajiv ho gaye, alag alag
+                          associate hain" — two brokers of the same name are told apart by
+                          who sits above them, so show that here, where the choice is made,
+                          rather than letting the wrong Rajiv be picked and found later. */}
+                      {o.sponsor_name && (
+                        <div className="text-[11px] text-indigo-700 truncate">under {o.sponsor_name}</div>
+                      )}
                     </div>
                     {isSel && <span className="text-emerald-600 text-xs font-semibold shrink-0">✓ Selected</span>}
                   </div>
