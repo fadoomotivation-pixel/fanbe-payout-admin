@@ -9,7 +9,8 @@ import { Badge } from '@/components/ui/Badge.tsx'
 import { formatINR, formatDate } from '@/lib/utils'
 import { distributePaymentCommission } from '@/lib/payoutEngine'
 import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
-import { printApplicationForm, printApplicationForms, printPaymentReceipt, printEmiCards, printPipelineRegister, printCustomerStatement } from '@/lib/printTemplates'
+import { printApplicationForm, printApplicationForms, printPaymentReceipt, printEmiCards, printPipelineRegister, printCustomerStatement,
+  APPLICATION_FORM_BOOKING_COLUMNS, APPLICATION_FORM_CUSTOMER_COLUMNS, APPLICATION_FORM_PLOT_COLUMNS } from '@/lib/printTemplates'
 import { getCurrentUserId } from '@/lib/closure'
 import { bookingValue, sumVerified, balanceOf, collectionPct, paidByBooking, isPaidUnknown } from '@/lib/bookingMath'
 import { waLink } from '@/lib/whatsapp'
@@ -460,8 +461,9 @@ export default function CustomerPipeline() {
           commission_mode, traditional_commission_pct, traditional_commission_per_sqyd, traditional_pay_upline,
           broker_id, customer_id, plot_id, project_id, closed_at,
           registry_date, registry_doc_no, registry_office, registry_completed_at,
-          bp_customers(id, customer_code, name, phone),
-          bp_plots(plot_no, size_sqyd, sector, block),
+          ${APPLICATION_FORM_BOOKING_COLUMNS},
+          bp_customers(id, customer_code, name, phone, ${APPLICATION_FORM_CUSTOMER_COLUMNS}),
+          bp_plots(plot_no, size_sqyd, sector, block, ${APPLICATION_FORM_PLOT_COLUMNS}),
           bp_projects(name, location),
           brokers(name, broker_id, rank),
           bp_booking_plots(plot_id)

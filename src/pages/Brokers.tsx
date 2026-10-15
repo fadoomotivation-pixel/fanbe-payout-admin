@@ -248,6 +248,29 @@ export default function Brokers() {
 
   const rankList = ranks as any[]
   const rankPctFor = (rankName: string) => rankList.find((r: any) => r.rank_name === rankName)?.commission_pct
+
+  /**
+   * What this broker is paid on, in one line.
+   *
+   * The rank ladder belongs to the Affiliate tree. A traditional broker has no real rank,
+   * but the column is NOT NULL and defaults to 'Executive' - a live 5% slab - so every
+   * traditional broker was being shown as "Executive · 5% commission". That is not what
+   * they are paid: a traditional broker is on an agreed rate per gaj, set per deal or on
+   * their record. The label was convincing enough that it was read as proof the system
+   * was paying 5% automatically, so it goes.
+   */
+  const payBasis = (r: any): { label: string; muted: boolean } => {
+    if ((r.broker_type || 'mlm') === 'traditional') {
+      const rate = Number(r.traditional_rate_per_sqyd)
+      return rate > 0
+        ? { label: `₹${rate}/gaj`, muted: false }
+        : { label: 'rate not set', muted: true }
+    }
+    const pct = rankPctFor(r.rank)
+    return pct != null
+      ? { label: `${r.rank} · ${pct}%`, muted: false }
+      : { label: r.rank || '—', muted: true }
+  }
   const earnings: any = earningsByBroker
 
   const copy = async (text: string, key: string) => {
@@ -339,9 +362,17 @@ export default function Brokers() {
         ? <Badge label="Traditional" className="bg-amber-100 text-amber-800 border border-amber-200"/>
         : <Badge label="Affiliate" className="bg-blue-100 text-blue-800 border border-blue-200"/>
     }},
-    { header: 'Rank', render: (r: any) => {
-      const pct = rankPctFor(r.rank)
-      return <div><span className="text-sm">{r.rank || '—'}</span>{pct != null && <div className="text-[10px] text-gray-400">{pct}% commission</div>}</div>
+    { header: 'Paid on', render: (r: any) => {
+      const t = (r.broker_type || 'mlm') === 'traditional'
+      const b = payBasis(r)
+      return (
+        <div>
+          <span className={`text-sm ${b.muted ? 'text-gray-400' : ''}`}>{t ? b.label : (r.rank || '—')}</span>
+          <div className="text-[10px] text-gray-400">
+            {t ? 'agreed rate per gaj' : (rankPctFor(r.rank) != null ? `${rankPctFor(r.rank)}% commission` : '')}
+          </div>
+        </div>
+      )
     }},
     { header: 'Earned (distributed)', render: (r: any) => {
       const e = earnings[r.id]
@@ -535,7 +566,6 @@ export default function Brokers() {
           )}
           {filtered.map((r: any) => {
             const e = earnings[r.id]
-            const pct = rankPctFor(r.rank)
             const t = r.broker_type || 'mlm'
             return (
               <div key={r.id} className="bg-white border border-gray-200 rounded-xl p-3 shadow-sm">
@@ -557,7 +587,7 @@ export default function Brokers() {
 
                 <div className="mt-2.5 flex flex-wrap gap-1.5 text-[11px]">
                   {r.phone && <span className="bg-gray-50 border border-gray-100 rounded-full px-2 py-0.5 text-gray-700">📞 <Secret>{r.phone}</Secret></span>}
-                  {r.rank && <span className="bg-gray-50 border border-gray-100 rounded-full px-2 py-0.5 text-gray-700">{r.rank}{pct != null ? ` · ${pct}%` : ''}</span>}
+                  <span className={`bg-gray-50 border border-gray-100 rounded-full px-2 py-0.5 ${payBasis(r).muted ? 'text-gray-400' : 'text-gray-700'}`}>{payBasis(r).label}</span>
                   <Badge label={r.kyc_status || 'pending'} className={`${KYC_COLORS[r.kyc_status] || 'bg-gray-100 text-gray-600'} text-[10px]`}/>
                   <Badge label={r.status} className={`${r.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'} text-[10px]`}/>
                   {r.auth_user_id && (
