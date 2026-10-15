@@ -1323,6 +1323,50 @@ export default function Bookings() {
   // customer who had paid half was handed a form reading "0 payments" and the full price
   // as balance due. One query for the one booking being printed fixes that; the Customer
   // Pipeline already did this, the Bookings list simply never had.
+  // Filling in an existing customer's details without leaving the booking.
+  //
+  // These are the fields the printed application form needs. A customer created in a
+  // hurry has them blank, and until now the only cure was to go and find the customer
+  // somewhere else - so the form just printed empty lines.
+  const CUST_FIELDS = [
+    'father_or_husband_name', 'dob', 'pan', 'email', 'address',
+    'nominee_name', 'nominee_relation', 'nominee_father_name', 'nominee_dob',
+    'nominee_pan', 'nominee_address',
+  ] as const
+  const BLANK_CUST = Object.fromEntries(CUST_FIELDS.map(k => [k, ''])) as Record<string, string>
+  const [custEditId, setCustEditId] = useState<string | null>(null)
+  const [custEdit, setCustEdit] = useState<Record<string, string>>({ ...BLANK_CUST })
+  const [custEditSaving, setCustEditSaving] = useState(false)
+
+  const openCustEdit = (c: any) => {
+    setCustEdit(Object.fromEntries(CUST_FIELDS.map(k => [k, c[k] ?? ''])) as Record<string, string>)
+    setCustEditId(c.id)
+  }
+
+  const saveCustEdit = async () => {
+    if (!custEditId) return
+    setCustEditSaving(true)
+    try {
+      // Blank stays blank rather than becoming an empty string on a column that was null:
+      // the form prints both the same way, and null is the honest "not known yet".
+      const payload = Object.fromEntries(
+        CUST_FIELDS.map(k => [k, String(custEdit[k] ?? '').trim() || null]),
+      )
+      const { error } = await supabase.from('bp_customers').update(payload).eq('id', custEditId)
+      if (error) throw error
+      await qc.invalidateQueries({ queryKey: ['customers'] })
+      // The pipeline prints from its own copy of the customer, so refresh that too.
+      qc.invalidateQueries({ queryKey: ['cp_page_detail'] })
+      toast.success('Customer details saved — the application form will print them now')
+      setCustEditId(null)
+    } catch (e: any) {
+      console.error('Customer detail save failed:', e)
+      toast.error(friendlyError(e, 'Could not save the customer details.'))
+    } finally {
+      setCustEditSaving(false)
+    }
+  }
+
   const printForm = async (b: any) => {
     const { data } = await supabase
       .from('bp_payments')
@@ -2450,16 +2494,72 @@ export default function Bookings() {
             </Select>
             {form.customer_id && (() => {
               const c = (customers as any[]).find((x: any) => x.id === form.customer_id)
-              return c ? (
-                <div className="mt-2 p-3 bg-blue-50 rounded-lg text-xs text-blue-900 grid grid-cols-2 gap-2">
-                  <span>Code: <b>{c.customer_code || '—'}</b></span>
-                  <span>S/o W/o: <b>{c.father_or_husband_name || '—'}</b></span>
-                  <span>DOB: <b>{c.dob || '—'}</b></span>
-                  <span>PAN: <b>{c.pan || '—'}</b></span>
-                  <span className="col-span-2">Address: <b>{c.address || '—'}</b></span>
-                  <span className="col-span-2 pt-1 border-t border-blue-200">Nominee: <b>{c.nominee_name || '—'}</b> ({c.nominee_relation || '—'})</span>
+              if (!c) return null
+              // Which of these the application form actually prints. A customer created
+              // without them had no way to get them filled in from here: the panel below
+              // showed "S/o W/o: —" and stopped there, so the form printed a blank line
+              // that reads as a fact. Manisha: "husband name ... nominees details nh aa rahi".
+              const missing = [
+                !c.father_or_husband_name && 'Father / Husband',
+                !c.nominee_name && 'Nominee',
+              ].filter(Boolean) as string[]
+              return (
+                <div className="mt-2 p-3 bg-blue-50 rounded-lg text-xs text-blue-900">
+                  <div className="grid grid-cols-2 gap-2">
+                    <span>Code: <b>{c.customer_code || '—'}</b></span>
+                    <span>S/o W/o: <b>{c.father_or_husband_name || '—'}</b></span>
+                    <span>DOB: <b>{c.dob || '—'}</b></span>
+                    <span>PAN: <b>{c.pan || '—'}</b></span>
+                    <span className="col-span-2">Address: <b>{c.address || '—'}</b></span>
+                    <span className="col-span-2 pt-1 border-t border-blue-200">
+                      Nominee: <b>{c.nominee_name || '—'}</b> ({c.nominee_relation || '—'})
+                    </span>
+                  </div>
+
+                  {custEditId !== c.id && (
+                    <div className="mt-2 pt-2 border-t border-blue-200 flex items-center justify-between gap-2">
+                      <span className={missing.length ? 'text-amber-800' : 'text-blue-900/70'}>
+                        {missing.length
+                          ? `${missing.join(' and ')} not filled in — ${missing.length === 1 ? 'it' : 'they'} will print blank on the application form.`
+                          : 'Everything the application form prints is filled in.'}
+                      </span>
+                      <button type="button" onClick={() => openCustEdit(c)}
+                        className="shrink-0 text-xs font-medium bg-white border border-blue-300 text-blue-900 hover:bg-blue-50 px-2.5 py-1 rounded-lg">
+                        {missing.length ? 'Fill in' : 'Edit details'}
+                      </button>
+                    </div>
+                  )}
+
+                  {custEditId === c.id && (
+                    <div className="mt-2 pt-2 border-t border-blue-200 space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input label="Father / Husband" value={custEdit.father_or_husband_name} onChange={(e: any) => setCustEdit(p => ({ ...p, father_or_husband_name: e.target.value }))} />
+                        <Input label="Date of Birth" type="date" value={custEdit.dob} onChange={(e: any) => setCustEdit(p => ({ ...p, dob: e.target.value }))} />
+                        <Input label="PAN" value={custEdit.pan} onChange={(e: any) => setCustEdit(p => ({ ...p, pan: e.target.value.toUpperCase() }))} />
+                        <Input label="Email" value={custEdit.email} onChange={(e: any) => setCustEdit(p => ({ ...p, email: e.target.value }))} />
+                        <div className="col-span-2"><Input label="Permanent Address" value={custEdit.address} onChange={(e: any) => setCustEdit(p => ({ ...p, address: e.target.value }))} /></div>
+                      </div>
+                      <div className="text-[11px] font-semibold text-blue-900 pt-1">Nominee</div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input label="Nominee Name" value={custEdit.nominee_name} onChange={(e: any) => setCustEdit(p => ({ ...p, nominee_name: e.target.value }))} />
+                        <Input label="Relation" value={custEdit.nominee_relation} onChange={(e: any) => setCustEdit(p => ({ ...p, nominee_relation: e.target.value }))} placeholder="Wife / Son / Mother…" />
+                        <Input label="Nominee Father / Husband" value={custEdit.nominee_father_name} onChange={(e: any) => setCustEdit(p => ({ ...p, nominee_father_name: e.target.value }))} />
+                        <Input label="Nominee Date of Birth" type="date" value={custEdit.nominee_dob} onChange={(e: any) => setCustEdit(p => ({ ...p, nominee_dob: e.target.value }))} />
+                        <Input label="Nominee PAN" value={custEdit.nominee_pan} onChange={(e: any) => setCustEdit(p => ({ ...p, nominee_pan: e.target.value.toUpperCase() }))} />
+                        <div className="col-span-2"><Input label="Nominee Address" value={custEdit.nominee_address} onChange={(e: any) => setCustEdit(p => ({ ...p, nominee_address: e.target.value }))} /></div>
+                      </div>
+                      <div className="flex gap-2 justify-end pt-1">
+                        <button type="button" onClick={() => setCustEditId(null)}
+                          className="text-xs px-3 py-1.5 rounded-lg bg-white border border-gray-300 text-gray-700 hover:bg-gray-50">Cancel</button>
+                        <button type="button" onClick={saveCustEdit} disabled={custEditSaving}
+                          className="text-xs font-medium px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">
+                          {custEditSaving ? 'Saving…' : 'Save customer details'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              ) : null
+              )
             })()}
           </>
         ) : (

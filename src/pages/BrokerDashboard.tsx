@@ -831,7 +831,18 @@ export default function BrokerDashboard() {
                     <div className="h-full bg-emerald-500" style={{ width: `${rankProgress.progress}%` }}/>
                   </div>
                   <div className="text-xs text-gray-500 mt-2">{rankProgress.hint}</div>
-                  <div className="text-[11px] text-gray-400 mt-1">Your commission rate: <b>{rankProgress.current.commission_pct || 0}%</b>{rankProgress.next ? ` → ${rankProgress.next.commission_pct || 0}% at ${rankProgress.next.rank_name}` : ''}</div>
+                  {/* Only an Affiliate broker is paid off the rank ladder. A traditional
+                      broker is on an agreed rate per gaj, and quoting them a rank % here
+                      would be telling them they earn something they do not. */}
+                  {(broker?.broker_type || 'mlm') !== 'traditional' ? (
+                    <div className="text-[11px] text-gray-400 mt-1">Your commission rate: <b>{rankProgress.current.commission_pct || 0}%</b>{rankProgress.next ? ` → ${rankProgress.next.commission_pct || 0}% at ${rankProgress.next.rank_name}` : ''}</div>
+                  ) : (
+                    <div className="text-[11px] text-gray-400 mt-1">
+                      {Number(broker?.traditional_rate_per_sqyd) > 0
+                        ? <>Your rate: <b>₹{broker.traditional_rate_per_sqyd} per gaj</b></>
+                        : 'Your commission is agreed per deal with the office.'}
+                    </div>
+                  )}
                 </div>
               ) : <p className="text-sm text-gray-500">Rank info not available.</p>}
             </Section>

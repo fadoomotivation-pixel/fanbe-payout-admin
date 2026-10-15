@@ -307,6 +307,36 @@ const FORM_CSS = `
   @media print{body{padding:0} .toolbar,.toolbar-spacer{display:none !important}}
 `
 
+/**
+ * What a screen must SELECT before it can print an application form.
+ *
+ * Manisha, with the printed form in front of her: "Almost ok h sb bas husband name rate
+ * nh aa raha nominees details nh aa rahi time nh aa raha booking time m".
+ *
+ * Every one of those was sitting in the database. CR-0945 had rate_per_sqyd 4000,
+ * booking_time 15:32, nominee SHASHI KUMAR / HUSBAND / SINHA. The form printed blanks
+ * because the Customer Pipeline fetched a short column list and the template has no way
+ * to tell "this customer has no nominee" from "nobody asked for the nominee columns".
+ * It prints an empty line either way, and an empty line on a form the customer signs
+ * looks like a fact.
+ *
+ * That is the second time a print came back blank for this reason. So the column list
+ * now lives next to the template that needs it: a screen that prints this form selects
+ * these, and the two cannot drift apart again.
+ */
+export const APPLICATION_FORM_BOOKING_COLUMNS = `
+  size_sqyd, rate_per_sqyd, booking_date, booking_time, created_at,
+  customer_bank_name, upline_broker_code, manager_signature_by, scheme_name
+`
+/** The customer columns the form prints — the nominee block is most of it. */
+export const APPLICATION_FORM_CUSTOMER_COLUMNS = `
+  father_or_husband_name, dob, address, email,
+  nominee_name, nominee_relation, nominee_dob, nominee_father_name,
+  nominee_address, nominee_pan
+`
+/** The plot columns the form prints. */
+export const APPLICATION_FORM_PLOT_COLUMNS = 'price_per_sqyd'
+
 // Builds one form's markup only.  Kept separate from the window/CSS wrapper so that
 // printing twenty forms is the same template repeated, not a second copy of it that can
 // drift away from the single-form version.

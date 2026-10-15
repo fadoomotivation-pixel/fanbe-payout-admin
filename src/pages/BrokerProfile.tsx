@@ -128,10 +128,26 @@ export default function BrokerProfile() {
               {broker.email && ` · ${broker.email}`}
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
-              <Badge label={broker.rank || '—'} className="bg-blue-100 text-blue-700"/>
+              {/* The rank ladder is an Affiliate thing. A traditional broker's rank column
+                  only holds 'Executive' because it is NOT NULL, and showing it next to a
+                  "5% commission" badge said they were paid something they are not. */}
+              {(broker.broker_type || 'mlm') !== 'traditional' && (
+                <Badge label={broker.rank || '—'} className="bg-blue-100 text-blue-700"/>
+              )}
+              {(broker.broker_type || 'mlm') === 'traditional' && (
+                <Badge
+                  label={Number(broker.traditional_rate_per_sqyd) > 0
+                    ? `₹${broker.traditional_rate_per_sqyd}/gaj`
+                    : 'rate not set'}
+                  className={Number(broker.traditional_rate_per_sqyd) > 0
+                    ? 'bg-amber-100 text-amber-700'
+                    : 'bg-gray-100 text-gray-500'}/>
+              )}
               <Badge label={broker.status || 'unknown'} className={broker.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}/>
               {broker.kyc_status && <Badge label={`KYC: ${broker.kyc_status}`} className="bg-gray-100 text-gray-700"/>}
-              {rank?.commission_pct != null && <Badge label={`${rank.commission_pct}% commission`} className="bg-amber-100 text-amber-700"/>}
+              {(broker.broker_type || 'mlm') !== 'traditional' && rank?.commission_pct != null && (
+                <Badge label={`${rank.commission_pct}% commission`} className="bg-amber-100 text-amber-700"/>
+              )}
             </div>
             {broker.sponsor && (
               <div className="mt-3 text-xs text-gray-500">
