@@ -10,8 +10,9 @@ import { Badge } from '@/components/ui/Badge.tsx'
 import { KYC_COLORS, formatINR } from '@/lib/utils'
 import { Secret } from '@/lib/privacy'
 import UplineChain from '@/components/UplineChain'
-import { Plus, Search, KeyRound, Copy, Check, Eye, UserPlus, X, ClipboardPaste } from 'lucide-react'
+import { Plus, Search, KeyRound, Copy, Check, Eye, UserPlus, X, ClipboardPaste, LogOut } from 'lucide-react'
 import BrokerImportModal from '@/components/BrokerImportModal'
+import AgentHandover from '@/components/AgentHandover'
 import toast from 'react-hot-toast'
 
 const EMPTY = {
@@ -147,6 +148,8 @@ export default function Brokers() {
   const [typeFilter, setTypeFilter] = useState<'' | 'mlm' | 'traditional'>('')
   // Bulk import of brokers that already exist on paper — see BrokerImportModal.
   const [importOpen, setImportOpen] = useState(false)
+  // The agent who is leaving, while their customers are handed to somebody else.
+  const [handover, setHandover] = useState<any>(null)
   const [copiedKey, setCopiedKey] = useState<string|null>(null)
   const [loginResult, setLoginResult] = useState<any>(null)
   const [editPassword, setEditPassword] = useState('')
@@ -407,6 +410,13 @@ export default function Brokers() {
         <div className="flex gap-1">
           <Link to={`/brokers/${r.id}`} className="text-xs px-2 py-1 rounded bg-blue-50 hover:bg-blue-100 text-blue-700">Profile</Link>
           <Button size="sm" variant="ghost" onClick={() => open(r)}>Edit</Button>
+          {/* Manisha: "Koi agent chod k chala gya aur uska customer hum kisi aur ko
+              assign krke krde." One booking at a time was possible already; what was
+              missing was doing it for all of them, and seeing what it costs. */}
+          <button onClick={() => setHandover(r)} title="Agent leaving? Hand their customers to someone else"
+            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-amber-50 hover:bg-amber-100 text-amber-800">
+            <LogOut size={12}/>Hand over
+          </button>
           <Link to={`/broker/dashboard?broker_id=${r.id}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700" title="Open broker portal as this broker (read-only shadow mode)">
             <Eye size={12}/>View as
           </Link>
@@ -620,6 +630,7 @@ export default function Brokers() {
                 <div className="mt-2.5 flex gap-1.5">
                   <Link to={`/brokers/${r.id}`} className="flex-1 text-center text-xs py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 font-medium">Profile</Link>
                   <button onClick={() => open(r)} className="flex-1 text-center text-xs py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium">Edit</button>
+                  <button onClick={() => setHandover(r)} className="flex-1 text-center text-xs py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 font-medium">Hand over</button>
                   <Link to={`/broker/dashboard?broker_id=${r.id}`} target="_blank" rel="noopener noreferrer" className="flex-1 text-center text-xs py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium inline-flex items-center justify-center gap-1" title="Open broker portal as this broker (read-only shadow mode)">
                     <Eye size={11}/>View as
                   </Link>
@@ -629,6 +640,18 @@ export default function Brokers() {
           })}
         </div>
       </div>
+
+      <AgentHandover
+        open={!!handover}
+        from={handover}
+        brokers={allBrokers}
+        onClose={() => setHandover(null)}
+        onDone={() => {
+          qc.invalidateQueries({ queryKey: ['brokers'] })
+          qc.invalidateQueries({ queryKey: ['broker_earnings'] })
+          qc.invalidateQueries({ queryKey: ['broker_health'] })
+        }}
+      />
 
       <BrokerImportModal
         open={importOpen}
