@@ -28,6 +28,16 @@ import UplineChain from '@/components/UplineChain'
 import { teamForSale, buildSplitPlan, pctFromRatePerSqyd, ratePerSqydFromPct } from '@/lib/tradSplit'
 
 /**
+ * How many people can share a sale besides the broker who sold it.
+ *
+ * bp_booking_brokers.position is capped in the database, and recompute_booking_payouts()
+ * stops climbing the sponsors after 15 levels. Position 1 is the seller, so 14 others fit.
+ * Going over does not degrade gracefully: Postgres rejects the INSERT, the rows go in as
+ * one statement, and the entire team is lost while the booking saves looking fine.
+ */
+const MAX_SPLIT_EXTRAS = 14
+
+/**
  * The bp_booking_brokers rows for a traditional sale, built once and used by both the
  * create and the edit path so the two can never drift apart.
  *
@@ -49,6 +59,7 @@ function splitRowsFor(
 ) {
   const extras = (splits || [])
     .filter(s => s.broker_id && Number(s.commission_pct) > 0)
+    .slice(0, MAX_SPLIT_EXTRAS)
     .map((s, i) => ({
       booking_id: bookingId,
       broker_id: s.broker_id as string,
@@ -2143,11 +2154,17 @@ export default function Bookings() {
                       The team above the broker, or anyone who helped. Each one gets their own % of every payment.
                     </div>
                   </div>
-                  <button type="button"
-                    onClick={() => setSplitBrokers([...splitBrokers, { broker_id: '', commission_pct: '', position: splitBrokers.length + 2 }])}
-                    className="shrink-0 text-xs font-medium bg-white border border-amber-300 text-amber-900 hover:bg-amber-50 px-3 py-1.5 rounded-lg">
-                    + Add by hand
-                  </button>
+                  {/* 14 extras plus the broker who sold it is 15 rows, which is where
+                      bp_booking_brokers.position stops and where the payout function's own
+                      walk up the sponsors stops. Past that the database refuses the INSERT
+                      and the whole team is lost, so the button goes rather than the rows. */}
+                  {splitBrokers.length < MAX_SPLIT_EXTRAS && (
+                    <button type="button"
+                      onClick={() => setSplitBrokers([...splitBrokers, { broker_id: '', commission_pct: '', position: splitBrokers.length + 2 }])}
+                      className="shrink-0 text-xs font-medium bg-white border border-amber-300 text-amber-900 hover:bg-amber-50 px-3 py-1.5 rounded-lg">
+                      + Add by hand
+                    </button>
+                  )}
                 </div>
 
                 {/* The team calculator. Only shown when there IS a team above the broker. */}
