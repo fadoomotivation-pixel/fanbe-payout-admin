@@ -1849,9 +1849,23 @@ export default function CustomerPipeline() {
                       onClick={r.brokers ? () => navigate(`/broker/dashboard?broker_id=${r.broker_id}`) : undefined}
                       sub={r.chain.length > 1 ? `↑ ${r.chain.slice(1, 4).map((c: any) => c.name).join(' → ')}${r.chain.length > 4 ? ` …+${r.chain.length - 4}` : ''}` : undefined}/>
 
-                    <DetailRow icon="✓" label="Affiliate Network net distributed"
-                      value={`${formatINR(r.mlm.net)} · ${r.mlm.rows} row${r.mlm.rows === 1 ? '' : 's'}`}
-                      tone="emerald"/>
+                    {/* This counts EVERY payout row on the booking — traditional_direct and
+                        traditional_split as much as the Affiliate cascade — so calling it
+                        "Affiliate Network" was telling the office a traditional sale had been
+                        paid through a tree it has nothing to do with. It is the one place a
+                        booking shows what it has actually paid out, so the label has to be
+                        the truth. When nothing has been distributed yet, say why rather than
+                        showing a bare zero: it is almost always an unverified payment or a
+                        commission nobody set. */}
+                    <DetailRow icon="✓" label="Commission distributed"
+                      value={r.mlm.rows > 0
+                        ? `${formatINR(r.mlm.net)} · ${r.mlm.rows} row${r.mlm.rows === 1 ? '' : 's'}`
+                        : 'nothing yet'}
+                      sub={r.mlm.rows > 0 ? undefined
+                        : (!r.broker_id ? 'no broker on this booking'
+                          : r.paid <= 0 ? 'nothing paid and verified yet'
+                          : 'no commission set on this booking')}
+                      tone={r.mlm.rows > 0 ? 'emerald' : 'gray'}/>
 
                     <DetailRow icon="₹" label="Total paid / net"
                       value={`${formatINR(r.paid)} / ${formatINR(r.total)}`}
