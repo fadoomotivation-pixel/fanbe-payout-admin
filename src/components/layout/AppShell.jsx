@@ -97,10 +97,53 @@ const MOBILE_TABS = [
   { to: '/withdrawals',icon: Wallet,          label: 'Withdrawals' },
 ]
 
-function getPageTitle(pathname) {
-  const all = NAV.flatMap(g => g.items)
-  const match = all.find(i => i.to === pathname || (i.to !== '/' && pathname.startsWith(i.to)))
-  return match?.label || 'Dashboard'
+/**
+ * Which ONE menu entry the current URL belongs to.
+ *
+ * Admin: "Pay broker pr select kia commission ledger bhi select hua."
+ *
+ * Two entries share one page and differ only by query string -- /payouts and
+ * /payouts?view=activity. NavLink's own isActive matches on pathname alone and knows
+ * nothing about the query, so both lit up at once, and getPageTitle picked whichever
+ * came first in the list, which is why the ledger view was captioned "Pay brokers".
+ *
+ * So the match is made here instead, and the MOST SPECIFIC entry wins: an entry whose
+ * query params are all present in the URL beats the plain one, and a longer path beats a
+ * shorter one. Exactly one entry is ever returned, so two can never highlight together.
+ *
+ * Written against the whole menu rather than special-casing /payouts: the next pair of
+ * views on one page will behave correctly without anybody remembering this existed.
+ */
+function activeNavTo(pathname, search) {
+  const here = new URLSearchParams(search || '')
+  let best = null
+  let bestScore = -1
+
+  for (const item of NAV.flatMap(g => g.items)) {
+    const [path, query = ''] = item.to.split('?')
+
+    const pathMatches = path === '/'
+      ? pathname === '/'
+      // The trailing slash matters: without it /payouts would also claim /payout-terms.
+      : pathname === path || pathname.startsWith(path + '/')
+    if (!pathMatches) continue
+
+    const want = new URLSearchParams(query)
+    let queryMatches = true
+    for (const [k, v] of want) {
+      if (here.get(k) !== v) { queryMatches = false; break }
+    }
+    if (!queryMatches) continue
+
+    // Longer path first, then more query params — both make an entry more specific.
+    const score = path.length * 100 + [...want].length
+    if (score > bestScore) { bestScore = score; best = item }
+  }
+  return best
+}
+
+function getPageTitle(pathname, search) {
+  return activeNavTo(pathname, search)?.label || 'Dashboard'
 }
 
 export default function AppShell() {
@@ -126,7 +169,9 @@ export default function AppShell() {
     navigate('/login')
   }
 
-  const pageTitle = getPageTitle(location.pathname)
+  const pageTitle = getPageTitle(location.pathname, location.search)
+  // Worked out once for the whole menu, so only one entry can ever be highlighted.
+  const activeTo = activeNavTo(location.pathname, location.search)?.to
   const initials  = user?.email?.[0]?.toUpperCase() || 'A'
 
   return (
@@ -153,7 +198,12 @@ export default function AppShell() {
                   key={to}
                   to={to}
                   end={to === '/'}
-                  className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+                  // The FUNCTION form, deliberately. NavLink ignores the query string
+                  // when it decides isActive, so both views of /payouts matched — but a
+                  // plain string className does not override that, it gets JOINED with
+                  // NavLink's own "active", and both entries stayed lit. Only the
+                  // function form replaces the class outright.
+                  className={() => `nav-item ${activeTo === to ? 'active' : ''}`}
                   title={collapsed ? label : undefined}
                 >
                   <Icon size={16} strokeWidth={2} />
