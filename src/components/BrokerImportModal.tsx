@@ -51,6 +51,8 @@ const COLUMNS = [
   // booking form cannot fill the team commission and the office is back to Excel, so it
   // belongs on the same sheet as everything else about the broker.
   'rate_per_sqyd',
+  // Or a flat amount per plot instead — a broker is on one basis or the other.
+  'rate_per_plot',
 ] as const
 
 const digitsOnly = (s: string) => (s || '').replace(/\D/g, '')
@@ -81,6 +83,7 @@ type Row = {
   account_holder: string
   aadhaar_no: string
   rate_per_sqyd: number | null
+  rate_per_plot: number | null
   errors: string[]
 }
 
@@ -102,6 +105,8 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
   // Postgres does not have would fail the whole import rather than one field.
   const hasRateColumn = existing.length === 0
     || Object.prototype.hasOwnProperty.call(existing[0] as any, 'traditional_rate_per_sqyd')
+  const hasPerPlotColumn = existing.length === 0
+    || Object.prototype.hasOwnProperty.call(existing[0] as any, 'traditional_rate_per_plot')
 
   const parsed = useMemo<Row[]>(() => {
     // '#' marks the sample rows in the downloadable template.  Skipping them means the
@@ -219,8 +224,16 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
       if (rate_per_sqyd != null && rate_per_sqyd > 5000) {
         warnings.push(`Rate ${rate_per_sqyd}/gaj looks high — check the column before paying on it`)
       }
-      if (rate_per_sqyd == null && broker_type === 'traditional') {
-        warnings.push('No rate per gaj — this broker earns nothing from the team commission until one is set')
+      const plotRaw = Number(String(get('rate_per_plot')).replace(/[^\d.]/g, ''))
+      const rate_per_plot = Number.isFinite(plotRaw) && plotRaw > 0 ? plotRaw : null
+      if (rate_per_plot != null && rate_per_sqyd != null) {
+        warnings.push('Both a per-gaj rate and a per-plot amount are filled in — a broker is on one or the other, so the per-plot amount is used')
+      }
+      if (rate_per_plot != null && broker_type !== 'traditional') {
+        warnings.push('Per-plot commission only applies to a traditional broker — ignored on this row')
+      }
+      if (rate_per_sqyd == null && rate_per_plot == null && broker_type === 'traditional') {
+        warnings.push('No rate set — this broker earns nothing from the team commission until one is, per gaj or per plot')
       }
 
       if (ifsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) {
@@ -240,7 +253,7 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
       return {
         line: i + 1, broker_id, name, phone, email, pan_no, date_of_joining, sponsor,
         broker_type, bank_name, account_no, ifsc, account_holder, aadhaar_no,
-        rate_per_sqyd,
+        rate_per_sqyd, rate_per_plot,
         errors: warnings,
       }
     })
@@ -282,8 +295,12 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
       // Only on a traditional broker, and only once the database has the column —
       // migration 20261014 is run by hand after this deploys, and sending a column
       // Postgres does not have would fail the whole import.
-      ...(hasRateColumn && r.broker_type === 'traditional' && r.rate_per_sqyd != null
-        ? { traditional_rate_per_sqyd: r.rate_per_sqyd }
+      // One basis only, per-plot first — the same rule the whole app reads by, so a
+      // sheet with both filled in cannot create a broker who is on two arrangements.
+      ...(hasRateColumn && r.broker_type === 'traditional'
+        ? (hasPerPlotColumn && r.rate_per_plot != null
+            ? { traditional_rate_per_plot: r.rate_per_plot }
+            : r.rate_per_sqyd != null ? { traditional_rate_per_sqyd: r.rate_per_sqyd } : {})
         : {}),
     })
 
@@ -363,11 +380,11 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
   // admin adds get imported.  Opens straight in Excel / Google Sheets.
   const downloadTemplate = () => {
     const csv = [
-      'Broker ID,Name,Phone,Email,PAN,Date of Joining,Upline (sponsor),Type,Bank name,Account no,IFSC,Account holder,Aadhaar,Rate per gaj',
-      'TR814,SHIV SHANKAR THAKUR,9811100011,,,01/04/2024,,traditional,State Bank of India,30123456789,SBIN0001234,SHIV SHANKAR THAKUR,,2000',
-      'TR816,SURENDER CHAUDHARY,9811100012,,ABCPK1234A,15/07/2023,SHIV SHANKAR THAKUR,traditional,HDFC Bank,50100123456789,HDFC0000123,SURENDER CHAUDHARY,,1500',
-      ',SATISH KUMAR,9811100013,,,,TR816,traditional,,,,,,1200',
-      ',RADHEY SHYAM,9811100014,,,,SATISH KUMAR,affiliate,Punjab National Bank,1234567890123,PUNB0123456,RADHEY SHYAM,123412341234,',
+      'Broker ID,Name,Phone,Email,PAN,Date of Joining,Upline (sponsor),Type,Bank name,Account no,IFSC,Account holder,Aadhaar,Rate per gaj,Rate per plot',
+      'TR814,SHIV SHANKAR THAKUR,9811100011,,,01/04/2024,,traditional,State Bank of India,30123456789,SBIN0001234,SHIV SHANKAR THAKUR,,2000,',
+      'TR816,SURENDER CHAUDHARY,9811100012,,ABCPK1234A,15/07/2023,SHIV SHANKAR THAKUR,traditional,HDFC Bank,50100123456789,HDFC0000123,SURENDER CHAUDHARY,,1500,',
+      ',SATISH KUMAR,9811100013,,,,TR816,traditional,,,,,,,50000',
+      ',RADHEY SHYAM,9811100014,,,,SATISH KUMAR,affiliate,Punjab National Bank,1234567890123,PUNB0123456,RADHEY SHYAM,123412341234,,',
       '',
       '# ---- Notes. Lines starting with # are ignored, so you can leave them in. ----',
       '# Fill what you have. Nothing is compulsory - the rest can be corrected in the app afterwards.',
@@ -390,6 +407,14 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
       '#                    added together. Leave blank if nothing is agreed yet - that',
       '#                    broker is then left out of the auto-fill rather than paid zero.',
       '#                    Affiliate brokers ignore this: they are paid from their rank.',
+      '# * Rate per plot  : the OTHER way to pay a traditional broker - a flat amount for',
+      '#                    each plot, whatever its size. SATISH above is on 50,000 a plot.',
+      '#                    Fill ONE of the two, not both. A broker is on per gaj OR per',
+      '#                    plot; if both are filled the per-plot amount is used.',
+      '#                    Careful: plots here run from about 12 gaj to 583, so a flat',
+      '#                    50,000 is roughly 4,000 a gaj on the smallest and 86 on the',
+      '#                    largest. That is a fine deal to strike on purpose and an easy',
+      '#                    one to strike by accident.',
       '# * Account no     : with IFSC. Withdrawals will not pay a broker who has no bank',
       '#                    details, so a sheet without these just moves the typing to a',
       '#                    hundred broker pages later. Account holder is the name as the',
@@ -427,7 +452,7 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
           Copy the rows straight out of Excel or Google Sheets and paste them below — one broker per line, in this column order:
         </div>
         <div className="font-mono text-[11px] bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-700 overflow-x-auto whitespace-nowrap">
-          Broker ID → Name → Phone → Email → PAN → Date of joining → Upline (sponsor) → Type → Bank name → Account no → IFSC → Account holder → Aadhaar → Rate per gaj
+          Broker ID → Name → Phone → Email → PAN → Date of joining → Upline (sponsor) → Type → Bank name → Account no → IFSC → Account holder → Aadhaar → Rate per gaj → Rate per plot
         </div>
         <div className="flex items-center gap-2 text-xs bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-2">
           <span className="text-emerald-900 flex-1">
