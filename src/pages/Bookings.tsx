@@ -2655,14 +2655,38 @@ export default function Bookings() {
             )}
             {/* Who this sale sits under. Names only, on purpose: on a traditional deal the
                 rate is whatever was agreed for that one deal, and paying the upline is a
-                separate per-booking choice — a figure here would read as a promise the
-                system has not made. The office takes the commission out to Excel. */}
+                separate per-booking choice. */}
             <UplineChain
               brokers={brokers as any[]}
               startId={(brokers as any[]).find((b: any) => b.id === form.broker_id)?.sponsor_id}
               title="This sale sits under"
-              note="Names only — what each of them earns is set per booking, and on a traditional deal the rate differs from deal to deal. This is here so you can see whose downline the sale belongs to, and tell two brokers of the same name apart."
+              note="This is who the sale sits under, so you can see whose downline it belongs to and tell two brokers of the same name apart."
             />
+            {/* Manisha, looking at this very panel: "Uper line tak ka commission kaha
+                dalna padega."
+                
+                A fair question, and the panel used to answer it wrongly. Its note still
+                read "Names only — what each of them earns is set per booking", which was
+                true back when the commission went out to Excel and is not true now. On
+                top of that, the Team commission panel sits in the commission section
+                ABOVE this one — about five hundred lines up the form — so after choosing
+                the broker she had already scrolled past the only thing that does the job.
+                
+                So the way there is put where the question gets asked. */}
+            {form.commission_mode === 'traditional' && tradTeamPlan && (
+              <button
+                type="button"
+                data-testid="goto-team-commission"
+                onClick={() => {
+                  const el = document.querySelector('[data-testid="team-commission"]')
+                  el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                }}
+                className="mt-2 w-full text-left text-[11px] rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900 hover:bg-amber-100"
+              >
+                <b>Paying the team above too?</b> Open <u>Team commission</u> — it works out what each
+                level earns from the rate they are on, and fills it in for you.
+              </button>
+            )}
             {/* Quick add — admin can create a fresh broker without leaving the booking
                 page.  Auto-sets broker_type from the current booking mode so the new
                 broker shows up in the right pool (traditional or Affiliate Network) immediately. */}
