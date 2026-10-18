@@ -51,19 +51,52 @@
 import type { ChainBroker } from '@/components/UplineChain'
 
 /** A broker as this calculator needs them: the chain fields plus the agreed rate. */
-export type RatedBroker = ChainBroker & { traditional_rate_per_sqyd?: number | null }
+export type RatedBroker = ChainBroker & {
+  traditional_rate_per_sqyd?: number | null
+  /** A flat amount for each plot sold, whatever its size. The alternative basis. */
+  traditional_rate_per_plot?: number | null
+}
+
+/** How a broker is paid: scaled by the plot, or a flat amount for it. */
+export type RateBasis = 'per_sqyd' | 'per_plot'
+
+/**
+ * What a broker is on, and on which basis.
+ *
+ * Manisha: "Per plot par kardo ise bhi." Per-plot is read FIRST, so a row that somehow
+ * carries both behaves one definite way rather than two. The form only ever writes one.
+ */
+export function basisOf(b: RatedBroker | null | undefined): { basis: RateBasis; rate: number } | null {
+  const perPlot = Number(b?.traditional_rate_per_plot)
+  if (Number.isFinite(perPlot) && perPlot > 0) return { basis: 'per_plot', rate: perPlot }
+  const perSqyd = Number(b?.traditional_rate_per_sqyd)
+  if (Number.isFinite(perSqyd) && perSqyd > 0) return { basis: 'per_sqyd', rate: perSqyd }
+  return null
+}
+
+/** What that arrangement comes to in rupees on a plot of this size. */
+export function amountOnDeal(x: { basis: RateBasis; rate: number }, sizeSqyd: number): number {
+  return x.basis === 'per_plot' ? x.rate : Math.round(x.rate * sizeSqyd)
+}
 
 export type SplitLevel = {
   broker: RatedBroker
   /** 0 for the broker who sold it, 1.. up the sponsor chain. */
   level: number
-  /** What this broker is on, per gaj. Null when the office has not set it. */
-  ownRate: number | null
-  /** The best rate below them — what their differential is measured against. */
-  belowRate: number
-  /** ownRate - belowRate, never negative. */
-  earnRate: number
-  /** earnRate x size_sqyd, the rupees this level takes on the whole deal. */
+  /** Which way this broker is paid, and the figure agreed. Null when nothing is set. */
+  basis: RateBasis | null
+  rate: number | null
+  /**
+   * What this broker's own arrangement comes to on THIS plot, in rupees.
+   *
+   * The whole calculation runs in rupees-on-this-deal rather than rupees per gaj,
+   * because a chain can mix the two bases — one broker on 1,000 a gaj, the next on a
+   * flat 50,000 a plot — and only a common unit can tell which of them is on more.
+   */
+  ownAmount: number | null
+  /** The best amount below them — what their differential is measured against. */
+  belowAmount: number
+  /** ownAmount - belowAmount, never negative. The rupees this level takes on the deal. */
   rupees: number
   /** The % of every verified payment, in the engine's own units. */
   pct: number
@@ -80,8 +113,8 @@ export type SplitPlan = {
   /** Total rupees across the deal, and the total % of each payment. */
   totalRupees: number
   totalPct: number
-  /** The top rate in the chain — what the whole deal costs per gaj. */
-  topRate: number
+  /** The biggest single arrangement in the chain — what the whole deal costs. */
+  topAmount: number
   /** Set when the plan could not be worked out at all. */
   problem: '' | 'no_size' | 'no_total' | 'no_seller'
 }
@@ -107,9 +140,10 @@ export function ratePerSqydFromPct(pct: number, sizeSqyd: number, total: number)
   return r2((pct / 100) * total / sizeSqyd)
 }
 
-const rateOf = (b: RatedBroker | null | undefined): number | null => {
-  const v = Number(b?.traditional_rate_per_sqyd)
-  return Number.isFinite(v) && v > 0 ? v : null
+/** A percentage of each payment, from a plain rupee figure for the whole deal. */
+export function pctFromAmount(rupees: number, total: number): number {
+  if (!(rupees > 0) || !(total > 0)) return 0
+  return r4((rupees / total) * 100)
 }
 
 /**
@@ -156,48 +190,59 @@ export function buildSplitPlan(opts: {
   team: RatedBroker[]
   sizeSqyd: number
   total: number
+  /** Rupees per gaj typed on this one booking, for the seller only. */
   sellerRateOverride?: number | null
+  /** Or a flat rupee amount typed on this one booking, again for the seller only. */
+  sellerAmountOverride?: number | null
 }): SplitPlan {
   const { team, sizeSqyd, total } = opts
   const empty: SplitPlan = {
     levels: [], paid: [], missingRate: [],
-    totalRupees: 0, totalPct: 0, topRate: 0, problem: '',
+    totalRupees: 0, totalPct: 0, topAmount: 0, problem: '',
   }
   if (team.length === 0)  return { ...empty, problem: 'no_seller' }
   if (!(sizeSqyd > 0))    return { ...empty, problem: 'no_size' }
   if (!(total > 0))       return { ...empty, problem: 'no_total' }
 
-  const override = Number(opts.sellerRateOverride)
-  const sellerRate = Number.isFinite(override) && override > 0 ? override : rateOf(team[0])
+  // What was typed on this booking wins for the seller, in whichever unit it was typed.
+  const perGaj = Number(opts.sellerRateOverride)
+  const flat   = Number(opts.sellerAmountOverride)
+  const sellerTyped: { basis: RateBasis; rate: number } | null =
+      Number.isFinite(flat)   && flat   > 0 ? { basis: 'per_plot', rate: flat }
+    : Number.isFinite(perGaj) && perGaj > 0 ? { basis: 'per_sqyd', rate: perGaj }
+    : null
 
   const levels: SplitLevel[] = []
   let below = 0
 
   team.forEach((broker, i) => {
-    const ownRate = i === 0 ? sellerRate : rateOf(broker)
+    const own = i === 0 ? (sellerTyped || basisOf(broker)) : basisOf(broker)
 
-    if (ownRate == null) {
+    if (own == null) {
       // Not treated as zero: zero would be a decision about this person's money that
       // nobody has made. They earn nothing here and get named in the preview instead.
       levels.push({
-        broker, level: i, ownRate: null, belowRate: below,
-        earnRate: 0, rupees: 0, pct: 0, blocked: 'no_rate',
+        broker, level: i, basis: null, rate: null, ownAmount: null,
+        belowAmount: below, rupees: 0, pct: 0, blocked: 'no_rate',
       })
       return
     }
 
-    const earnRate = r2(ownRate - below)
-    const earns = earnRate > 0
+    // Everything is compared in rupees on THIS plot, because a chain can mix a per-gaj
+    // broker with a per-plot one and only a common unit can say which is on more.
+    const ownAmount = amountOnDeal(own, sizeSqyd)
+    const rupees = Math.round(ownAmount - below)
+    const earns = rupees > 0
     levels.push({
-      broker, level: i, ownRate, belowRate: below,
-      earnRate: earns ? earnRate : 0,
-      rupees: earns ? Math.round(earnRate * sizeSqyd) : 0,
-      pct: earns ? pctFromRatePerSqyd(earnRate, sizeSqyd, total) : 0,
+      broker, level: i, basis: own.basis, rate: own.rate, ownAmount,
+      belowAmount: below,
+      rupees: earns ? rupees : 0,
+      pct: earns ? pctFromAmount(rupees, total) : 0,
       blocked: earns ? '' : 'not_above_below',
     })
 
     // Only ever rises, mirroring GREATEST(below_pct, cur_pct) in the payout function.
-    below = Math.max(below, ownRate)
+    below = Math.max(below, ownAmount)
   })
 
   const paid = levels.filter(l => l.pct > 0)
@@ -207,7 +252,7 @@ export function buildSplitPlan(opts: {
     missingRate: levels.filter(l => l.blocked === 'no_rate'),
     totalRupees: paid.reduce((s, l) => s + l.rupees, 0),
     totalPct: r4(paid.reduce((s, l) => s + l.pct, 0)),
-    topRate: below,
+    topAmount: below,
     problem: '',
   }
 }

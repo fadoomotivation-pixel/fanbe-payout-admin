@@ -25,8 +25,8 @@ const EMPTY = {
   tds_applicable:false, pan_no:'', gst_no:'',
   sponsor_id:'', date_of_joining:'',
   bank_name:'', account_no:'', ifsc:'', account_holder:'', aadhaar_no:'',
-  // Traditional brokers only: the rate they are on, in rupees per gaj.
-  traditional_rate_per_sqyd:'',
+  // Traditional brokers only, and one basis or the other — never both.
+  traditional_rate_basis:'per_sqyd', traditional_rate_per_sqyd:'', traditional_rate_per_plot:'',
 }
 
 function nullifyBlanks(obj: any) {
@@ -173,6 +173,9 @@ export default function Brokers() {
       bank_name:b.bank_name||'', account_no:b.account_no||'', ifsc:b.ifsc||'',
       account_holder:b.account_holder||'', aadhaar_no:b.aadhaar_no||'',
       traditional_rate_per_sqyd: b.traditional_rate_per_sqyd ?? '',
+      traditional_rate_per_plot: b.traditional_rate_per_plot ?? '',
+      // Per-plot wins when reading, exactly as the app does everywhere else.
+      traditional_rate_basis: Number(b.traditional_rate_per_plot) > 0 ? 'per_plot' : 'per_sqyd',
     } : EMPTY)
     setModal(true)
   }
@@ -184,6 +187,9 @@ export default function Brokers() {
   // rather than assumed, because the migration is run by hand after this deploys.
   const hasRateColumn = (brokers as any[]).length === 0
     || Object.prototype.hasOwnProperty.call((brokers as any[])[0], 'traditional_rate_per_sqyd')
+  // The per-plot column lands with migration 20261018, run by hand after this deploys.
+  const hasPerPlotColumn = (brokers as any[]).length === 0
+    || Object.prototype.hasOwnProperty.call((brokers as any[])[0], 'traditional_rate_per_plot')
 
   const save = async () => {
     let email = form.email?.trim() || ''
@@ -206,12 +212,22 @@ export default function Brokers() {
     // switched between the two cannot leave a stale rate behind for the booking form to
     // pick up and pay on.
     if (hasRateColumn) {
-      payload.traditional_rate_per_sqyd =
-        form.broker_type === 'traditional' && Number(form.traditional_rate_per_sqyd) > 0
-          ? Number(form.traditional_rate_per_sqyd)
-          : null
+      // ONE basis, never both. The unused column is cleared on every save, so a broker
+      // moved from per-gaj to per-plot cannot leave the old figure behind for the
+      // booking form to find — and the app's "per-plot wins" rule never has to arbitrate.
+      const trad = form.broker_type === 'traditional'
+      const perPlot = trad && form.traditional_rate_basis === 'per_plot'
+      payload.traditional_rate_per_sqyd = (trad && !perPlot && Number(form.traditional_rate_per_sqyd) > 0)
+        ? Number(form.traditional_rate_per_sqyd) : null
+      if (hasPerPlotColumn) {
+        payload.traditional_rate_per_plot = (perPlot && Number(form.traditional_rate_per_plot) > 0)
+          ? Number(form.traditional_rate_per_plot) : null
+      } else {
+        delete payload.traditional_rate_per_plot
+      }
     } else {
       delete payload.traditional_rate_per_sqyd
+      delete payload.traditional_rate_per_plot
     }
 
     if (editing) {
@@ -749,19 +765,70 @@ export default function Brokers() {
               Put it here once and the booking form fills the whole team in one click. */}
           {form.broker_type === 'traditional' && hasRateColumn && (
             <div className="col-span-2">
-              <Input
-                label="Commission rate per gaj (₹/sq.yd)"
-                type="number"
-                value={form.traditional_rate_per_sqyd}
-                onChange={(e: any) => set('traditional_rate_per_sqyd', e.target.value)}
-                placeholder="e.g. 1000 — what this broker is on"
-              />
+              {/* Manisha: "Per plot par kardo ise bhi."
+                  
+                  Two real arrangements. "1000 rupaye gaj" grows with the plot; "is plot pe
+                  50,000" does not. A broker is on one or the other, so this is a choice
+                  rather than two boxes — and saving clears whichever one is not picked, so
+                  a broker moved between them cannot leave the old figure behind. */}
+              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">How this broker is paid</label>
+              <div className="flex gap-2 text-xs mt-1.5 mb-2">
+                <label className={`flex-1 cursor-pointer px-3 py-2 rounded-lg border ${form.traditional_rate_basis !== 'per_plot' ? 'border-amber-500 bg-amber-50/40' : 'border-gray-200'}`}>
+                  <input type="radio" name="trad_rate_basis" className="mr-1.5"
+                    checked={form.traditional_rate_basis !== 'per_plot'}
+                    onChange={() => set('traditional_rate_basis', 'per_sqyd')}/>
+                  <b>Per gaj</b> — grows with the plot
+                </label>
+                <label className={`flex-1 cursor-pointer px-3 py-2 rounded-lg border ${form.traditional_rate_basis === 'per_plot' ? 'border-amber-500 bg-amber-50/40' : 'border-gray-200'} ${hasPerPlotColumn ? '' : 'opacity-40 pointer-events-none'}`}>
+                  <input type="radio" name="trad_rate_basis" className="mr-1.5"
+                    checked={form.traditional_rate_basis === 'per_plot'}
+                    onChange={() => set('traditional_rate_basis', 'per_plot')}/>
+                  <b>Per plot</b> — flat, whatever the size
+                </label>
+              </div>
+
+              {form.traditional_rate_basis === 'per_plot' ? (
+                <>
+                  <Input
+                    label="Commission per plot (₹)"
+                    type="number"
+                    value={form.traditional_rate_per_plot}
+                    onChange={(e: any) => set('traditional_rate_per_plot', e.target.value)}
+                    placeholder="e.g. 50000 — the same for every plot they sell"
+                  />
+                  {/* Plots here run from about 12 gaj to 583. A flat amount is the same
+                      money on both, which is a fair deal to strike and a very easy one to
+                      strike by accident — so the consequence is shown, not left to be
+                      found in a payout cycle. */}
+                  {Number(form.traditional_rate_per_plot) > 0 && (
+                    <p className="text-[11px] mt-1 bg-amber-50 border border-amber-200 text-amber-900 rounded px-2 py-1.5">
+                      The same ₹{Number(form.traditional_rate_per_plot).toLocaleString('en-IN')} on
+                      every plot, whatever its size. On a 50 gaj plot that is about
+                      ₹{Math.round(Number(form.traditional_rate_per_plot) / 50).toLocaleString('en-IN')}/gaj;
+                      on a 200 gaj plot about
+                      ₹{Math.round(Number(form.traditional_rate_per_plot) / 200).toLocaleString('en-IN')}/gaj.
+                      Use <b>Per gaj</b> instead if it should follow the plot.
+                    </p>
+                  )}
+                </>
+              ) : (
+                <Input
+                  label="Commission rate per gaj (₹/sq.yd)"
+                  type="number"
+                  value={form.traditional_rate_per_sqyd}
+                  onChange={(e: any) => set('traditional_rate_per_sqyd', e.target.value)}
+                  placeholder="e.g. 1000 — what this broker is on"
+                />
+              )}
+
               <p className="text-[11px] text-gray-500 mt-1">
-                What this broker is paid per gaj. The booking form uses it to fill the team
-                commission: each level earns the difference between their rate and the rate of
-                the person below them. Leave blank if nothing is agreed yet — they will simply be
-                left out of the auto-fill.
+                The booking form uses this to fill the team commission: each level earns the
+                difference between their own figure and the person below them. Leave blank if
+                nothing is agreed yet — they are left out of the auto-fill rather than paid zero.
               </p>
+              {!hasPerPlotColumn && (
+                <p className="text-[11px] text-gray-400 mt-1">Per plot becomes available once migration 20261018 has been run.</p>
+              )}
             </div>
           )}
 

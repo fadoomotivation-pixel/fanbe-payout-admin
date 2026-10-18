@@ -19,6 +19,7 @@ import { downloadCsv } from '@/lib/download'
 import { Secret, usePrivacy } from '@/lib/privacy'
 import { Search, Download, Check, X, Pencil, AlertTriangle } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { basisOf } from '@/lib/tradSplit'
 
 type Issue = 'no_bank' | 'no_rate' | 'no_phone' | 'no_sponsor' | 'no_pan' | 'no_booking'
 
@@ -50,11 +51,12 @@ type Row = {
   broker_type: string | null
   sponsor_id: string | null
   traditional_rate_per_sqyd: number | null
+  traditional_rate_per_plot: number | null
   bookings: number
   issues: Issue[]
 }
 
-const BLANK_EDIT = { phone: '', pan_no: '', bank_name: '', account_no: '', ifsc: '', account_holder: '', traditional_rate_per_sqyd: '' }
+const BLANK_EDIT = { phone: '', pan_no: '', bank_name: '', account_no: '', ifsc: '', account_holder: '', traditional_rate_per_sqyd: '', traditional_rate_per_plot: '' }
 
 export default function BrokerHealth() {
   const qc = useQueryClient()
@@ -73,9 +75,14 @@ export default function BrokerHealth() {
       // after this deploys. Asking for a column Postgres does not have fails the request,
       // so this screen falls back to the old list rather than going blank.
       const BASE = 'id, broker_id, name, phone, pan_no, bank_name, account_no, ifsc, account_holder, broker_type, sponsor_id, status'
-      let rateCols = ', traditional_rate_per_sqyd'
+      let rateCols = ', traditional_rate_per_sqyd, traditional_rate_per_plot'
       const probe = await supabase.from('brokers').select(`id${rateCols}`).limit(1)
-      if (probe.error?.code === '42703') rateCols = ''
+      if (probe.error?.code === '42703') {
+        // The per-plot column lands with a later migration than the per-gaj one, so fall
+        // back one step at a time rather than losing both.
+        const probe2 = await supabase.from('brokers').select('id, traditional_rate_per_sqyd').limit(1)
+        rateCols = probe2.error?.code === '42703' ? '' : ', traditional_rate_per_sqyd'
+      }
 
       const [brokers, bookings] = await Promise.all([
         fetchAllRows((from, to) => supabase.from('brokers')
@@ -97,7 +104,8 @@ export default function BrokerHealth() {
           if (!(b.account_no && b.ifsc)) issues.push('no_bank')
           // Only a traditional broker needs a rate. An Affiliate broker is paid from their
           // rank, so asking them for one would be noise on this screen.
-          if (rateCols && b.broker_type === 'traditional' && !(Number(b.traditional_rate_per_sqyd) > 0)) issues.push('no_rate')
+          // Either basis counts. A broker on a flat per-plot amount is not missing a rate.
+          if (rateCols && b.broker_type === 'traditional' && basisOf(b) == null) issues.push('no_rate')
           if (!b.phone) issues.push('no_phone')
           if (!b.sponsor_id) issues.push('no_sponsor')
           if (!b.pan_no) issues.push('no_pan')
@@ -139,10 +147,14 @@ export default function BrokerHealth() {
         account_holder: edit.account_holder.trim() || row.name || null,
         // Traditional brokers only, and only when the column exists. Blank clears it back
         // to "no rate agreed" rather than writing a zero somebody never decided on.
-        ...(hasRateColumn && row.broker_type === 'traditional' ? {
-          traditional_rate_per_sqyd: Number(edit.traditional_rate_per_sqyd) > 0
-            ? Number(edit.traditional_rate_per_sqyd) : null,
-        } : {}),
+        // Only the basis this broker is actually on is editable here; switching a broker
+        // between per-gaj and per-plot is a decision, and it belongs on the broker form
+        // where the consequence is spelled out.
+        ...(hasRateColumn && row.broker_type === 'traditional'
+          ? (row.traditional_rate_per_plot != null
+              ? { traditional_rate_per_plot: Number(edit.traditional_rate_per_plot) > 0 ? Number(edit.traditional_rate_per_plot) : null }
+              : { traditional_rate_per_sqyd: Number(edit.traditional_rate_per_sqyd) > 0 ? Number(edit.traditional_rate_per_sqyd) : null })
+          : {}),
       }).eq('id', row.id)
       if (error) throw error
     },
@@ -178,15 +190,16 @@ export default function BrokerHealth() {
       phone: r.phone || '', pan_no: r.pan_no || '', bank_name: r.bank_name || '',
       account_no: r.account_no || '', ifsc: r.ifsc || '', account_holder: r.account_holder || '',
       traditional_rate_per_sqyd: r.traditional_rate_per_sqyd != null ? String(r.traditional_rate_per_sqyd) : '',
+      traditional_rate_per_plot: r.traditional_rate_per_plot != null ? String(r.traditional_rate_per_plot) : '',
     })
   }
 
   const exportCsv = () => {
     downloadCsv(`broker-health-${active}`, [
-      ['Issue', 'Broker ID', 'Name', 'Phone', 'PAN', 'Bank', 'Account no', 'IFSC', 'Type', 'Rate per gaj', 'Bookings'],
+      ['Issue', 'Broker ID', 'Name', 'Phone', 'PAN', 'Bank', 'Account no', 'IFSC', 'Type', 'Rate per gaj', 'Per plot', 'Bookings'],
       ...list.map(r => [meta.label, r.broker_id || '', r.name, r.phone || '', r.pan_no || '',
         r.bank_name || '', r.account_no || '', r.ifsc || '', r.broker_type === 'mlm' ? 'Affiliate' : 'Traditional',
-        r.traditional_rate_per_sqyd ?? '', r.bookings]),
+        r.traditional_rate_per_sqyd ?? '', r.traditional_rate_per_plot ?? '', r.bookings]),
     ])
   }
 
@@ -259,7 +272,7 @@ export default function BrokerHealth() {
               <thead className="bg-gray-50 text-[11px] uppercase tracking-wide text-gray-500">
                 <tr>
                   {['Broker', 'Phone', 'PAN', 'Bank', 'Account no', 'IFSC',
-                    ...(hasRateColumn ? ['Rate /gaj'] : []), 'Sales', ''].map(h => (
+                    ...(hasRateColumn ? ['Paid on'] : []), 'Sales', ''].map(h => (
                     <th key={h} className="text-left px-4 py-2 font-semibold whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -308,12 +321,19 @@ export default function BrokerHealth() {
                           {r.broker_type !== 'traditional'
                             ? <span className="text-gray-300" title="Affiliate brokers are paid from their rank">n/a</span>
                             : editing
-                              ? <input className={cell} type="number" value={edit.traditional_rate_per_sqyd}
-                                  onChange={e => setEdit(p => ({ ...p, traditional_rate_per_sqyd: e.target.value }))}
-                                  placeholder="e.g. 1000"/>
-                              : (r.traditional_rate_per_sqyd != null
-                                  ? <Secret>{`₹${r.traditional_rate_per_sqyd}`}</Secret>
-                                  : <span className="text-gray-300">—</span>)}
+                              ? (r.traditional_rate_per_plot != null
+                                  ? <input className={cell} type="number" value={edit.traditional_rate_per_plot}
+                                      onChange={e => setEdit(p => ({ ...p, traditional_rate_per_plot: e.target.value }))}
+                                      placeholder="₹ per plot"/>
+                                  : <input className={cell} type="number" value={edit.traditional_rate_per_sqyd}
+                                      onChange={e => setEdit(p => ({ ...p, traditional_rate_per_sqyd: e.target.value }))}
+                                      placeholder="₹ per gaj"/>)
+                              : (() => {
+                                  const x = basisOf(r as any)
+                                  return x
+                                    ? <Secret>{`₹${x.rate}/${x.basis === 'per_plot' ? 'plot' : 'gaj'}`}</Secret>
+                                    : <span className="text-gray-300">—</span>
+                                })()}
                         </td>
                       )}
                       <td className="px-4 py-2.5 tabular-nums text-gray-600">{r.bookings}</td>

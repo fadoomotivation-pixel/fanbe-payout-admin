@@ -421,12 +421,18 @@ export default function Bookings() {
       // traditional_rate_per_sqyd is what each traditional broker is on, per gaj — the
       // number the team-commission calculator turns into the split.
       const COLS = 'id,name,broker_id,rank,broker_type,status,phone,sponsor_id'
-      const { data, error } = await supabase.from('brokers').select(`${COLS},traditional_rate_per_sqyd`)
-      // The rate column arrives with migration 20261014. Until that is run the whole
-      // booking page would go blank on a 42703, so fall back to the old column list and
-      // let the calculator report "no rate set" instead.
+      const { data, error } = await supabase.from('brokers')
+        .select(`${COLS},traditional_rate_per_sqyd,traditional_rate_per_plot`)
+      // The rate columns arrive with migrations 20261014 and 20261018, run by hand. Until
+      // each is run the whole booking page would go blank on a 42703, so step back one
+      // column at a time and let the calculator report "no rate set" instead.
       if (error?.code === '42703') {
-        const retry = await supabase.from('brokers').select(COLS)
+        const retry = await supabase.from('brokers').select(`${COLS},traditional_rate_per_sqyd`)
+        if (retry.error?.code === '42703') {
+          const bare = await supabase.from('brokers').select(COLS)
+          if (bare.error) throw bare.error
+          return bare.data
+        }
         if (retry.error) throw retry.error
         return retry.data
       }
@@ -2192,9 +2198,9 @@ export default function Bookings() {
                           <thead>
                             <tr className="text-gray-500 text-left">
                               <th className="font-medium pb-1">Who</th>
-                              <th className="font-medium pb-1 text-right">On ₹/gaj</th>
-                              <th className="font-medium pb-1 text-right">Earns ₹/gaj</th>
-                              <th className="font-medium pb-1 text-right">This deal</th>
+                              <th className="font-medium pb-1 text-right">On</th>
+                              <th className="font-medium pb-1 text-right">Worth here</th>
+                              <th className="font-medium pb-1 text-right">Earns</th>
                               <th className="font-medium pb-1 text-right">% of payment</th>
                             </tr>
                           </thead>
@@ -2206,11 +2212,17 @@ export default function Bookings() {
                                   <span className="text-[10px] font-mono text-gray-400"> [{l.broker.broker_id || '—'}]</span>
                                   <span className="text-[10px] text-gray-400">{l.level === 0 ? ' · sold it' : ` · L${l.level}`}</span>
                                 </td>
+                                {/* The arrangement, then what it is worth on THIS plot, then
+                                    the gap they actually take. A chain can mix per-gaj with
+                                    per-plot, so the middle column is what makes two brokers
+                                    comparable at all. */}
                                 <td className="py-1 text-right font-mono text-gray-600">
-                                  {l.ownRate != null ? l.ownRate : '—'}
+                                  {l.rate != null
+                                    ? <Secret>{`₹${l.rate}/${l.basis === 'per_plot' ? 'plot' : 'gaj'}`}</Secret>
+                                    : '—'}
                                 </td>
-                                <td className="py-1 text-right font-mono text-gray-600">
-                                  {l.earnRate > 0 ? l.earnRate : '—'}
+                                <td className="py-1 text-right font-mono text-gray-500">
+                                  {l.ownAmount != null ? <Secret>{formatINR(l.ownAmount)}</Secret> : '—'}
                                 </td>
                                 <td className="py-1 text-right font-mono text-gray-900">
                                   {l.rupees > 0 ? <Secret>{formatINR(l.rupees)}</Secret> : '—'}
@@ -2229,7 +2241,7 @@ export default function Bookings() {
 
                         <div className="mt-1.5 pt-1.5 border-t border-amber-200 text-[11px] text-amber-900 flex justify-between">
                           <span>
-                            Whole deal at the top rate of ₹{tradTeamPlan.topRate}/gaj
+                            Whole deal, at the dearest arrangement in the chain
                           </span>
                           <span className="font-semibold">
                             <Secret>{formatINR(tradTeamPlan.totalRupees)}</Secret> · {tradTeamPlan.totalPct}% of every payment
@@ -2240,14 +2252,15 @@ export default function Bookings() {
                             pays the rates added together. Worth stating: it is the one thing
                             that surprises people about a differential. */}
                         <p className="mt-1 text-[10px] text-amber-800">
-                          Each level earns the difference between their rate and the one below, so the
-                          whole chain costs ₹{tradTeamPlan.topRate}/gaj — not every rate added up.
+                          Each level earns the difference between what they are on and the person below,
+                          so the whole chain costs <Secret>{formatINR(tradTeamPlan.topAmount)}</Secret> —
+                          not everyone's figure added up.
                         </p>
 
                         {tradTeamPlan.missingRate.length > 0 && (
                           <div className="mt-1.5 text-[11px] bg-amber-50 border border-amber-300 text-amber-900 rounded px-2 py-1.5">
                             No rate set for {tradTeamPlan.missingRate.map(l => l.broker.name || '—').join(', ')}.
-                            They earn nothing until someone sets their ₹/gaj on their broker record
+                            They earn nothing until someone sets their rate on their broker record
                             {tradTeamPlan.missingRate.some(l => l.level === 0) ? ', or you type a rate above' : ''}.
                           </div>
                         )}
