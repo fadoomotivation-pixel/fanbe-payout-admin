@@ -24,6 +24,7 @@
 // One component, used by the Add Broker form and the booking form both, so the two can
 // never start disagreeing about who is above whom.
 import { useMemo } from 'react'
+import { Secret } from '@/lib/privacy'
 
 export type ChainBroker = {
   id: string
@@ -32,6 +33,8 @@ export type ChainBroker = {
   rank?: string | null
   sponsor_id?: string | null
   broker_type?: string | null
+  /** Traditional brokers: the agreed rate they are on, per gaj. */
+  traditional_rate_per_sqyd?: number | null
 }
 
 /**
@@ -67,6 +70,12 @@ export default function UplineChain({
   note?: string
 }) {
   const chain = useMemo(() => uplineOf(brokers, startId), [brokers, startId])
+  // Traditional levels with no agreed rate: the team commission cannot fill them in.
+  const missingRate = useMemo(
+    () => chain.filter(b => (b.broker_type || 'mlm') === 'traditional'
+      && !(Number(b.traditional_rate_per_sqyd) > 0)),
+    [chain],
+  )
 
   if (!startId) {
     return emptyText ? <p className="mt-2 text-[11px] text-gray-400">{emptyText}</p> : null
@@ -84,13 +93,39 @@ export default function UplineChain({
             <span className="w-5 shrink-0 text-[10px] font-mono text-indigo-400">L{i + 1}</span>
             <span className="font-medium text-gray-900 truncate">{b.name || '—'}</span>
             <span className="text-[10px] font-mono text-gray-400 shrink-0">[{b.broker_id || '—'}]</span>
-            {b.rank && <span className="text-[10px] text-indigo-700 shrink-0">{b.rank}</span>}
+            {/* What this broker is paid on. The rank ladder belongs to the Affiliate
+                tree; a traditional broker's rank column only ever holds the defaulted
+                'Executive', so printing it here told the office that ALOK, BAIDHEI and
+                SHIV SHANKAR were on a 5% slab they have nothing to do with. They are on
+                an agreed rate per gaj — which is also the number the team commission
+                needs, so saying "rate not set" here is the answer to "where do I put the
+                commission for the people above". */}
+            {(b.broker_type || 'mlm') === 'traditional'
+              ? (Number(b.traditional_rate_per_sqyd) > 0
+                  // Behind the privacy lock, like every other broker figure on screen.
+                  // Manisha's "amount show na ho" still holds for anyone who has not put
+                  // the PIN in; what she needs when she IS working is one glance at who
+                  // sits on what rate, and the lock is already how this app settles that.
+                  // "rate not set" stays readable — it is a status, not an amount, and it
+                  // is the one thing that has to be acted on.
+                  ? <span className="text-[10px] font-mono text-indigo-700 shrink-0">
+                      <Secret>{`₹${b.traditional_rate_per_sqyd}/gaj`}</Secret>
+                    </span>
+                  : <span className="text-[10px] text-amber-700 shrink-0">rate not set</span>)
+              : (b.rank && <span className="text-[10px] text-indigo-700 shrink-0">{b.rank}</span>)}
             {i === chain.length - 1 && !b.sponsor_id && (
               <span className="text-[10px] text-gray-400 shrink-0">top of tree</span>
             )}
           </li>
         ))}
       </ol>
+      {missingRate.length > 0 && (
+        <p className="mt-1.5 text-[11px] bg-white border border-amber-300 text-amber-900 rounded px-2 py-1.5">
+          No rate per gaj for {missingRate.map(b => b.name || '—').join(', ')}. Set it on their
+          broker record (Brokers → Edit), then <b>Fill team commission</b> can work out what each
+          level earns. Without it they are left out rather than paid zero.
+        </p>
+      )}
       {note && <p className="mt-1.5 text-[11px] text-indigo-900/70">{note}</p>}
     </div>
   )
