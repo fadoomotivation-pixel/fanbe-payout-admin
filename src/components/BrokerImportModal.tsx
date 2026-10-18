@@ -130,8 +130,18 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
     const seenId    = new Set(existing.map(b => (b.broker_id || '').trim().toLowerCase()).filter(Boolean))
     const seenPhone = new Set(existing.map(b => digitsOnly(b.phone || '')).filter(Boolean))
     const seenEmail = new Set(existing.map(b => (b.email || '').trim().toLowerCase()).filter(Boolean))
+    // Names matter more here than they look. The BOOKING import matches an upline by
+    // NAME, and when a name matches two brokers it reports "ambiguous" and leaves the
+    // upline off entirely — that booking then pays nobody. Manisha hit exactly this with
+    // two brokers called Rajiv. So importing a second broker under a name already in use
+    // quietly builds that trap, and it has to be said out loud at the preview.
+    const nameCount = new Map<string, number>()
+    for (const b of existing) {
+      const k = (b.name || '').trim().toLowerCase()
+      if (k) nameCount.set(k, (nameCount.get(k) || 0) + 1)
+    }
 
-    return body.map((line, i) => {
+    const rows: Row[] = body.map((line, i) => {
       // Tabs when pasted from a spreadsheet; commas as a fallback for CSV text.
       const cells = (line.includes('\t') ? line.split('\t') : line.split(',')).map(c => c.trim())
       const get = (k: typeof COLUMNS[number]) => cells[COLUMNS.indexOf(k)] || ''
@@ -148,6 +158,18 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
 
       // brokers.name is NOT NULL — a searchable placeholder beats refusing the row.
       if (!name) { name = 'NAME MISSING'; warnings.push('No name — saved as "NAME MISSING", search that to fix them later') }
+
+      const nameKey = name.trim().toLowerCase()
+      if (nameKey && name !== 'NAME MISSING') {
+        const already = nameCount.get(nameKey) || 0
+        if (already > 0) {
+          warnings.push(
+            `Another broker is already called "${name}" — a booking sheet naming this upline `
+            + 'will match two people, and the importer leaves the upline off rather than guess, '
+            + 'so that booking would pay nobody. Add something to tell them apart.')
+        }
+        nameCount.set(nameKey, already + 1)
+      }
 
       // broker_id is UNIQUE in the DB, so a clash cannot simply be written.  Drop the
       // supplied code and let assign_broker_id() mint a fresh one; the broker still
@@ -257,6 +279,41 @@ export default function BrokerImportModal({ open, onClose, existing, onImported 
         errors: warnings,
       }
     })
+
+    // ── One more pass, for the things a single row cannot see ──────────────
+    //
+    // A cross-type tree is REFUSED by the database (enforce_same_type_sponsor), and a
+    // sponsor is very often another row of the same sheet, so neither the row itself nor
+    // the broker list alone can tell. Catching it here means the preview says "this will
+    // not link" before the import runs, instead of a raw Postgres message afterwards on
+    // a broker that has already been created.
+    const typeByName = new Map<string, Set<string>>()
+    const note = (n: string, t: string) => {
+      const k = (n || '').trim().toLowerCase()
+      if (!k) return
+      const set = typeByName.get(k) || new Set<string>()
+      set.add(t); typeByName.set(k, set)
+    }
+    for (const b of existing) note(b.name || '', (b as any).broker_type || 'mlm')
+    for (const r of rows) note(r.name, r.broker_type)
+
+    for (const r of rows) {
+      const want = r.sponsor.trim().toLowerCase()
+      if (!want) continue
+      const types = typeByName.get(want)
+      // Unknown names are already reported by the upline pass; only a KNOWN name whose
+      // type cannot match is worth saying here.
+      if (!types || types.size === 0) continue
+      if (!types.has(r.broker_type)) {
+        const theirs = [...types].map(t => t === 'traditional' ? 'Traditional' : 'Affiliate').join('/')
+        r.errors.push(
+          `Upline "${r.sponsor}" is ${theirs} but this broker is `
+          + `${r.broker_type === 'traditional' ? 'Traditional' : 'Affiliate'} — the two trees are kept `
+          + 'separate, so the database will refuse the link and this broker will be saved with no upline.')
+      }
+    }
+
+    return rows
   }, [text, existing])
 
   // Every parsed row is importable now — `errors` only ever carries warnings, so the
