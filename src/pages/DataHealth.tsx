@@ -25,6 +25,7 @@ import { ShieldCheck, Search, AlertTriangle, ArrowRight, Download } from 'lucide
 import { downloadCsv } from '@/lib/download'
 import { Secret } from '@/lib/privacy'
 import BrokerHealth from '@/components/BrokerHealth'
+import CommissionHealth from '@/components/CommissionHealth'
 
 type Issue = 'no_payment' | 'no_broker' | 'no_plot' | 'no_value' | 'no_project' | 'bad_phone'
 
@@ -62,7 +63,7 @@ export default function DataHealth() {
   // Bookings and brokers are two halves of the same question after an import: did the
   // records land, and can anyone be paid for them.  Two tabs on one page rather than two
   // pages, because the office checks both in the same minute and neither is useful alone.
-  const [tab, setTab] = useState<'bookings' | 'brokers'>('bookings')
+  const [tab, setTab] = useState<'bookings' | 'brokers' | 'commission'>('bookings')
   const [active, setActive] = useState<Issue>('no_plot')
   const [q, setQ] = useState('')
   const [limit, setLimit] = useState(100)
@@ -181,9 +182,15 @@ export default function DataHealth() {
           className={`px-4 py-2 ${tab === 'bookings' ? 'bg-gray-900 text-white' : 'text-gray-700 hover:bg-gray-50'}`}>Bookings</button>
         <button onClick={() => setTab('brokers')}
           className={`px-4 py-2 border-l border-gray-200 ${tab === 'brokers' ? 'bg-gray-900 text-white' : 'text-gray-700 hover:bg-gray-50'}`}>Brokers</button>
+        {/* The ways a sale quietly pays nobody. None of them raises an error anywhere
+            else: recompute_booking_payouts() just inserts nothing and the booking looks
+            finished. */}
+        <button onClick={() => setTab('commission')}
+          className={`px-4 py-2 border-l border-gray-200 ${tab === 'commission' ? 'bg-gray-900 text-white' : 'text-gray-700 hover:bg-gray-50'}`}>Commission</button>
       </div>
 
       {tab === 'brokers' && <BrokerHealth/>}
+      {tab === 'commission' && <CommissionHealth/>}
 
       {tab === 'bookings' && (isLoading ? (
         <div className="py-16 text-center text-sm text-gray-400">Checking every booking…</div>
