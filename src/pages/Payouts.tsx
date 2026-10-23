@@ -11,6 +11,7 @@ import { ArrowUpRight, ArrowDownRight, ChevronRight, Search, ExternalLink, Alert
 import { findUtrConflict, utrConflictMessage } from '@/lib/utr'
 import toast from 'react-hot-toast'
 import { downloadCsv } from '@/lib/download'
+import TraditionalRelease from '@/components/TraditionalRelease'
 
 /**
  * Admin Broker Payouts dashboard.
@@ -51,12 +52,16 @@ export default function Payouts() {
   // directly (the "show me the magic" view).  URL is the source of truth so
   // tabs / browser back jumps keep things sane.
   const [searchParams, setSearchParams] = useSearchParams()
-  const urlView = (searchParams.get('view') === 'activity' ? 'activity' : 'per_broker') as 'per_broker' | 'activity'
-  const [view, setViewState] = useState<'per_broker' | 'activity'>(urlView)
-  const setView = (v: 'per_broker' | 'activity') => {
+  // A third view, not a third page: it is the same money seen a different way, and the
+  // office should not have to learn another place to look.
+  const rawView = searchParams.get('view')
+  const urlView = (rawView === 'activity' ? 'activity' : rawView === 'release' ? 'release' : 'per_broker') as 'per_broker' | 'activity' | 'release'
+  type PayoutView = 'per_broker' | 'activity' | 'release'
+  const [view, setViewState] = useState<PayoutView>(urlView)
+  const setView = (v: PayoutView) => {
     setViewState(v)
     const next = new URLSearchParams(searchParams)
-    if (v === 'activity') next.set('view', 'activity'); else next.delete('view')
+    if (v === 'activity' || v === 'release') next.set('view', v); else next.delete('view')
     setSearchParams(next, { replace: true })
   }
   const [statusF, setStatusF] = useState('')
@@ -434,7 +439,12 @@ export default function Payouts() {
         )}
       </div>
 
+      {/* Traditional release is its own thing end to end — it is per booking, not per
+          period, so none of the filters, totals or tables below apply to it. */}
+      {view === 'release' && <TraditionalRelease/>}
+
       {/* Filters — shared search + per-view extras */}
+      {view !== 'release' && (
       <div className="flex flex-wrap gap-2 items-center">
         <div className="relative flex-1 min-w-[200px]">
           <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400"/>
@@ -480,6 +490,7 @@ export default function Payouts() {
           {view === 'per_broker' ? `${filtered.length} brokers` : `${ledgerRowsWithBalance.length} entries · net ${formatINR(ledgerTotals.balance)}`}
         </div>
       </div>
+      )}
 
       {/* Activity Log view — flat chronological ledger */}
       {view === 'activity' && (
