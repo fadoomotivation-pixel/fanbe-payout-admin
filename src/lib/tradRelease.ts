@@ -45,9 +45,8 @@ export type ReleaseSlab = { collectedPct: number; releasePct: number }
  * The agreed table. Editable in Payout Settings — written down here only as the starting
  * point, because a rate the office changes must never need a developer.
  *
- * Manisha confirmed the 25 -> 50 row in writing and said anything below 25 pays nothing.
- * The 50 -> 100 row is admin's own wording on the call and is seeded with it; it is the
- * one line nobody has put in writing yet, so it is worth a look before the first release.
+ * Both rows are now settled: Manisha confirmed 25 -> 50 in writing and said anything
+ * below 25 pays nothing, and admin confirmed 50 -> 100 ("Or ha 50% pr 100% release").
  */
 export const DEFAULT_RELEASE_SLABS: ReleaseSlab[] = [
   { collectedPct: 25, releasePct: 50 },

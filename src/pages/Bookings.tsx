@@ -732,45 +732,19 @@ export default function Bookings() {
       if (error) throw error
       await saveBookingPlots(bk.id, plotIds)
 
-      // Auto-promote: every customer becomes a broker the moment their Affiliate Network booking lands,
-      // sponsored by the broker who made the sale.  No more "Make broker" chasing in the
-      // team tree.  Skipped for traditional bookings (those are standalone, no tree) and
-      // skipped when this customer was already a broker (matched by customer_id, then by
-      // phone/email).  Failure here is non-fatal -- the booking succeeded, the broker
-      // backfill can be retried later from /brokers.
-      if (!isTraditional && customer_id && rest.broker_id) {
-        try {
-          const { data: existing } = await supabase
-            .from('brokers')
-            .select('id')
-            .or(`customer_id.eq.${customer_id}` + (rest.new_customer?.phone ? `,phone.eq.${rest.new_customer.phone}` : ''))
-            .limit(1)
-          if (!existing || existing.length === 0) {
-            // Get the customer details for name/phone/email
-            const { data: cust } = await supabase.from('bp_customers').select('name, phone, email').eq('id', customer_id).single()
-            if (cust?.name) {
-              await supabase.from('brokers').insert({
-                name: cust.name,
-                phone: (cust.phone || '').trim() || null,
-                email: (cust.email || '').trim() || `auto-${customer_id.slice(0, 8)}@example.com`,
-                customer_id: customer_id,
-                sponsor_id: rest.broker_id,
-                broker_type: 'mlm',
-                status: 'active',
-                // 'Executive' is the lowest active slab in commission_ranks (level 1, 5%).
-                // If we set this to a name not in commission_ranks the trigger gets direct_pct=0
-                // and historically over-paid uplines on the full rank% instead of the differential.
-                rank: 'Executive',
-              })
-              qc.invalidateQueries({ queryKey: ['brokers'] })
-            }
-          }
-        } catch (autoErr) {
-          // Don't throw -- the booking is already saved.  Log so we can debug later.
-          // eslint-disable-next-line no-console
-          console.warn('Auto-promote customer to broker skipped:', autoErr)
-        }
-      }
+      // An Affiliate booking used to turn its customer into a broker automatically,
+      // sponsored by whoever sold it. That is gone, by decision: "Customer ko broker mat
+      // banao."
+      //
+      // It mattered more than it looked. Every buyer would have taken an FNB0 code the
+      // moment their booking saved, the tree would have grown by itself, and the ID
+      // sequence the office is about to start at 5000 would have run away on its own.
+      // Deciding that after fifty of them exist is expensive; deciding it before the
+      // first one is free, which is why it is being settled now.
+      //
+      // Nothing is lost: Team Tree still has one-click "promote to broker", so a customer
+      // who genuinely becomes an agent is made one on purpose, by somebody, rather than
+      // by the act of buying a plot.
 
       // Multi-broker traditional split (1..3 brokers).  Only written when this is a
       // traditional booking AND admin added at least one extra broker.  Position 1 is the
