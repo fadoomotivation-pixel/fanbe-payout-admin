@@ -71,6 +71,9 @@ const NAV = [
     // default view for "let me pay people".
     { to: '/payouts', icon: Banknote, label: 'Pay brokers' },
     { to: '/payouts?view=activity', icon: ScrollText, label: 'Commission ledger' },
+    // Traditional is released per booking as the customer's money crosses an agreed
+    // mark, not in the monthly cycle — so it gets its own way in.
+    { to: '/payouts?view=release', icon: Banknote, label: 'Release (traditional)' },
   ]},
   { group: 'Programs', items: [
     { to: '/achievers-club', icon: Star, label: 'Achievers Club' },
