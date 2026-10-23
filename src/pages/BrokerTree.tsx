@@ -150,8 +150,9 @@ export default function BrokerTree() {
       // doesn't render the same person twice (once as a broker card, once as a "Make
       // broker" customer leaf).  Three signals catch this -- they overlap and any one
       // is enough:
-      //   (a) brokers.customer_id linked to this customer (the strongest signal,
-      //       set by the auto-promote flow on every new Affiliate Network booking),
+      //   (a) brokers.customer_id linked to this customer (the strongest signal, set by
+      //       "Make broker" below -- and, on older rows, by the auto-promote that used
+      //       to fire on every Affiliate booking before that was turned off),
       //   (b) brokers.broker_id == customer.customer_code (PR #119 keeps these in
       //       sync, so for existing data it's effectively the same as (a)),
       //   (c) brokers.phone exact-matches customer.phone (catches legacy rows where
