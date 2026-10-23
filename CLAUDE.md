@@ -14,21 +14,6 @@ If a request mentions Dholera while this repo is open, it has most likely
 landed in the wrong chat. Say so and confirm which project is meant before
 building anything.
 
-## The website and its leads are NOT part of this project either
-
-**www.fanbegroup.com is a separate thing.** A client landing on the website, the form
-they fill, and anything to do with sending those leads out on WhatsApp — none of it is
-the payout admin's job. Admin: *"ye lead waha se ayegi www.fanbegroup.com pr koi client
-aata h, iska payout admin lena dena nahi."*
-
-The confusion is easy to fall into, because the `leads` table those leads land in lives
-in **this** database — it belongs to the call-centre CRM, which shares it. This app only
-reads it, to display. Nothing here writes a lead, and nothing here sends a WhatsApp
-message: `lib/whatsapp.ts` only builds a `wa.me` click-link that a person presses.
-
-If a question is about leads arriving, lead notifications, or WhatsApp delivery, say that
-it is the website / call-centre side before investigating anything in this repo.
-
 ## The databases
 
 | Project | Ref | What it is |
