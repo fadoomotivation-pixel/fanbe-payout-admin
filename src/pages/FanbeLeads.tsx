@@ -111,6 +111,9 @@ export default function FanbeLeads() {
   const [search, setSearch] = useState('')
   const [project, setProject] = useState('')
   const [period, setPeriod] = useState<'all' | 'today' | 'week' | 'month'>('all')
+  // Defaults to everything. Admin asked for "naya or purana" — both — so narrowing to
+  // one channel is a choice somebody makes, never the starting point.
+  const [channel, setChannel] = useState<'all' | 'WhatsApp' | 'Website'>('all')
   const [openNote, setOpenNote] = useState<string | null>(null)
 
   const { data: leads = [], isLoading, error } = useQuery<Lead[]>({
@@ -148,16 +151,21 @@ export default function FanbeLeads() {
     if (period === 'week' && day < weekAgo) return false
     if (period === 'month' && day < monthAgo) return false
     if (project && (l.project || '').trim() !== project) return false
+    // Anything not tagged WhatsApp reached us through the website — including the older
+    // rows that carry no source at all and were matched on "from website" in the notes.
+    if (channel === 'WhatsApp' && l.source !== 'WhatsApp') return false
+    if (channel === 'Website'  && l.source === 'WhatsApp') return false
     if (search.trim()) {
       const q = search.toLowerCase()
       const hay = [l.name, l.full_name, l.phone, l.email, l.project, parseNote(l.notes).whole]
       if (!hay.some(v => String(v || '').toLowerCase().includes(q))) return false
     }
     return true
-  }), [leads, period, project, search, today, weekAgo, monthAgo])
+  }), [leads, channel, period, project, search, today, weekAgo, monthAgo])
 
   const counts = useMemo(() => ({
     total: leads.length,
+    whatsapp: leads.filter(l => l.source === 'WhatsApp').length,
     today: leads.filter(l => istDay(l.created_at) === today).length,
     week:  leads.filter(l => istDay(l.created_at) >= weekAgo).length,
     named: leads.filter(l => (l.project || '').trim()).length,
@@ -176,7 +184,7 @@ export default function FanbeLeads() {
     downloadCsv(`fanbe-website-leads-${today}.csv`, [headers, ...body])
   }
 
-  const filtersOn = !!(search || project || period !== 'all')
+  const filtersOn = !!(search || project || period !== 'all' || channel !== 'all')
 
   return (
     <div className="p-4 md:p-8 space-y-5 max-w-6xl mx-auto">
@@ -186,7 +194,7 @@ export default function FanbeLeads() {
             <Globe size={22} className="text-emerald-600"/>FANBE Leads
           </h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            Enquiries that came in from www.fanbegroup.com — with the date, the time and the message the visitor sent.
+            Enquiries from WhatsApp and from www.fanbegroup.com — with the date, the time and the message they sent.
           </p>
         </div>
         <Button variant="secondary" onClick={exportCsv} disabled={rows.length === 0}>
@@ -196,10 +204,10 @@ export default function FanbeLeads() {
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {[
-          { label: 'All website leads', value: counts.total, hint: 'since the website went live' },
-          { label: 'Today',             value: counts.today, hint: 'came in today' },
-          { label: 'Last 7 days',       value: counts.week,  hint: 'this week' },
-          { label: 'Named a scheme',    value: counts.named, hint: 'told us which project' },
+          { label: 'All leads',  value: counts.total,    hint: 'WhatsApp and website, from the start' },
+          { label: 'WhatsApp',   value: counts.whatsapp, hint: 'came in on WhatsApp' },
+          { label: 'Today',      value: counts.today,    hint: 'came in today' },
+          { label: 'Last 7 days', value: counts.week,    hint: 'this week' },
         ].map(t => (
           <div key={t.label} className="bg-white border border-gray-200 rounded-xl p-4">
             <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">{t.label}</div>
@@ -216,6 +224,11 @@ export default function FanbeLeads() {
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, number, message or scheme"
               className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"/>
           </div>
+          <select value={channel} onChange={e => setChannel(e.target.value as any)} className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white">
+            <option value="all">WhatsApp + Website</option>
+            <option value="WhatsApp">WhatsApp only</option>
+            <option value="Website">Website only</option>
+          </select>
           <select value={period} onChange={e => setPeriod(e.target.value as any)} className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white">
             <option value="all">All time</option>
             <option value="today">Today</option>
@@ -227,7 +240,7 @@ export default function FanbeLeads() {
             {projects.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
           {filtersOn && (
-            <button onClick={() => { setSearch(''); setProject(''); setPeriod('all') }}
+            <button onClick={() => { setSearch(''); setProject(''); setPeriod('all'); setChannel('all') }}
               className="text-xs text-gray-500 hover:text-gray-800 px-2 py-1 inline-flex items-center gap-1"><X size={12}/>Clear</button>
           )}
           <span className="text-sm text-gray-500 ml-auto">{rows.length} shown</span>
@@ -265,6 +278,23 @@ export default function FanbeLeads() {
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-semibold text-gray-900">{who}</span>
+                        {/* Which channel this one arrived on.
+                            
+                            Admin asked for the WhatsApp leads, and they were already
+                            here — 53 of the 54 on this page are WhatsApp. Every label
+                            said "website", so looking for them found nothing.
+                            
+                            This is NOT the source clutter that was stripped out before
+                            ("isme lead kaha se aa rahi h mat dikaho"): the Source, Page,
+                            Referrer and UTM lines are still cut out of the message. One
+                            word saying WhatsApp or Website is the opposite of that noise
+                            — it is the one thing about origin anybody needs. */}
+                        <span className={`text-[10px] uppercase tracking-wide rounded px-1.5 py-0.5 border ${
+                          l.source === 'WhatsApp'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : 'bg-sky-50 text-sky-700 border-sky-200'}`}>
+                          {l.source === 'WhatsApp' ? 'WhatsApp' : 'Website'}
+                        </span>
                         {n.repeat && (
                           <span className="text-[10px] uppercase tracking-wide bg-violet-100 text-violet-800 rounded px-1.5 py-0.5">repeat</span>
                         )}
