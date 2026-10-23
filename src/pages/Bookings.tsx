@@ -422,16 +422,24 @@ export default function Bookings() {
       // number the team-commission calculator turns into the split.
       const COLS = 'id,name,broker_id,rank,broker_type,status,phone,sponsor_id'
       const { data, error } = await supabase.from('brokers')
-        .select(`${COLS},traditional_rate_per_sqyd,traditional_rate_per_plot`)
+        .select(`${COLS},traditional_rate_per_sqyd,traditional_rate_per_plot,is_company_account`)
       // The rate columns arrive with migrations 20261014 and 20261018, run by hand. Until
       // each is run the whole booking page would go blank on a 42703, so step back one
       // column at a time and let the calculator report "no rate set" instead.
       if (error?.code === '42703') {
-        const retry = await supabase.from('brokers').select(`${COLS},traditional_rate_per_sqyd`)
+        // Step back one column at a time: the rate columns and the company flag each
+        // land with their own hand-run migration, so any of them may not be there yet.
+        const retry = await supabase.from('brokers')
+          .select(`${COLS},traditional_rate_per_sqyd,traditional_rate_per_plot`)
         if (retry.error?.code === '42703') {
-          const bare = await supabase.from('brokers').select(COLS)
-          if (bare.error) throw bare.error
-          return bare.data
+          const noPlot = await supabase.from('brokers').select(`${COLS},traditional_rate_per_sqyd`)
+          if (noPlot.error?.code === '42703') {
+            const bare = await supabase.from('brokers').select(COLS)
+            if (bare.error) throw bare.error
+            return bare.data
+          }
+          if (noPlot.error) throw noPlot.error
+          return noPlot.data
         }
         if (retry.error) throw retry.error
         return retry.data

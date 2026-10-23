@@ -38,6 +38,8 @@ export type ChainBroker = {
   traditional_rate_per_sqyd?: number | null
   /** Or a flat amount for each plot sold, whatever its size. */
   traditional_rate_per_plot?: number | null
+  /** The company's own node at the top of a tree. Never a person, never paid. */
+  is_company_account?: boolean | null
 }
 
 /**
@@ -75,7 +77,12 @@ export default function UplineChain({
   const chain = useMemo(() => uplineOf(brokers, startId), [brokers, startId])
   // Traditional levels with no agreed rate: the team commission cannot fill them in.
   const missingRate = useMemo(
-    () => chain.filter(b => (b.broker_type || 'mlm') === 'traditional' && basisOf(b) == null),
+    // The company's own node sits at the top of every traditional chain and has no rate
+    // by design — it is not a person and is never paid. Asking for one on every booking
+    // would put a warning on every booking, and a warning everybody learns to scroll
+    // past is worse than no warning at all.
+    () => chain.filter(b => (b.broker_type || 'mlm') === 'traditional'
+      && !b.is_company_account && basisOf(b) == null),
     [chain],
   )
 
@@ -113,6 +120,9 @@ export default function UplineChain({
                   // needs while working is one glance at who sits on what, and the lock
                   // is already how this app settles that. "rate not set" stays readable:
                   // it is a status, not an amount, and it is the thing to act on.
+                  if (b.is_company_account) {
+                    return <span className="text-[10px] text-gray-400 shrink-0">company</span>
+                  }
                   const x = basisOf(b)
                   if (!x) return <span className="text-[10px] text-amber-700 shrink-0">rate not set</span>
                   return (

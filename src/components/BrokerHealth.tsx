@@ -52,6 +52,7 @@ type Row = {
   sponsor_id: string | null
   traditional_rate_per_sqyd: number | null
   traditional_rate_per_plot: number | null
+  is_company_account: boolean | null
   bookings: number
   issues: Issue[]
 }
@@ -75,6 +76,9 @@ export default function BrokerHealth() {
       // after this deploys. Asking for a column Postgres does not have fails the request,
       // so this screen falls back to the old list rather than going blank.
       const BASE = 'id, broker_id, name, phone, pan_no, bank_name, account_no, ifsc, account_holder, broker_type, sponsor_id, status'
+      // Lands with migration 20261023b; absent until it is run, which reads as false.
+      const probeCo = await supabase.from('brokers').select('id, is_company_account').limit(1)
+      const coCol = probeCo.error?.code === '42703' ? '' : ', is_company_account'
       let rateCols = ', traditional_rate_per_sqyd, traditional_rate_per_plot'
       const probe = await supabase.from('brokers').select(`id${rateCols}`).limit(1)
       if (probe.error?.code === '42703') {
@@ -86,7 +90,7 @@ export default function BrokerHealth() {
 
       const [brokers, bookings] = await Promise.all([
         fetchAllRows((from, to) => supabase.from('brokers')
-          .select(BASE + rateCols)
+          .select(BASE + rateCols + coCol)
           .order('id').range(from, to)),
         fetchAllRows((from, to) => supabase.from('bp_bookings')
           .select('broker_id').neq('stage', 'cancelled').order('id').range(from, to)),
@@ -105,7 +109,9 @@ export default function BrokerHealth() {
           // Only a traditional broker needs a rate. An Affiliate broker is paid from their
           // rank, so asking them for one would be noise on this screen.
           // Either basis counts. A broker on a flat per-plot amount is not missing a rate.
-          if (rateCols && b.broker_type === 'traditional' && basisOf(b) == null) issues.push('no_rate')
+          // The company's own node has no rate on purpose and is never paid, so it is
+          // not a record that needs fixing.
+          if (rateCols && b.broker_type === 'traditional' && !b.is_company_account && basisOf(b) == null) issues.push('no_rate')
           if (!b.phone) issues.push('no_phone')
           if (!b.sponsor_id) issues.push('no_sponsor')
           if (!b.pan_no) issues.push('no_pan')
